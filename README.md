@@ -26,6 +26,7 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase1-Task5：ProductAnalysisTool 与 ReactAgent Tool Calling 集成
 - Phase1-Task6：产品分析智能体受控模型调用 API
 - Phase1-Task7：统一 API 响应、异常处理与 TraceId 边界
+- Phase1-Task8：AI 模型联调状态 API
 
 ## 架构边界
 
@@ -36,7 +37,10 @@ com.xxx.insurance
 ├── ai
 │   ├── agent
 │   ├── config
+│   ├── controller
 │   ├── memory
+│   ├── model
+│   ├── service
 │   ├── skill
 │   └── tool
 ├── product
@@ -107,6 +111,13 @@ Swagger UI：
 
 ```text
 http://localhost:8080/swagger-ui.html
+```
+
+建议先调用模型状态接口，确认 DeepSeek 环境变量已生效：
+
+```bash
+curl -X GET http://localhost:8080/api/v1/ai/model/status \
+  -H 'X-Trace-Id: local-model-status-001'
 ```
 
 本地调用产品分析智能体：

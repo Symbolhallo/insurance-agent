@@ -24,6 +24,7 @@ Current phase:
 - Phase1-Task5 ProductAnalysisTool and ReactAgent tool-calling integration is complete.
 - Phase1-Task6 controlled model invocation API for local verification with DeepSeek is complete.
 - Phase1-Task7 production-style API response, error handling, and traceId boundary is complete.
+- Phase1-Task8 AI model status API for local DeepSeek verification is complete.
 
 ## Technology Baseline
 
@@ -79,9 +80,12 @@ Current package layout:
 ```text
 ai
 ├── agent
+├── controller
 ├── skill
 ├── tool
 ├── memory
+├── model
+├── service
 └── config
 
 product

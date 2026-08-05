@@ -22,6 +22,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -183,5 +184,24 @@ class InsuranceAgentApplicationTests {
                 .andExpect(jsonPath("$.code").value("COMMON-400"))
                 .andExpect(jsonPath("$.message").value("message: message must not be blank"))
                 .andExpect(jsonPath("$.traceId").value("test-trace-001"));
+    }
+
+    @Test
+    void aiModelStatusApiReturnsMaskedModelConfiguration() throws Exception {
+        mockMvc.perform(get("/api/v1/ai/model/status")
+                        .header("X-Trace-Id", "test-trace-002"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Trace-Id", "test-trace-002"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.code").value("0"))
+                .andExpect(jsonPath("$.data.provider").value("openai-compatible"))
+                .andExpect(jsonPath("$.data.apiKeyConfigured").value(true))
+                .andExpect(jsonPath("$.data.apiKeyMasked").value("tes****-key"))
+                .andExpect(jsonPath("$.data.activeAgent").value(ProductAnalysisAgent.AGENT_NAME))
+                .andExpect(jsonPath("$.data.skillCount").value(2))
+                .andExpect(jsonPath("$.data.skills[0]").value("batch-product-analysis"))
+                .andExpect(jsonPath("$.data.skills[1]").value("limited-product-analysis"))
+                .andExpect(jsonPath("$.data.tools[0]").value(ProductAnalysisTool.TOOL_NAME))
+                .andExpect(jsonPath("$.traceId").value("test-trace-002"));
     }
 }

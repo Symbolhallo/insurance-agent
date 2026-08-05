@@ -5,6 +5,7 @@ import org.springframework.ai.model.openai.autoconfigure.OpenAiChatProperties;
 import org.springframework.ai.model.openai.autoconfigure.OpenAiConnectionProperties;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.api.OpenAiApi;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -25,6 +26,7 @@ import org.springframework.context.annotation.Configuration;
  * 会在 Agent 配置中注入该 ChatModel，作为推理、计划和自然语言生成的基础能力。</p>
  */
 @Configuration
+@EnableConfigurationProperties(AiModelProperties.class)
 public class AiConfig {
 
     /**
