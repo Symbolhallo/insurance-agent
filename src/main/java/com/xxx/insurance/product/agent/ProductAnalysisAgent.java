@@ -2,8 +2,12 @@ package com.xxx.insurance.product.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
+import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
+import com.xxx.insurance.common.exception.ErrorCode;
+import com.xxx.insurance.common.util.TraceIdUtil;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
 import com.xxx.insurance.product.model.ProductAnalysisAnswerInspection;
@@ -59,18 +63,22 @@ public class ProductAnalysisAgent {
 
     private final AgentMemoryService agentMemoryService;
 
+    private final AiModelProperties aiModelProperties;
+
     public ProductAnalysisAgent(ReactAgent reactAgent,
                                 SkillsAgentHook skillsAgentHook,
                                 ProductAnalysisService productAnalysisService,
                                 ProductAnalysisFormatter productAnalysisFormatter,
                                 ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
-                                AgentMemoryService agentMemoryService) {
+                                AgentMemoryService agentMemoryService,
+                                AiModelProperties aiModelProperties) {
         this.reactAgent = reactAgent;
         this.skillsAgentHook = skillsAgentHook;
         this.productAnalysisService = productAnalysisService;
         this.productAnalysisFormatter = productAnalysisFormatter;
         this.productAnalysisAnswerInspector = productAnalysisAnswerInspector;
         this.agentMemoryService = agentMemoryService;
+        this.aiModelProperties = aiModelProperties;
     }
 
     public String name() {
@@ -123,7 +131,14 @@ public class ProductAnalysisAgent {
             String answer = assistantMessage.getText();
             Instant answeredAt = Instant.now();
             ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect(answer);
-            saveMemory(memoryCallContext, invocationId, assistantMessage, answeredAt);
+            AgentInvocationRecord invocationRecord = successInvocationRecord(
+                    request,
+                    invocationId,
+                    answer,
+                    durationMs,
+                    inspection,
+                    answeredAt);
+            saveMemory(memoryCallContext, invocationRecord, assistantMessage, answeredAt);
             log.info("[Agent] name={} action=chat status=success invocationId={} conversationId={} durationMs={} answerLength={} memoryEnabled={} outputFormatValid={}",
                     AGENT_NAME,
                     invocationId,
@@ -147,11 +162,13 @@ public class ProductAnalysisAgent {
                     inspection.missingSections());
         }
         catch (Exception ex) {
+            long durationMs = elapsedMillis(startNanos);
+            saveFailedInvocation(request, invocationId, durationMs, ex);
             log.error("[Agent] name={} action=chat status=failed invocationId={} conversationId={} durationMs={}",
                     AGENT_NAME,
                     invocationId,
                     request.conversationId(),
-                    elapsedMillis(startNanos),
+                    durationMs,
                     ex);
             throw new IllegalStateException("Product analysis model invocation failed", ex);
         }
@@ -220,7 +237,7 @@ public class ProductAnalysisAgent {
     }
 
     private void saveMemory(MemoryCallContext memoryCallContext,
-                            String invocationId,
+                            AgentInvocationRecord invocationRecord,
                             AssistantMessage assistantMessage,
                             Instant answeredAt) {
         if (!memoryCallContext.memoryEnabled()) {
@@ -228,11 +245,106 @@ public class ProductAnalysisAgent {
         }
         agentMemoryService.saveSuccessfulExchange(new AgentMemoryExchange(
                 memoryCallContext.conversationId(),
-                invocationId,
+                invocationRecord.invocationId(),
                 AGENT_NAME,
                 memoryCallContext.userMessage(),
                 assistantMessage,
-                answeredAt));
+                answeredAt), invocationRecord);
+    }
+
+    private void saveFailedInvocation(ProductAnalysisChatRequest request,
+                                      String invocationId,
+                                      long durationMs,
+                                      Exception exception) {
+        if (!agentMemoryService.isEnabled() || !StringUtils.hasText(request.conversationId())) {
+            return;
+        }
+        try {
+            agentMemoryService.saveFailedInvocation(failedInvocationRecord(request, invocationId, durationMs, exception));
+        }
+        catch (Exception persistenceException) {
+            log.warn("[Agent] name={} action=saveFailedInvocation status=failed invocationId={} conversationId={}",
+                    AGENT_NAME,
+                    invocationId,
+                    request.conversationId(),
+                    persistenceException);
+        }
+    }
+
+    private AgentInvocationRecord successInvocationRecord(ProductAnalysisChatRequest request,
+                                                          String invocationId,
+                                                          String answer,
+                                                          long durationMs,
+                                                          ProductAnalysisAnswerInspection inspection,
+                                                          Instant createdAt) {
+        return new AgentInvocationRecord(
+                invocationId,
+                request.conversationId(),
+                AGENT_NAME,
+                TraceIdUtil.currentTraceId(),
+                null,
+                null,
+                "openai-compatible",
+                modelName(),
+                "mock-user",
+                "mock-customer",
+                "mock-operator",
+                request.message(),
+                answer,
+                durationMs,
+                answerLength(answer),
+                inspection.outputFormatValid(),
+                inspection.missingSections(),
+                "SUCCESS",
+                null,
+                null,
+                createdAt);
+    }
+
+    private AgentInvocationRecord failedInvocationRecord(ProductAnalysisChatRequest request,
+                                                         String invocationId,
+                                                         long durationMs,
+                                                         Exception exception) {
+        return new AgentInvocationRecord(
+                invocationId,
+                request.conversationId(),
+                AGENT_NAME,
+                TraceIdUtil.currentTraceId(),
+                null,
+                null,
+                "openai-compatible",
+                modelName(),
+                "mock-user",
+                "mock-customer",
+                "mock-operator",
+                request.message(),
+                null,
+                durationMs,
+                null,
+                null,
+                List.of(),
+                "FAILED",
+                ErrorCode.AGENT_INVOKE_FAILED.code(),
+                truncateErrorMessage(exception),
+                Instant.now());
+    }
+
+    private String modelName() {
+        if (aiModelProperties.getChat() == null || aiModelProperties.getChat().getOptions() == null) {
+            return null;
+        }
+        return aiModelProperties.getChat().getOptions().getModel();
+    }
+
+    private String truncateErrorMessage(Exception exception) {
+        if (exception == null || exception.getMessage() == null) {
+            return null;
+        }
+        String message = exception.getMessage();
+        if (message.length() <= 1024) {
+            return message;
+        }
+        return message.substring(0, 1024);
     }
 
     private long elapsedMillis(long startNanos) {

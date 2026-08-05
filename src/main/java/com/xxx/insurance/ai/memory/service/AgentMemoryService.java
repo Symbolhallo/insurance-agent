@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.memory.service;
 
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
+import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import org.springframework.ai.chat.messages.Message;
 
 import java.util.List;
@@ -16,5 +17,7 @@ public interface AgentMemoryService {
 
     List<Message> getHistory(String conversationId);
 
-    void saveSuccessfulExchange(AgentMemoryExchange exchange);
+    void saveSuccessfulExchange(AgentMemoryExchange exchange, AgentInvocationRecord invocationRecord);
+
+    void saveFailedInvocation(AgentInvocationRecord invocationRecord);
 }

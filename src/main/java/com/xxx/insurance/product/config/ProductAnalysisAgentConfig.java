@@ -2,6 +2,7 @@ package com.xxx.insurance.product.config;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
@@ -121,6 +122,7 @@ public class ProductAnalysisAgentConfig {
      * @param productAnalysisFormatter 产品分析输出格式转换器
      * @param productAnalysisAnswerInspector 产品分析模型回答检查器
      * @param agentMemoryService Agent 记忆协调服务
+     * @param aiModelProperties 当前 ChatModel 配置，用于写入 Agent 调用审计
      * @return 产品分析业务智能体
      */
     @Bean(PRODUCT_ANALYSIS_AGENT)
@@ -130,13 +132,15 @@ public class ProductAnalysisAgentConfig {
             ProductAnalysisService productAnalysisService,
             ProductAnalysisFormatter productAnalysisFormatter,
             ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
-            AgentMemoryService agentMemoryService) {
+            AgentMemoryService agentMemoryService,
+            AiModelProperties aiModelProperties) {
         return new ProductAnalysisAgent(
                 reactAgent,
                 skillsAgentHook,
                 productAnalysisService,
                 productAnalysisFormatter,
                 productAnalysisAnswerInspector,
-                agentMemoryService);
+                agentMemoryService,
+                aiModelProperties);
     }
 }

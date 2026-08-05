@@ -125,6 +125,14 @@ External Vector Retrieval Service
 - 记录模型调用耗时、输出格式检查、错误信息。
 - 支持后续指标看板。
 
+当前接入策略：
+
+- 成功请求在 `local-db` profile 下写入 `SUCCESS` 调用流水。
+- 成功请求的 `ai_agent_invocation` 与 `ai_chat_memory`、`ai_long_term_memory` 由 `AgentMemoryService.saveSuccessfulExchange(...)` 统一协调，在同一个事务内写入。
+- 如果任意一张表写入失败，本次成功调用的三表持久化整体回滚，避免窗口记忆、长期记忆和调用流水不一致。
+- 失败请求不写入 `ai_chat_memory` 和 `ai_long_term_memory`，只在存在 `conversationId` 时尝试写入 `FAILED` 调用流水，用于排障审计。
+- 默认 profile 下使用 no-op 实现，不写本地数据库。
+
 建议字段：
 
 | 字段 | 说明 |
@@ -167,8 +175,9 @@ External Vector Retrieval Service
 - `local-db` profile 下，`ai_chat_memory` 和 `ai_long_term_memory` 都会随成功请求变化。
 - `ai_chat_memory` 保存当前会话窗口，可能被 `MessageWindowChatMemory` 裁剪和覆盖。
 - `ai_long_term_memory` 每次成功请求追加写入 USER 和 ASSISTANT 两条记录。
-- 两张表必须在同一个事务中写入，由 `AgentMemoryService.saveSuccessfulExchange(...)` 统一协调。
-- 如果窗口记忆或长期记忆任意一方写入失败，本次记忆写入整体回滚，避免两张表状态不一致。
+- `ai_agent_invocation` 每次成功请求追加写入一条 SUCCESS 调用流水。
+- 三张表必须在同一个事务中写入，由 `AgentMemoryService.saveSuccessfulExchange(...)` 统一协调。
+- 如果窗口记忆、长期记忆或调用流水任意一方写入失败，本次持久化整体回滚，避免三张表状态不一致。
 - 默认 profile 下使用 `NoOpAgentMemoryService`，不写本地数据库。
 
 建议字段：

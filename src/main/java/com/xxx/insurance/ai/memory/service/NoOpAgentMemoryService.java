@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.memory.service;
 
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
+import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -25,7 +26,12 @@ public class NoOpAgentMemoryService implements AgentMemoryService {
     }
 
     @Override
-    public void saveSuccessfulExchange(AgentMemoryExchange exchange) {
+    public void saveSuccessfulExchange(AgentMemoryExchange exchange, AgentInvocationRecord invocationRecord) {
+        // Default profile is intentionally stateless.
+    }
+
+    @Override
+    public void saveFailedInvocation(AgentInvocationRecord invocationRecord) {
         // Default profile is intentionally stateless.
     }
 }

@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.memory.service;
 
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
+import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.model.LongTermMemoryRecord;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
@@ -16,8 +17,9 @@ import java.util.UUID;
 /**
  * 基于本地数据库的 Agent 记忆协调服务。
  *
- * <p>该服务在同一个事务内写入窗口记忆和长期记忆，保证一次成功 Agent 调用对应的
- * `ai_chat_memory` 与 `ai_long_term_memory` 变更具备原子性。</p>
+ * <p>该服务在同一个事务内写入窗口记忆、长期记忆和 Agent 调用流水，保证一次成功
+ * Agent 调用对应的 `ai_chat_memory`、`ai_long_term_memory`、`ai_agent_invocation`
+ * 变更具备原子性。</p>
  */
 @Service
 @Profile("local-db")
@@ -27,9 +29,14 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
 
     private final LongTermMemoryService longTermMemoryService;
 
-    public JdbcAgentMemoryService(ChatMemory chatMemory, LongTermMemoryService longTermMemoryService) {
+    private final AgentInvocationService agentInvocationService;
+
+    public JdbcAgentMemoryService(ChatMemory chatMemory,
+                                  LongTermMemoryService longTermMemoryService,
+                                  AgentInvocationService agentInvocationService) {
         this.chatMemory = chatMemory;
         this.longTermMemoryService = longTermMemoryService;
+        this.agentInvocationService = agentInvocationService;
     }
 
     @Override
@@ -44,13 +51,20 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void saveSuccessfulExchange(AgentMemoryExchange exchange) {
+    public void saveSuccessfulExchange(AgentMemoryExchange exchange, AgentInvocationRecord invocationRecord) {
         chatMemory.add(exchange.conversationId(), List.of(exchange.userMessage(), exchange.assistantMessage()));
         longTermMemoryService.save(toLongTermMemoryRecord(exchange, MessageType.USER, exchange.userMessage().getText()));
         longTermMemoryService.save(toLongTermMemoryRecord(
                 exchange,
                 MessageType.ASSISTANT,
                 exchange.assistantMessage().getText()));
+        agentInvocationService.save(invocationRecord);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void saveFailedInvocation(AgentInvocationRecord invocationRecord) {
+        agentInvocationService.save(invocationRecord);
     }
 
     private LongTermMemoryRecord toLongTermMemoryRecord(AgentMemoryExchange exchange,
