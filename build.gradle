@@ -16,6 +16,7 @@ java {
 ext {
     springAiVersion = '1.1.2'
     springAiAlibabaVersion = '1.1.2.3'
+    springdocOpenapiVersion = '2.8.17'
     lombokVersion = '1.18.38'
 }
 
@@ -34,6 +35,7 @@ dependencies {
     implementation 'org.springframework.ai:spring-ai-starter-model-openai'
     implementation "com.alibaba.cloud.ai:spring-ai-alibaba-dashscope:${springAiAlibabaVersion}"
     implementation "com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:${springAiAlibabaVersion}"
+    implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocOpenapiVersion}"
 
     compileOnly "org.projectlombok:lombok:${lombokVersion}"
     annotationProcessor "org.projectlombok:lombok:${lombokVersion}"

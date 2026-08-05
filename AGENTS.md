@@ -22,7 +22,7 @@ Current phase:
 - Phase1-Task3 ProductAnalysisAgent skeleton and ReactAgent assembly is complete.
 - Phase1-Task4 product domain model, mock service, formatter, and controlled invocation boundary is complete.
 - Phase1-Task5 ProductAnalysisTool and ReactAgent tool-calling integration is complete.
-- The next expected step is Phase1-Task6 controlled model invocation API and local verification with DeepSeek.
+- Phase1-Task6 controlled model invocation API for local verification with DeepSeek is complete.
 
 ## Technology Baseline
 
@@ -86,6 +86,7 @@ ai
 product
 ├── agent
 ├── config
+├── controller
 ├── skill
 ├── tool
 ├── service

@@ -23,10 +23,8 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase1-Task2：Skill 基础设施
 - Phase1-Task3：ProductAnalysisAgent 骨架与 ReactAgent 装配
 - Phase1-Task4：产品分析领域模型、Mock Service、Formatter、受控调用边界
-
-下一步：
-
 - Phase1-Task5：ProductAnalysisTool 与 ReactAgent Tool Calling 集成
+- Phase1-Task6：产品分析智能体受控模型调用 API
 
 ## 架构边界
 
@@ -43,6 +41,7 @@ com.xxx.insurance
 ├── product
 │   ├── agent
 │   ├── config
+│   ├── controller
 │   ├── formatter
 │   ├── model
 │   ├── service
@@ -101,6 +100,20 @@ AI_MODEL=deepseek-chat
 ```
 
 IDEA 中请把这些配置放到 `Environment variables`，不要放到 `Active profiles`。
+
+Swagger UI：
+
+```text
+http://localhost:8080/swagger-ui.html
+```
+
+本地调用产品分析智能体：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/product-analysis-agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"请分析 PA-001 是否适合长期保障规划","conversationId":"local-test-001"}'
+```
 
 ## 项目记忆
 

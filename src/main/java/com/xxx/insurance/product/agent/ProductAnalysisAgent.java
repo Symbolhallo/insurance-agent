@@ -3,9 +3,15 @@ package com.xxx.insurance.product.agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
+import com.xxx.insurance.product.model.ProductAnalysisChatRequest;
+import com.xxx.insurance.product.model.ProductAnalysisChatResponse;
 import com.xxx.insurance.product.model.ProductAnalysisRequest;
 import com.xxx.insurance.product.model.ProductAnalysisResult;
 import com.xxx.insurance.product.service.ProductAnalysisService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.Objects;
@@ -21,15 +27,16 @@ import java.util.Objects;
  *     <li>后续接入 Tool、Memory、Formatter 时，可以保持业务入口稳定。</li>
  * </ul>
  *
- * <p>当前阶段提供受控的确定性调用边界：只查询 Mock Service 并格式化返回，
- * 不触发 ReactAgent 模型调用，不启用 Tool Calling。真正的大模型单 Agent 闭环
- * 会在后续任务中基于这个骨架继续扩展。</p>
+ * <p>当前阶段同时提供两个边界：一个确定性分析入口用于测试 Mock Service 和 Formatter，
+ * 一个受控模型调用入口用于验证 ReactAgent、Skill 和 Tool Calling 的单 Agent 闭环。</p>
  */
 public class ProductAnalysisAgent {
 
     public static final String AGENT_NAME = "product-analysis-agent";
 
     public static final String AGENT_DESCRIPTION = "保险产品条款、保障责任、适用客群和风险提示的结构化分析智能体";
+
+    private static final Logger log = LoggerFactory.getLogger(ProductAnalysisAgent.class);
 
     private final ReactAgent reactAgent;
 
@@ -70,6 +77,32 @@ public class ProductAnalysisAgent {
     }
 
     /**
+     * 受控模型调用入口。
+     *
+     * <p>这是 Phase1 单 Agent 闭环的模型调用边界。调用该方法会触发
+     * {@link ReactAgent#call(String)}，ReactAgent 会根据 Skill 上下文决定是否读取
+     * SKILL.md，并在需要产品数据时调用 product_analysis Tool。</p>
+     *
+     * <p>该方法暂不接入 Memory。conversationId 仅在请求/响应中透传，为后续会话记忆
+     * 和审计链路预留字段。</p>
+     */
+    public ProductAnalysisChatResponse chat(ProductAnalysisChatRequest request) {
+        validateChatRequest(request);
+        try {
+            log.info("[Agent] name={} action=chat conversationId={}", AGENT_NAME, request.conversationId());
+            AssistantMessage assistantMessage = reactAgent.call(request.message());
+            return new ProductAnalysisChatResponse(
+                    AGENT_NAME,
+                    request.conversationId(),
+                    assistantMessage.getText(),
+                    true);
+        }
+        catch (Exception ex) {
+            throw new IllegalStateException("Product analysis model invocation failed", ex);
+        }
+    }
+
+    /**
      * 返回底层 Spring AI Alibaba ReactAgent。
      *
      * <p>该方法主要给后续 Workflow 或测试使用。普通业务层优先通过 ProductAnalysisAgent
@@ -94,6 +127,16 @@ public class ProductAnalysisAgent {
         List<String> productCodes = request.productCodes();
         if (productCodes == null || productCodes.stream().allMatch(code -> code == null || code.isBlank())) {
             throw new IllegalArgumentException("At least one product code is required");
+        }
+    }
+
+    private void validateChatRequest(ProductAnalysisChatRequest request) {
+        Objects.requireNonNull(request, "Product analysis chat request must not be null");
+        if (!StringUtils.hasText(request.message())) {
+            throw new IllegalArgumentException("message must not be blank");
+        }
+        if (request.message().length() > 2000) {
+            throw new IllegalArgumentException("message length must be less than or equal to 2000");
         }
     }
 }

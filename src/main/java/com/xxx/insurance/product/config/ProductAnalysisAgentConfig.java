@@ -30,7 +30,7 @@ import java.util.List;
  *     <li>只注册产品分析 ToolCallback；</li>
  *     <li>不接入 Memory；</li>
  *     <li>不编排 Graph Workflow；</li>
- *     <li>不提供面向用户的产品分析执行接口。</li>
+ *     <li>只提供用于本地验证的受控产品分析 API。</li>
  * </ul>
  *
  * <p>后续阶段会在这个 ReactAgent 上继续追加 Memory、审计和更完整的模型调用入口。</p>

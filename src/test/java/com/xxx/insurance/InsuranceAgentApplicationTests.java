@@ -5,21 +5,28 @@ import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.config.ProductAnalysisAgentConfig;
+import com.xxx.insurance.product.model.ProductAnalysisChatRequest;
 import com.xxx.insurance.product.model.ProductAnalysisRequest;
 import com.xxx.insurance.product.model.ProductAnalysisResult;
 import com.xxx.insurance.product.tool.ProductAnalysisTool;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = "spring.ai.openai.api-key=test-api-key")
+@AutoConfigureMockMvc
 class InsuranceAgentApplicationTests {
 
     @Autowired
@@ -40,6 +47,9 @@ class InsuranceAgentApplicationTests {
     @Autowired
     @Qualifier("productAnalysisToolCallbacks")
     private List<ToolCallback> productAnalysisToolCallbacks;
+
+    @Autowired
+    private MockMvc mockMvc;
 
     @Test
     void contextLoads() {
@@ -143,5 +153,27 @@ class InsuranceAgentApplicationTests {
                 .anyMatch(highlight -> highlight.contains("养老年金保险"));
         assertThat(result.complianceNotes())
                 .anyMatch(note -> note.contains("MockProductAnalysisService"));
+    }
+
+    @Test
+    void productAnalysisAgentRejectsBlankChatMessageWithoutCallingModel() {
+        ProductAnalysisChatRequest request = new ProductAnalysisChatRequest(" ", "conversation-001");
+
+        assertThatThrownBy(() -> productAnalysisAgent.chat(request))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("message must not be blank");
+    }
+
+    @Test
+    void productAnalysisChatApiRejectsBlankMessage() throws Exception {
+        mockMvc.perform(post("/api/v1/product-analysis-agent/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": " ",
+                                  "conversationId": "conversation-001"
+                                }
+                                """))
+                .andExpect(status().isBadRequest());
     }
 }
