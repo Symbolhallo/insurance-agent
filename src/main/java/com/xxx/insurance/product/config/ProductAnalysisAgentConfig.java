@@ -1,0 +1,112 @@
+package com.xxx.insurance.product.config;
+
+import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import com.xxx.insurance.ai.config.SkillConfig;
+import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
+import com.xxx.insurance.product.agent.ProductAnalysisAgent;
+import com.xxx.insurance.product.service.ProductAnalysisService;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * 产品分析智能体装配配置。
+ *
+ * <p>本配置开始进入 Spring AI Alibaba Agent Framework 的原生路线：
+ * 使用全局 {@link ChatModel} 作为模型能力，使用 Phase1-Task2 创建的
+ * {@link SkillsAgentHook} 注入产品分析 Skill 上下文，再组装为 {@link ReactAgent}。</p>
+ *
+ * <p>当前仍然保持单 Agent 骨架阶段的边界：</p>
+ *
+ * <ul>
+ *     <li>不注册业务 ToolCallback；</li>
+ *     <li>不接入 Memory；</li>
+ *     <li>不编排 Graph Workflow；</li>
+ *     <li>不提供面向用户的产品分析执行接口。</li>
+ * </ul>
+ *
+ * <p>后续 Phase1 单 Agent 闭环会在这个 ReactAgent 上追加产品分析 Tool、Formatter
+ * 和模型调用入口。</p>
+ */
+@Configuration
+public class ProductAnalysisAgentConfig {
+
+    public static final String PRODUCT_ANALYSIS_REACT_AGENT = "productAnalysisReactAgent";
+
+    public static final String PRODUCT_ANALYSIS_AGENT = "productAnalysisAgent";
+
+    private static final String PRODUCT_ANALYSIS_AGENT_INSTRUCTION = """
+            你是金融保险产品分析智能体，负责围绕保险产品条款、保障责任、适用客群和风险提示进行结构化分析。
+
+            当前阶段你只能使用已加载的产品分析 Skill 理解任务边界：
+            - limited-product-analysis：用于明确产品或少量产品的分析场景；
+            - batch-product-analysis：用于多产品对比或属性筛选场景。
+
+            合规要求：
+            - 不承诺收益；
+            - 不替代人工投顾、核保、法务或合规审查；
+            - 对缺失信息明确说明，不编造产品条款；
+            - 输出时区分事实、推断和建议。
+
+            当前 Phase1-Task3 尚未接入业务 Tool，不能声称已经查询到真实产品数据。
+            """;
+
+    /**
+     * 装配产品分析 ReactAgent。
+     *
+     * <p>ReactAgent 是 Spring AI Alibaba Agent Framework 中的推理执行单元。
+     * 它会使用 ChatModel 完成模型调用，并通过 hooks 接收 Skill、Memory、Human
+     * Confirm 等扩展能力。本阶段只注入 SkillsAgentHook，让模型能够在后续调用时
+     * 看到产品分析 Skill 列表并读取对应 SKILL.md。</p>
+     *
+     * <p>这里没有传入业务 ToolCallback，所以不会启用产品查询、费率测算、保单查询等
+     * 确定性业务动作。SkillsAgentHook 自带的 read_skill/search_skills/disable_skill
+     * 属于框架级 Skill 管理工具，不代表业务 Tool Calling 已经实现。</p>
+     *
+     * @param chatModel 全局复用的单模型 ChatModel Bean
+     * @param skillsAgentHook 产品分析智能体专属 Skill Hook
+     * @return 产品分析智能体底层 ReactAgent
+     */
+    @Bean(PRODUCT_ANALYSIS_REACT_AGENT)
+    public ReactAgent productAnalysisReactAgent(
+            ChatModel chatModel,
+            @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook) {
+        return ReactAgent.builder()
+                .name(ProductAnalysisAgent.AGENT_NAME)
+                .description(ProductAnalysisAgent.AGENT_DESCRIPTION)
+                .model(chatModel)
+                .instruction(PRODUCT_ANALYSIS_AGENT_INSTRUCTION)
+                .hooks(skillsAgentHook)
+                .enableLogging(true)
+                .build();
+    }
+
+    /**
+     * 创建业务侧产品分析智能体入口。
+     *
+     * <p>该 Bean 让 product 业务域不直接暴露 ReactAgent 细节。本阶段额外注入
+     * ProductAnalysisService 与 ProductAnalysisFormatter，提供一个不触发模型调用的
+     * 受控业务调用边界。未来如果升级为 Agent -> Model Router -> 多模型选择，
+     * 或者把该边界包装成 ProductAnalysisTool，都可以优先在业务入口中演进。</p>
+     *
+     * @param reactAgent 产品分析 ReactAgent
+     * @param skillsAgentHook 产品分析 Skill Hook
+     * @param productAnalysisService 产品分析业务数据服务
+     * @param productAnalysisFormatter 产品分析输出格式转换器
+     * @return 产品分析业务智能体
+     */
+    @Bean(PRODUCT_ANALYSIS_AGENT)
+    public ProductAnalysisAgent productAnalysisAgent(
+            @Qualifier(PRODUCT_ANALYSIS_REACT_AGENT) ReactAgent reactAgent,
+            @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
+            ProductAnalysisService productAnalysisService,
+            ProductAnalysisFormatter productAnalysisFormatter) {
+        return new ProductAnalysisAgent(
+                reactAgent,
+                skillsAgentHook,
+                productAnalysisService,
+                productAnalysisFormatter);
+    }
+}
