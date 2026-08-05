@@ -1,7 +1,8 @@
 ---
 name: limited-product-analysis
 description: 面向单个或少量保险产品的结构化分析能力，适用于明确产品名称、产品编码或少量候选产品的保险产品分析场景。
-allowed_tools: []
+allowed_tools:
+  - product_analysis
 ---
 
 # Name
@@ -18,14 +19,9 @@ limited-product-analysis
 
 # Available Tools
 
-当前 Phase1 不启用 Tool Calling。
+当前可用业务工具：
 
-后续可接入的工具类型包括：
-
-- 产品基础信息查询 Tool
-- 产品条款解析 Tool
-- 费率与利益演示 Tool
-- 合规风险校验 Tool
+- product_analysis：根据产品编码、客户画像和分析维度查询Mock产品库，并返回结构化产品分析结果。
 
 # Input
 

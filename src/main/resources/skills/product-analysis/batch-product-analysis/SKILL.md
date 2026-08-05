@@ -1,7 +1,8 @@
 ---
 name: batch-product-analysis
 description: 面向多款保险产品的批量对比分析能力，适用于多个候选产品筛选、产品对比矩阵和客户需求匹配场景。
-allowed_tools: []
+allowed_tools:
+  - product_analysis
 ---
 
 # Name
@@ -18,15 +19,9 @@ batch-product-analysis
 
 # Available Tools
 
-当前 Phase1 不启用 Tool Calling。
+当前可用业务工具：
 
-后续可接入的工具类型包括：
-
-- 批量产品信息查询 Tool
-- 产品责任对比 Tool
-- 保费测算 Tool
-- 客群匹配 Tool
-- 合规限制检查 Tool
+- product_analysis：根据多个产品编码、客户画像和分析维度查询Mock产品库，并返回结构化产品分析结果。
 
 # Input
 

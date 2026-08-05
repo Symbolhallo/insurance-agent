@@ -7,10 +7,12 @@ import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.config.ProductAnalysisAgentConfig;
 import com.xxx.insurance.product.model.ProductAnalysisRequest;
 import com.xxx.insurance.product.model.ProductAnalysisResult;
+import com.xxx.insurance.product.tool.ProductAnalysisTool;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.ai.tool.ToolCallback;
 
 import java.util.List;
 
@@ -32,6 +34,13 @@ class InsuranceAgentApplicationTests {
     @Qualifier(ProductAnalysisAgentConfig.PRODUCT_ANALYSIS_AGENT)
     private ProductAnalysisAgent productAnalysisAgent;
 
+    @Autowired
+    private ProductAnalysisTool productAnalysisTool;
+
+    @Autowired
+    @Qualifier("productAnalysisToolCallbacks")
+    private List<ToolCallback> productAnalysisToolCallbacks;
+
     @Test
     void contextLoads() {
     }
@@ -44,6 +53,10 @@ class InsuranceAgentApplicationTests {
         assertThat(productAnalysisSkillRegistry.listAll())
                 .extracting(skill -> skill.getSkillPath().replace('\\', '/'))
                 .allMatch(skillPath -> skillPath.contains("skills/product-analysis"));
+        assertThat(productAnalysisSkillRegistry.get("limited-product-analysis")).isPresent()
+                .get()
+                .extracting(skill -> skill.getAllowedTools())
+                .isEqualTo(List.of(ProductAnalysisTool.TOOL_NAME));
     }
 
     @Test
@@ -91,5 +104,44 @@ class InsuranceAgentApplicationTests {
         assertThatThrownBy(() -> productAnalysisAgent.analyze(request))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("At least one product code is required");
+    }
+
+    @Test
+    void productAnalysisToolCallbackIsRegisteredForReactAgent() {
+        assertThat(productAnalysisToolCallbacks).hasSize(1);
+        ToolCallback toolCallback = productAnalysisToolCallbacks.getFirst();
+        assertThat(toolCallback.getToolDefinition().name()).isEqualTo(ProductAnalysisTool.TOOL_NAME);
+        assertThat(toolCallback.getToolDefinition().description()).contains("Mock数据");
+        assertThat(toolCallback.getToolDefinition().inputSchema()).contains("productCodes");
+    }
+
+    @Test
+    void productAnalysisToolCallbackCanExecuteWithJsonInput() {
+        String toolResult = productAnalysisToolCallbacks.getFirst().call("""
+                {
+                  "productCodes": ["PA-001"],
+                  "customerProfile": "客户关注长期保障",
+                  "analysisDimensions": ["coverage", "risk"]
+                }
+                """);
+
+        assertThat(toolResult).contains("PA-001");
+        assertThat(toolResult).contains("安享一生终身寿险");
+        assertThat(toolResult).contains("MockProductAnalysisService");
+    }
+
+    @Test
+    void productAnalysisToolReturnsStructuredResult() {
+        ProductAnalysisResult result = productAnalysisTool.analyzeProducts(
+                List.of("PA-003"),
+                "客户希望规划长期养老现金流",
+                List.of("pension", "risk"));
+
+        assertThat(result.productItems()).hasSize(1);
+        assertThat(result.productItems().getFirst().productCode()).isEqualTo("PA-003");
+        assertThat(result.productItems().getFirst().highlights())
+                .anyMatch(highlight -> highlight.contains("养老年金保险"));
+        assertThat(result.complianceNotes())
+                .anyMatch(note -> note.contains("MockProductAnalysisService"));
     }
 }
