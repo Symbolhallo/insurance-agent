@@ -1,7 +1,8 @@
 package com.xxx.insurance.ai.memory.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.xxx.insurance.ai.memory.repository.JdbcChatMemoryRepository;
+import com.xxx.insurance.ai.memory.mapper.ChatMemoryMapper;
+import com.xxx.insurance.ai.memory.repository.MyBatisChatMemoryRepository;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
@@ -9,9 +10,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * ChatMemory 配置。
@@ -24,13 +22,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class ChatMemoryConfig {
 
     @Bean
-    public ChatMemoryRepository chatMemoryRepository(JdbcTemplate jdbcTemplate,
-                                                     ObjectMapper objectMapper,
-                                                     PlatformTransactionManager transactionManager) {
-        return new JdbcChatMemoryRepository(
-                jdbcTemplate,
-                objectMapper,
-                new TransactionTemplate(transactionManager));
+    public ChatMemoryRepository chatMemoryRepository(ChatMemoryMapper chatMemoryMapper, ObjectMapper objectMapper) {
+        return new MyBatisChatMemoryRepository(chatMemoryMapper, objectMapper);
     }
 
     @Bean

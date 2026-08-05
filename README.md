@@ -30,6 +30,16 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase1-Task9：Skill 输出格式约束与 DeepSeek 手工联调指南
 - Phase1-Task10：Agent 调用耗时与回答格式检查
 - Phase1-Task11：Agent 单次调用标识、回答时间与回答长度观测
+- Phase2-Task1：Memory / Workflow 前置设计与本地数据库 Flyway 初始化
+- Phase2-Task2：Spring AI ChatMemory 本地数据库接入
+- Phase2-Task3：长期记忆表与成功请求双写一致性
+- Phase2-Task4：Agent 调用流水持久化
+- Phase2-Task5：会话主表生命周期维护
+- Phase2-Task6：会话记忆快照 Swagger 查询 API
+- Phase2-Task7：会话记忆查询侧迁移为 MyBatis Mapper
+- Phase2-Task8：会话主表、调用流水、长期记忆写入侧迁移为 MyBatis Mapper
+- Phase2-Task9：Spring AI ChatMemoryRepository 适配层迁移为 MyBatis Mapper
+- Phase2-Task10：调用模型生成 Conversation Summary 并保存到本地数据库
 
 ## 架构边界
 
@@ -138,6 +148,25 @@ curl -X POST http://localhost:8080/api/v1/product-analysis-agent/chat \
   -d '{"message":"请分析 PA-001 是否适合长期保障规划","conversationId":"local-test-001"}'
 ```
 
+查询会话记忆快照：
+
+```bash
+curl -X GET 'http://localhost:8080/api/v1/ai/memory/conversations/local-test-001?limit=50' \
+  -H 'X-Trace-Id: local-memory-query-001'
+```
+
+调用模型生成会话摘要：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/ai/memory/conversations/local-test-001/summaries \
+  -H 'X-Trace-Id: local-summary-001' \
+  -H 'Content-Type: application/json' \
+  -d '{"maxMemories":100}'
+```
+
+当前记忆查询侧使用 MyBatis Mapper 实现；会话主表、调用流水、长期记忆写入侧也已迁移为 MyBatis Mapper。
+Spring AI `ChatMemoryRepository` 适配层同样已迁移为 MyBatis Mapper，并保留 `saveAll` 覆盖当前窗口消息列表的语义。
+
 接口统一响应格式：
 
 ```json
@@ -187,7 +216,7 @@ ChatMemory
 ↓
 MessageWindowChatMemory
 ↓
-JdbcChatMemoryRepository
+MyBatisChatMemoryRepository
 ↓
 ai_chat_memory
 ```
@@ -202,8 +231,10 @@ LongTermMemoryService
 ai_long_term_memory
 ```
 
-启用 `local-db` profile 后，每次成功请求会更新 `ai_chat_memory`，并向 `ai_long_term_memory` 追加 USER 和 ASSISTANT 两条长期记忆。
-两张表由 `AgentMemoryService` 在同一个事务内写入，任一写入失败都会整体回滚。
+启用 `local-db` profile 后，每次成功请求会更新 `ai_chat_memory`，向 `ai_long_term_memory` 追加 USER 和 ASSISTANT 两条长期记忆，upsert `ai_conversation` 会话主记录，并向 `ai_agent_invocation` 追加 SUCCESS 调用流水。
+这些表由 `AgentMemoryService` 在同一个事务内协调写入，任一写入失败都会整体回滚。
+
+会话摘要通过手动接口触发，读取 `ai_long_term_memory` 历史消息，调用全局 `ChatModel` 生成结构化摘要，并写入 `ai_conversation_summary`。
 
 启用本地数据库：
 
@@ -218,6 +249,7 @@ DB_PASSWORD=你的本地数据库密码
 
 ```text
 src/main/resources/db/migration/V1__create_memory_workflow_tables.sql
+src/main/resources/db/migration/V2__create_long_term_memory_table.sql
 ```
 
 你只需要手动创建 `insurance_agent` 数据库，业务表由 Flyway 自动创建。

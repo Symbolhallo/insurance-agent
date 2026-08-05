@@ -219,6 +219,14 @@ External Vector Retrieval Service
 - 避免长对话每次全部塞回模型。
 - 后续支持长期记忆压缩。
 
+当前接入策略：
+
+- 摘要通过 Swagger/API 手动触发，不做自动定时总结。
+- 摘要素材来自 `ai_long_term_memory`，不依赖 `ai_chat_memory` 当前窗口，避免窗口裁剪导致历史缺失。
+- 摘要生成调用全局 `ChatModel` Bean，遵循当前单模型模式。
+- 摘要 Prompt 要求只总结历史中出现过的信息，不编造产品条款，不承诺收益，不替代人工投顾、核保、法务或合规审查。
+- 摘要结果写入 `ai_conversation_summary`，并会在会话记忆快照接口中返回。
+
 建议字段：
 
 | 字段 | 说明 |

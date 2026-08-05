@@ -216,6 +216,74 @@ class InsuranceAgentApplicationTests {
     }
 
     @Test
+    void agentMemorySnapshotApiReturnsNoOpSnapshotByDefault() throws Exception {
+        mockMvc.perform(get("/api/v1/ai/memory/conversations/local-test-001")
+                        .header("X-Trace-Id", "test-trace-memory-001"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Trace-Id", "test-trace-memory-001"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.memoryEnabled").value(false))
+                .andExpect(jsonPath("$.data.conversationId").value("local-test-001"))
+                .andExpect(jsonPath("$.data.conversation").doesNotExist())
+                .andExpect(jsonPath("$.data.chatMessages").isEmpty())
+                .andExpect(jsonPath("$.data.longTermMemories").isEmpty())
+                .andExpect(jsonPath("$.data.summaries").isEmpty())
+                .andExpect(jsonPath("$.data.invocations").isEmpty());
+    }
+
+    @Test
+    void conversationSummaryApiReturnsNoOpResponseByDefault() throws Exception {
+        mockMvc.perform(post("/api/v1/ai/memory/conversations/local-test-001/summaries")
+                        .header("X-Trace-Id", "test-trace-summary-001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "maxMemories": 20
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Trace-Id", "test-trace-summary-001"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.memoryEnabled").value(false))
+                .andExpect(jsonPath("$.data.modelInvoked").value(false))
+                .andExpect(jsonPath("$.data.conversationId").value("local-test-001"))
+                .andExpect(jsonPath("$.data.sourceMemoryCount").value(0));
+    }
+
+    @Test
+    void conversationSummaryApiRejectsTooLargeMaxMemories() throws Exception {
+        mockMvc.perform(post("/api/v1/ai/memory/conversations/local-test-001/summaries")
+                        .header("X-Trace-Id", "test-trace-summary-002")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "maxMemories": 201
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON-400"))
+                .andExpect(jsonPath("$.message").value("maxMemories: maxMemories must be less than or equal to 200"));
+    }
+
+    @Test
+    void productAnalysisChatApiRejectsConversationIdLongerThanDatabaseColumn() throws Exception {
+        mockMvc.perform(post("/api/v1/product-analysis-agent/chat")
+                        .header("X-Trace-Id", "test-trace-memory-002")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": "请分析 PA-001",
+                                  "conversationId": "conversation-id-longer-than-sixty-four-characters-which-should-be-rejected"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON-400"))
+                .andExpect(jsonPath("$.message").value("conversationId: conversationId length must be less than or equal to 64"));
+    }
+
+    @Test
     void productAnalysisSkillsDefineOutputContractAndToolRules() throws Exception {
         String limitedSkill = readClasspathResource("skills/product-analysis/limited-product-analysis/SKILL.md");
         String batchSkill = readClasspathResource("skills/product-analysis/batch-product-analysis/SKILL.md");
@@ -316,6 +384,7 @@ class InsuranceAgentApplicationTests {
         assertThat(ChatMemory.CONVERSATION_ID).isEqualTo("chat_memory_conversation_id");
         assertThat(migration)
                 .contains("create table if not exists ai_chat_memory")
+                .contains("create table if not exists ai_conversation_summary")
                 .contains("conversation_id")
                 .contains("message_order")
                 .contains("message_type")

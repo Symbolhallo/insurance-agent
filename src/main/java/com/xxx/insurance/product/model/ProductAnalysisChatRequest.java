@@ -17,7 +17,7 @@ public record ProductAnalysisChatRequest(
         @Size(max = 2000, message = "message length must be less than or equal to 2000")
         String message,
 
-        @Schema(description = "会话编号，当前阶段仅透传，后续用于 Memory 和审计链路", example = "local-test-001")
-        @Size(max = 128, message = "conversationId length must be less than or equal to 128")
+        @Schema(description = "会话编号，用于 Memory 和审计链路；启用 local-db 时建议必传", example = "local-test-001")
+        @Size(max = 64, message = "conversationId length must be less than or equal to 64")
         String conversationId) {
 }

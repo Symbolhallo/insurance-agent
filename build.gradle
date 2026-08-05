@@ -18,6 +18,7 @@ ext {
     springAiAlibabaVersion = '1.1.2.3'
     springdocOpenapiVersion = '2.8.17'
     lombokVersion = '1.18.38'
+    mybatisSpringBootVersion = '3.0.5'
 }
 
 dependencyManagement {
@@ -37,6 +38,7 @@ dependencies {
     implementation "com.alibaba.cloud.ai:spring-ai-alibaba-dashscope:${springAiAlibabaVersion}"
     implementation "com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:${springAiAlibabaVersion}"
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocOpenapiVersion}"
+    implementation "org.mybatis.spring.boot:mybatis-spring-boot-starter:${mybatisSpringBootVersion}"
     implementation 'org.flywaydb:flyway-core'
     implementation 'org.flywaydb:flyway-mysql'
 
