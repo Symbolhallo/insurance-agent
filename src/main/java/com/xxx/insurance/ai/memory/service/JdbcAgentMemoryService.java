@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.memory.service;
 
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
+import com.xxx.insurance.ai.memory.model.AgentConversationRecord;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.model.LongTermMemoryRecord;
 import org.springframework.ai.chat.memory.ChatMemory;
@@ -31,12 +32,16 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
 
     private final AgentInvocationService agentInvocationService;
 
+    private final AgentConversationService agentConversationService;
+
     public JdbcAgentMemoryService(ChatMemory chatMemory,
                                   LongTermMemoryService longTermMemoryService,
-                                  AgentInvocationService agentInvocationService) {
+                                  AgentInvocationService agentInvocationService,
+                                  AgentConversationService agentConversationService) {
         this.chatMemory = chatMemory;
         this.longTermMemoryService = longTermMemoryService;
         this.agentInvocationService = agentInvocationService;
+        this.agentConversationService = agentConversationService;
     }
 
     @Override
@@ -52,6 +57,7 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveSuccessfulExchange(AgentMemoryExchange exchange, AgentInvocationRecord invocationRecord) {
+        agentConversationService.upsertActiveConversation(toConversationRecord(invocationRecord));
         chatMemory.add(exchange.conversationId(), List.of(exchange.userMessage(), exchange.assistantMessage()));
         longTermMemoryService.save(toLongTermMemoryRecord(exchange, MessageType.USER, exchange.userMessage().getText()));
         longTermMemoryService.save(toLongTermMemoryRecord(
@@ -64,7 +70,21 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveFailedInvocation(AgentInvocationRecord invocationRecord) {
+        agentConversationService.upsertActiveConversation(toConversationRecord(invocationRecord));
         agentInvocationService.save(invocationRecord);
+    }
+
+    private AgentConversationRecord toConversationRecord(AgentInvocationRecord invocationRecord) {
+        return new AgentConversationRecord(
+                invocationRecord.conversationId(),
+                invocationRecord.userId(),
+                invocationRecord.customerId(),
+                invocationRecord.operatorId(),
+                "INTERNAL_TEST",
+                invocationRecord.agentName(),
+                toConversationTitle(invocationRecord.userMessage()),
+                "ACTIVE",
+                invocationRecord.createdAt());
     }
 
     private LongTermMemoryRecord toLongTermMemoryRecord(AgentMemoryExchange exchange,
@@ -98,5 +118,19 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
             return normalized;
         }
         return normalized.substring(0, 200);
+    }
+
+    private String toConversationTitle(String userMessage) {
+        if (userMessage == null) {
+            return "产品分析会话";
+        }
+        String normalized = userMessage.replaceAll("\\s+", " ").trim();
+        if (normalized.isBlank()) {
+            return "产品分析会话";
+        }
+        if (normalized.length() <= 80) {
+            return normalized;
+        }
+        return normalized.substring(0, 80);
     }
 }
