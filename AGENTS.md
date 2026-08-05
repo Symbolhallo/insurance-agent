@@ -23,6 +23,7 @@ Current phase:
 - Phase1-Task4 product domain model, mock service, formatter, and controlled invocation boundary is complete.
 - Phase1-Task5 ProductAnalysisTool and ReactAgent tool-calling integration is complete.
 - Phase1-Task6 controlled model invocation API for local verification with DeepSeek is complete.
+- Phase1-Task7 production-style API response, error handling, and traceId boundary is complete.
 
 ## Technology Baseline
 
@@ -94,6 +95,7 @@ product
 └── model
 
 common
+├── config
 ├── exception
 ├── result
 └── util
@@ -259,6 +261,9 @@ Reserve consistent log markers for the agent execution chain:
 [Tool]
 [Memory]
 ```
+
+HTTP APIs return a unified response envelope and include `X-Trace-Id` in the response header.
+The same traceId is also written into the logging MDC for local API and Agent-chain troubleshooting.
 
 Use these markers when implementing agent, skill, tool, or memory infrastructure.
 

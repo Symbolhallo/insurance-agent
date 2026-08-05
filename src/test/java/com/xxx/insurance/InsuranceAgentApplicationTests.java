@@ -23,6 +23,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = "spring.ai.openai.api-key=test-api-key")
@@ -167,6 +169,7 @@ class InsuranceAgentApplicationTests {
     @Test
     void productAnalysisChatApiRejectsBlankMessage() throws Exception {
         mockMvc.perform(post("/api/v1/product-analysis-agent/chat")
+                        .header("X-Trace-Id", "test-trace-001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
@@ -174,6 +177,11 @@ class InsuranceAgentApplicationTests {
                                   "conversationId": "conversation-001"
                                 }
                                 """))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("X-Trace-Id", "test-trace-001"))
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON-400"))
+                .andExpect(jsonPath("$.message").value("message: message must not be blank"))
+                .andExpect(jsonPath("$.traceId").value("test-trace-001"));
     }
 }

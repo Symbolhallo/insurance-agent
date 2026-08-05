@@ -25,6 +25,7 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase1-Task4：产品分析领域模型、Mock Service、Formatter、受控调用边界
 - Phase1-Task5：ProductAnalysisTool 与 ReactAgent Tool Calling 集成
 - Phase1-Task6：产品分析智能体受控模型调用 API
+- Phase1-Task7：统一 API 响应、异常处理与 TraceId 边界
 
 ## 架构边界
 
@@ -48,6 +49,7 @@ com.xxx.insurance
 │   ├── skill
 │   └── tool
 └── common
+    ├── config
     ├── exception
     ├── result
     └── util
@@ -111,8 +113,22 @@ http://localhost:8080/swagger-ui.html
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/product-analysis-agent/chat \
+  -H 'X-Trace-Id: local-test-trace-001' \
   -H 'Content-Type: application/json' \
   -d '{"message":"请分析 PA-001 是否适合长期保障规划","conversationId":"local-test-001"}'
+```
+
+接口统一响应格式：
+
+```json
+{
+  "success": true,
+  "code": "0",
+  "message": "success",
+  "data": {},
+  "traceId": "local-test-trace-001",
+  "timestamp": "2026-08-05T00:00:00Z"
+}
 ```
 
 ## 项目记忆

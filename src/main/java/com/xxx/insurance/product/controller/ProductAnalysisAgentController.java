@@ -1,5 +1,6 @@
 package com.xxx.insurance.product.controller;
 
+import com.xxx.insurance.common.result.ApiResponse;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.model.ProductAnalysisChatRequest;
 import com.xxx.insurance.product.model.ProductAnalysisChatResponse;
@@ -38,7 +39,7 @@ public class ProductAnalysisAgentController {
             summary = "调用产品分析智能体",
             description = "触发 ProductAnalysisAgent 的 ReactAgent 调用，用于本地验证 Skill 与 product_analysis Tool 的单 Agent 闭环。")
     @PostMapping("/chat")
-    public ProductAnalysisChatResponse chat(@Valid @RequestBody ProductAnalysisChatRequest request) {
-        return productAnalysisAgent.chat(request);
+    public ApiResponse<ProductAnalysisChatResponse> chat(@Valid @RequestBody ProductAnalysisChatRequest request) {
+        return ApiResponse.success(productAnalysisAgent.chat(request));
     }
 }
