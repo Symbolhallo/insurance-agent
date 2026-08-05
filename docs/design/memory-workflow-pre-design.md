@@ -81,6 +81,14 @@ External Vector Retrieval Service
 - 后续接入 ReactAgent Memory Hook。
 - 对齐 `conversationId` 与用户请求。
 
+当前接入策略：
+
+- `local-db` profile 下，存在 `conversationId` 的 Agent 请求会自动 upsert `ai_conversation`。
+- 首次请求根据用户输入生成会话标题，后续请求只更新时间，不覆盖已有标题。
+- 成功请求的会话主记录、窗口记忆、长期记忆和调用流水在同一个事务内写入。
+- 失败请求不写入消息记忆，但会 upsert 会话主记录并写入 `FAILED` 调用流水。
+- 默认 profile 下不创建会话主记录。
+
 建议字段：
 
 | 字段 | 说明 |
