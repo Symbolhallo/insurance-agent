@@ -16,6 +16,8 @@ import java.util.List;
  * @param durationMs 模型调用耗时，单位毫秒
  * @param answeredAt 模型回答生成完成时间
  * @param answerLength 模型回答字符长度
+ * @param memoryEnabled 本次调用是否启用 ChatMemory
+ * @param memoryMessageCount 调用模型时携带的历史消息数量
  * @param outputFormatValid 是否满足当前 Skill 输出格式合同
  * @param missingSections 缺失的小标题
  */
@@ -44,6 +46,12 @@ public record ProductAnalysisChatResponse(
 
         @Schema(description = "模型回答字符长度", example = "680")
         int answerLength,
+
+        @Schema(description = "本次调用是否启用 ChatMemory", example = "true")
+        boolean memoryEnabled,
+
+        @Schema(description = "调用模型时携带的历史消息数量", example = "2")
+        int memoryMessageCount,
 
         @Schema(description = "是否满足当前 Skill 输出格式合同", example = "true")
         boolean outputFormatValid,

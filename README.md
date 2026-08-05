@@ -157,6 +157,8 @@ curl -X POST http://localhost:8080/api/v1/product-analysis-agent/chat \
 - `durationMs`：模型调用耗时，单位毫秒
 - `answeredAt`：模型回答生成完成时间
 - `answerLength`：模型回答字符长度
+- `memoryEnabled`：本次调用是否启用 ChatMemory
+- `memoryMessageCount`：调用模型时携带的历史消息数量
 - `outputFormatValid`：回答是否满足当前 Skill 输出格式合同
 - `missingSections`：缺失的小标题
 
@@ -169,3 +171,53 @@ AGENTS.md
 ```
 
 后续使用 Codex/Cursor/IDEA 开发时，请优先遵守该文件中的阶段边界、依赖规则、Skill 规范和禁止事项。
+
+## Phase2 设计
+
+Memory / Workflow 前置设计文档：
+
+```text
+docs/design/memory-workflow-pre-design.md
+```
+
+Memory 主线采用 Spring AI 原生抽象：
+
+```text
+ChatMemory
+↓
+MessageWindowChatMemory
+↓
+JdbcChatMemoryRepository
+↓
+ai_chat_memory
+```
+
+长期记忆单独追加保存：
+
+```text
+ProductAnalysisAgent
+↓
+LongTermMemoryService
+↓
+ai_long_term_memory
+```
+
+启用 `local-db` profile 后，每次成功请求会更新 `ai_chat_memory`，并向 `ai_long_term_memory` 追加 USER 和 ASSISTANT 两条长期记忆。
+两张表由 `AgentMemoryService` 在同一个事务内写入，任一写入失败都会整体回滚。
+
+启用本地数据库：
+
+```text
+SPRING_PROFILES_ACTIVE=local-db
+DB_URL=jdbc:mysql://127.0.0.1:2881/insurance_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+DB_USERNAME=root
+DB_PASSWORD=你的本地数据库密码
+```
+
+`local-db` profile 启动后，Flyway 会自动执行：
+
+```text
+src/main/resources/db/migration/V1__create_memory_workflow_tables.sql
+```
+
+你只需要手动创建 `insurance_agent` 数据库，业务表由 Flyway 自动创建。

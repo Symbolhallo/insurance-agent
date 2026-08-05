@@ -2,6 +2,8 @@ package com.xxx.insurance.product.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
+import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
 import com.xxx.insurance.product.model.ProductAnalysisAnswerInspection;
@@ -13,9 +15,12 @@ import com.xxx.insurance.product.service.ProductAnalysisService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -52,16 +57,20 @@ public class ProductAnalysisAgent {
 
     private final ProductAnalysisAnswerInspector productAnalysisAnswerInspector;
 
+    private final AgentMemoryService agentMemoryService;
+
     public ProductAnalysisAgent(ReactAgent reactAgent,
                                 SkillsAgentHook skillsAgentHook,
                                 ProductAnalysisService productAnalysisService,
                                 ProductAnalysisFormatter productAnalysisFormatter,
-                                ProductAnalysisAnswerInspector productAnalysisAnswerInspector) {
+                                ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
+                                AgentMemoryService agentMemoryService) {
         this.reactAgent = reactAgent;
         this.skillsAgentHook = skillsAgentHook;
         this.productAnalysisService = productAnalysisService;
         this.productAnalysisFormatter = productAnalysisFormatter;
         this.productAnalysisAnswerInspector = productAnalysisAnswerInspector;
+        this.agentMemoryService = agentMemoryService;
     }
 
     public String name() {
@@ -91,29 +100,37 @@ public class ProductAnalysisAgent {
      * {@link ReactAgent#call(String)}，ReactAgent 会根据 Skill 上下文决定是否读取
      * SKILL.md，并在需要产品数据时调用 product_analysis Tool。</p>
      *
-     * <p>该方法暂不接入 Memory。conversationId 仅在请求/响应中透传，为后续会话记忆
-     * 和审计链路预留字段。</p>
+     * <p>当应用启用 local-db profile 并创建 AgentMemoryService JDBC 实现时，该方法会使用
+     * conversationId 读取历史消息，并通过 {@link ReactAgent#call(List)} 携带上下文调用模型。
+     * 成功调用后，窗口记忆与长期记忆会在同一个事务内写入。默认 profile 下使用 no-op
+     * 记忆服务，仍保持无记忆单轮调用。</p>
      */
     public ProductAnalysisChatResponse chat(ProductAnalysisChatRequest request) {
         validateChatRequest(request);
         String invocationId = newInvocationId();
         long startNanos = System.nanoTime();
+        MemoryCallContext memoryCallContext = buildMemoryCallContext(request);
         try {
-            log.info("[Agent] name={} action=chat status=start invocationId={} conversationId={} messageLength={}",
+            log.info("[Agent] name={} action=chat status=start invocationId={} conversationId={} messageLength={} memoryEnabled={} memoryMessageCount={}",
                     AGENT_NAME,
                     invocationId,
                     request.conversationId(),
-                    request.message().length());
-            AssistantMessage assistantMessage = reactAgent.call(request.message());
+                    request.message().length(),
+                    memoryCallContext.memoryEnabled(),
+                    memoryCallContext.historyMessageCount());
+            AssistantMessage assistantMessage = callReactAgent(request, memoryCallContext);
             long durationMs = elapsedMillis(startNanos);
             String answer = assistantMessage.getText();
+            Instant answeredAt = Instant.now();
             ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect(answer);
-            log.info("[Agent] name={} action=chat status=success invocationId={} conversationId={} durationMs={} answerLength={} outputFormatValid={}",
+            saveMemory(memoryCallContext, invocationId, assistantMessage, answeredAt);
+            log.info("[Agent] name={} action=chat status=success invocationId={} conversationId={} durationMs={} answerLength={} memoryEnabled={} outputFormatValid={}",
                     AGENT_NAME,
                     invocationId,
                     request.conversationId(),
                     durationMs,
                     answerLength(answer),
+                    memoryCallContext.memoryEnabled(),
                     inspection.outputFormatValid());
             return new ProductAnalysisChatResponse(
                     AGENT_NAME,
@@ -122,8 +139,10 @@ public class ProductAnalysisAgent {
                     answer,
                     true,
                     durationMs,
-                    Instant.now(),
+                    answeredAt,
                     answerLength(answer),
+                    memoryCallContext.memoryEnabled(),
+                    memoryCallContext.historyMessageCount(),
                     inspection.outputFormatValid(),
                     inspection.missingSections());
         }
@@ -176,6 +195,46 @@ public class ProductAnalysisAgent {
         }
     }
 
+    private MemoryCallContext buildMemoryCallContext(ProductAnalysisChatRequest request) {
+        if (!agentMemoryService.isEnabled() || !StringUtils.hasText(request.conversationId())) {
+            return MemoryCallContext.disabled();
+        }
+        List<Message> historyMessages = agentMemoryService.getHistory(request.conversationId());
+        UserMessage userMessage = new UserMessage(request.message());
+        List<Message> requestMessages = new ArrayList<>(historyMessages);
+        requestMessages.add(userMessage);
+        return new MemoryCallContext(
+                true,
+                request.conversationId(),
+                userMessage,
+                requestMessages,
+                historyMessages.size());
+    }
+
+    private AssistantMessage callReactAgent(ProductAnalysisChatRequest request, MemoryCallContext memoryCallContext)
+            throws Exception {
+        if (!memoryCallContext.memoryEnabled()) {
+            return reactAgent.call(request.message());
+        }
+        return reactAgent.call(memoryCallContext.requestMessages());
+    }
+
+    private void saveMemory(MemoryCallContext memoryCallContext,
+                            String invocationId,
+                            AssistantMessage assistantMessage,
+                            Instant answeredAt) {
+        if (!memoryCallContext.memoryEnabled()) {
+            return;
+        }
+        agentMemoryService.saveSuccessfulExchange(new AgentMemoryExchange(
+                memoryCallContext.conversationId(),
+                invocationId,
+                AGENT_NAME,
+                memoryCallContext.userMessage(),
+                assistantMessage,
+                answeredAt));
+    }
+
     private long elapsedMillis(long startNanos) {
         return (System.nanoTime() - startNanos) / 1_000_000;
     }
@@ -186,5 +245,17 @@ public class ProductAnalysisAgent {
 
     private String newInvocationId() {
         return "pai-" + UUID.randomUUID().toString().replace("-", "");
+    }
+
+    private record MemoryCallContext(
+            boolean memoryEnabled,
+            String conversationId,
+            UserMessage userMessage,
+            List<Message> requestMessages,
+            int historyMessageCount) {
+
+        static MemoryCallContext disabled() {
+            return new MemoryCallContext(false, null, null, List.of(), 0);
+        }
     }
 }

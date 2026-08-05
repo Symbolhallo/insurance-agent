@@ -29,6 +29,7 @@ dependencyManagement {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-web'
 
@@ -36,6 +37,8 @@ dependencies {
     implementation "com.alibaba.cloud.ai:spring-ai-alibaba-dashscope:${springAiAlibabaVersion}"
     implementation "com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:${springAiAlibabaVersion}"
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocOpenapiVersion}"
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
 
     compileOnly "org.projectlombok:lombok:${lombokVersion}"
     annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
@@ -43,6 +46,7 @@ dependencies {
     testAnnotationProcessor "org.projectlombok:lombok:${lombokVersion}"
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    runtimeOnly 'com.mysql:mysql-connector-j'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

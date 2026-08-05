@@ -14,11 +14,13 @@ import com.xxx.insurance.product.tool.ProductAnalysisTool;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.nio.charset.StandardCharsets;
@@ -34,6 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(properties = "spring.ai.openai.api-key=test-api-key")
 @AutoConfigureMockMvc
+@ActiveProfiles("test")
 class InsuranceAgentApplicationTests {
 
     @Autowired
@@ -299,8 +302,32 @@ class InsuranceAgentApplicationTests {
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.answeredAt").exists())
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.answerLength").exists())
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.durationMs").exists())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.memoryEnabled").exists())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.memoryMessageCount").exists())
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.outputFormatValid").exists())
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.missingSections").exists());
+    }
+
+    @Test
+    void memoryWorkflowMigrationUsesSpringAiChatMemoryRepositoryShape() throws Exception {
+        String migration = readClasspathResource("db/migration/V1__create_memory_workflow_tables.sql");
+        String longTermMemoryMigration = readClasspathResource("db/migration/V2__create_long_term_memory_table.sql");
+
+        assertThat(ChatMemory.CONVERSATION_ID).isEqualTo("chat_memory_conversation_id");
+        assertThat(migration)
+                .contains("create table if not exists ai_chat_memory")
+                .contains("conversation_id")
+                .contains("message_order")
+                .contains("message_type")
+                .contains("text_content")
+                .contains("metadata_json")
+                .doesNotContain("create table if not exists ai_message");
+        assertThat(longTermMemoryMigration)
+                .contains("create table if not exists ai_long_term_memory")
+                .contains("memory_type")
+                .contains("importance_score")
+                .contains("archived")
+                .contains("AI 长期记忆表");
     }
 
     private String readClasspathResource(String location) throws Exception {

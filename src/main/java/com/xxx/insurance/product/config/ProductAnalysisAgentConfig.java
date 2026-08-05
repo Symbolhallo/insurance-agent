@@ -3,6 +3,7 @@ package com.xxx.insurance.product.config;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.config.SkillConfig;
+import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
@@ -29,7 +30,7 @@ import java.util.List;
  *
  * <ul>
  *     <li>只注册产品分析 ToolCallback；</li>
- *     <li>不接入 Memory；</li>
+ *     <li>local-db profile 下可接入 Spring AI ChatMemory；</li>
  *     <li>不编排 Graph Workflow；</li>
  *     <li>只提供用于本地验证的受控产品分析 API。</li>
  * </ul>
@@ -119,6 +120,7 @@ public class ProductAnalysisAgentConfig {
      * @param productAnalysisService 产品分析业务数据服务
      * @param productAnalysisFormatter 产品分析输出格式转换器
      * @param productAnalysisAnswerInspector 产品分析模型回答检查器
+     * @param agentMemoryService Agent 记忆协调服务
      * @return 产品分析业务智能体
      */
     @Bean(PRODUCT_ANALYSIS_AGENT)
@@ -127,12 +129,14 @@ public class ProductAnalysisAgentConfig {
             @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
             ProductAnalysisService productAnalysisService,
             ProductAnalysisFormatter productAnalysisFormatter,
-            ProductAnalysisAnswerInspector productAnalysisAnswerInspector) {
+            ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
+            AgentMemoryService agentMemoryService) {
         return new ProductAnalysisAgent(
                 reactAgent,
                 skillsAgentHook,
                 productAnalysisService,
                 productAnalysisFormatter,
-                productAnalysisAnswerInspector);
+                productAnalysisAnswerInspector,
+                agentMemoryService);
     }
 }

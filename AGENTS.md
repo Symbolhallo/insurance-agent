@@ -28,6 +28,14 @@ Current phase:
 - Phase1-Task9 Skill-level output contract and DeepSeek manual verification guide is complete.
 - Phase1-Task10 Agent invocation duration and answer format inspection is complete.
 - Phase1-Task11 Agent invocation id, answered timestamp, and answer length observation is complete.
+- Phase2 enters Memory / Workflow pre-design after ProductAnalysisAgent Phase1 acceptance.
+- Phase2-Task0 Memory / Workflow pre-design document is complete.
+- Phase2 confirmed local database is OceanBase/MySQL protocol through `127.0.0.1:2881`.
+- Phase2 allows plaintext model input/output in local database, uses mock identity fields, and keeps local memory permanently.
+- Phase2 Memory should follow Spring AI `ChatMemory` / `ChatMemoryRepository`; `AgentInvocation` is audit/observation, not the primary memory table.
+- ProductAnalysisAgent uses optional ChatMemory: default profile is stateless, local-db profile enables conversation history through `ReactAgent.call(List<Message>)`.
+- local-db profile writes successful ProductAnalysisAgent requests to both `ai_chat_memory` and `ai_long_term_memory`; long-term memory is append-only history.
+- `ai_chat_memory` and `ai_long_term_memory` must be written through `AgentMemoryService.saveSuccessfulExchange(...)` in one transaction.
 
 ## Technology Baseline
 
