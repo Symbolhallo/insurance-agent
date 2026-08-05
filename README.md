@@ -27,6 +27,7 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase1-Task6：产品分析智能体受控模型调用 API
 - Phase1-Task7：统一 API 响应、异常处理与 TraceId 边界
 - Phase1-Task8：AI 模型联调状态 API
+- Phase1-Task9：Skill 输出格式约束与 DeepSeek 手工联调指南
 
 ## 架构边界
 
@@ -111,6 +112,12 @@ Swagger UI：
 
 ```text
 http://localhost:8080/swagger-ui.html
+```
+
+DeepSeek 真实联调步骤：
+
+```text
+docs/manual-tests/product-analysis-agent-deepseek.md
 ```
 
 建议先调用模型状态接口，确认 DeepSeek 环境变量已生效：

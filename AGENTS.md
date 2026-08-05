@@ -25,6 +25,7 @@ Current phase:
 - Phase1-Task6 controlled model invocation API for local verification with DeepSeek is complete.
 - Phase1-Task7 production-style API response, error handling, and traceId boundary is complete.
 - Phase1-Task8 AI model status API for local DeepSeek verification is complete.
+- Phase1-Task9 Skill-level output contract and DeepSeek manual verification guide is complete.
 
 ## Technology Baseline
 

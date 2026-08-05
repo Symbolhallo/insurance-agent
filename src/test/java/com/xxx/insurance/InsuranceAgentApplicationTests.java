@@ -15,9 +15,11 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -203,5 +205,36 @@ class InsuranceAgentApplicationTests {
                 .andExpect(jsonPath("$.data.skills[1]").value("limited-product-analysis"))
                 .andExpect(jsonPath("$.data.tools[0]").value(ProductAnalysisTool.TOOL_NAME))
                 .andExpect(jsonPath("$.traceId").value("test-trace-002"));
+    }
+
+    @Test
+    void productAnalysisSkillsDefineOutputContractAndToolRules() throws Exception {
+        String limitedSkill = readClasspathResource("skills/product-analysis/limited-product-analysis/SKILL.md");
+        String batchSkill = readClasspathResource("skills/product-analysis/batch-product-analysis/SKILL.md");
+
+        assertThat(limitedSkill)
+                .contains("allowed_tools:")
+                .contains(ProductAnalysisTool.TOOL_NAME)
+                .contains("## 分析结论")
+                .contains("## 产品事实")
+                .contains("## 适配分析")
+                .contains("## 风险提示")
+                .contains("## 后续建议")
+                .contains("不得把产品分析工具返回之外的信息包装成产品事实");
+
+        assertThat(batchSkill)
+                .contains("allowed_tools:")
+                .contains(ProductAnalysisTool.TOOL_NAME)
+                .contains("## 对比结论")
+                .contains("## 产品对比表")
+                .contains("## 适配排序")
+                .contains("## 关键风险")
+                .contains("## 后续建议")
+                .contains("不得把产品分析工具返回之外的信息包装成产品事实");
+    }
+
+    private String readClasspathResource(String location) throws Exception {
+        ClassPathResource resource = new ClassPathResource(location);
+        return resource.getContentAsString(StandardCharsets.UTF_8);
     }
 }
