@@ -2,7 +2,9 @@ package com.xxx.insurance.product.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
+import com.xxx.insurance.product.model.ProductAnalysisAnswerInspection;
 import com.xxx.insurance.product.model.ProductAnalysisChatRequest;
 import com.xxx.insurance.product.model.ProductAnalysisChatResponse;
 import com.xxx.insurance.product.model.ProductAnalysisRequest;
@@ -13,8 +15,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.util.StringUtils;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * 产品分析业务智能体入口。
@@ -46,14 +50,18 @@ public class ProductAnalysisAgent {
 
     private final ProductAnalysisFormatter productAnalysisFormatter;
 
+    private final ProductAnalysisAnswerInspector productAnalysisAnswerInspector;
+
     public ProductAnalysisAgent(ReactAgent reactAgent,
                                 SkillsAgentHook skillsAgentHook,
                                 ProductAnalysisService productAnalysisService,
-                                ProductAnalysisFormatter productAnalysisFormatter) {
+                                ProductAnalysisFormatter productAnalysisFormatter,
+                                ProductAnalysisAnswerInspector productAnalysisAnswerInspector) {
         this.reactAgent = reactAgent;
         this.skillsAgentHook = skillsAgentHook;
         this.productAnalysisService = productAnalysisService;
         this.productAnalysisFormatter = productAnalysisFormatter;
+        this.productAnalysisAnswerInspector = productAnalysisAnswerInspector;
     }
 
     public String name() {
@@ -88,16 +96,44 @@ public class ProductAnalysisAgent {
      */
     public ProductAnalysisChatResponse chat(ProductAnalysisChatRequest request) {
         validateChatRequest(request);
+        String invocationId = newInvocationId();
+        long startNanos = System.nanoTime();
         try {
-            log.info("[Agent] name={} action=chat conversationId={}", AGENT_NAME, request.conversationId());
+            log.info("[Agent] name={} action=chat status=start invocationId={} conversationId={} messageLength={}",
+                    AGENT_NAME,
+                    invocationId,
+                    request.conversationId(),
+                    request.message().length());
             AssistantMessage assistantMessage = reactAgent.call(request.message());
+            long durationMs = elapsedMillis(startNanos);
+            String answer = assistantMessage.getText();
+            ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect(answer);
+            log.info("[Agent] name={} action=chat status=success invocationId={} conversationId={} durationMs={} answerLength={} outputFormatValid={}",
+                    AGENT_NAME,
+                    invocationId,
+                    request.conversationId(),
+                    durationMs,
+                    answerLength(answer),
+                    inspection.outputFormatValid());
             return new ProductAnalysisChatResponse(
                     AGENT_NAME,
                     request.conversationId(),
-                    assistantMessage.getText(),
-                    true);
+                    invocationId,
+                    answer,
+                    true,
+                    durationMs,
+                    Instant.now(),
+                    answerLength(answer),
+                    inspection.outputFormatValid(),
+                    inspection.missingSections());
         }
         catch (Exception ex) {
+            log.error("[Agent] name={} action=chat status=failed invocationId={} conversationId={} durationMs={}",
+                    AGENT_NAME,
+                    invocationId,
+                    request.conversationId(),
+                    elapsedMillis(startNanos),
+                    ex);
             throw new IllegalStateException("Product analysis model invocation failed", ex);
         }
     }
@@ -138,5 +174,17 @@ public class ProductAnalysisAgent {
         if (request.message().length() > 2000) {
             throw new IllegalArgumentException("message length must be less than or equal to 2000");
         }
+    }
+
+    private long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
+    }
+
+    private int answerLength(String answer) {
+        return answer == null ? 0 : answer.length();
+    }
+
+    private String newInvocationId() {
+        return "pai-" + UUID.randomUUID().toString().replace("-", "");
     }
 }

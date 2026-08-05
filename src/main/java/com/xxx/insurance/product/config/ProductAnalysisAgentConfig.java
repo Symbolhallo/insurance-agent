@@ -3,6 +3,7 @@ package com.xxx.insurance.product.config;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.config.SkillConfig;
+import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.service.ProductAnalysisService;
@@ -117,6 +118,7 @@ public class ProductAnalysisAgentConfig {
      * @param skillsAgentHook 产品分析 Skill Hook
      * @param productAnalysisService 产品分析业务数据服务
      * @param productAnalysisFormatter 产品分析输出格式转换器
+     * @param productAnalysisAnswerInspector 产品分析模型回答检查器
      * @return 产品分析业务智能体
      */
     @Bean(PRODUCT_ANALYSIS_AGENT)
@@ -124,11 +126,13 @@ public class ProductAnalysisAgentConfig {
             @Qualifier(PRODUCT_ANALYSIS_REACT_AGENT) ReactAgent reactAgent,
             @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
             ProductAnalysisService productAnalysisService,
-            ProductAnalysisFormatter productAnalysisFormatter) {
+            ProductAnalysisFormatter productAnalysisFormatter,
+            ProductAnalysisAnswerInspector productAnalysisAnswerInspector) {
         return new ProductAnalysisAgent(
                 reactAgent,
                 skillsAgentHook,
                 productAnalysisService,
-                productAnalysisFormatter);
+                productAnalysisFormatter,
+                productAnalysisAnswerInspector);
     }
 }

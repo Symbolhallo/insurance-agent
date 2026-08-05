@@ -56,6 +56,12 @@ POST /api/v1/product-analysis-agent/chat
 - HTTP 状态码为 `200`。
 - 响应体外层为统一 `ApiResponse`。
 - `data.modelInvoked=true`。
+- `data.invocationId` 以 `pai-` 开头。
+- `data.durationMs` 大于或等于 `0`。
+- `data.answeredAt` 不为空。
+- `data.answerLength` 大于 `0`。
+- `data.outputFormatValid=true`。
+- `data.missingSections` 为空数组。
 - 回答应包含以下 Markdown 小标题：
   - `## 分析结论`
   - `## 产品事实`
@@ -86,6 +92,12 @@ POST /api/v1/product-analysis-agent/chat
 
 - HTTP 状态码为 `200`。
 - `data.modelInvoked=true`。
+- `data.invocationId` 以 `pai-` 开头。
+- `data.durationMs` 大于或等于 `0`。
+- `data.answeredAt` 不为空。
+- `data.answerLength` 大于 `0`。
+- `data.outputFormatValid=true`。
+- `data.missingSections` 为空数组。
 - 回答应包含以下 Markdown 小标题：
   - `## 对比结论`
   - `## 产品对比表`
@@ -120,5 +132,8 @@ POST /api/v1/product-analysis-agent/chat
 - `[Agent]`
 - `[Tool]`
 - `traceId`
+- `invocationId`
 
 若模型正确触发工具调用，应能看到 `ProductAnalysisTool` 输出的 `[Tool]` 日志。
+响应中的 `data.invocationId` 可以用于和 `[Agent]` 日志对齐同一次调用。
+若 `outputFormatValid=false`，优先查看 `missingSections`，再回到对应 `SKILL.md` 调整输出合同或示例。

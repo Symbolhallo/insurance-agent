@@ -5,6 +5,8 @@ import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.config.ProductAnalysisAgentConfig;
+import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
+import com.xxx.insurance.product.model.ProductAnalysisAnswerInspection;
 import com.xxx.insurance.product.model.ProductAnalysisChatRequest;
 import com.xxx.insurance.product.model.ProductAnalysisRequest;
 import com.xxx.insurance.product.model.ProductAnalysisResult;
@@ -48,6 +50,9 @@ class InsuranceAgentApplicationTests {
 
     @Autowired
     private ProductAnalysisTool productAnalysisTool;
+
+    @Autowired
+    private ProductAnalysisAnswerInspector productAnalysisAnswerInspector;
 
     @Autowired
     @Qualifier("productAnalysisToolCallbacks")
@@ -231,6 +236,71 @@ class InsuranceAgentApplicationTests {
                 .contains("## 关键风险")
                 .contains("## 后续建议")
                 .contains("不得把产品分析工具返回之外的信息包装成产品事实");
+    }
+
+    @Test
+    void productAnalysisAnswerInspectorAcceptsLimitedAnalysisContract() {
+        ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect("""
+                ## 分析结论
+                适合进一步评估。
+                ## 产品事实
+                产品事实来自工具结果。
+                ## 适配分析
+                与客户需求部分匹配。
+                ## 风险提示
+                当前信息不足，需人工复核。
+                ## 后续建议
+                建议补充预算信息。
+                """);
+
+        assertThat(inspection.outputFormatValid()).isTrue();
+        assertThat(inspection.missingSections()).isEmpty();
+    }
+
+    @Test
+    void productAnalysisAnswerInspectorAcceptsBatchAnalysisContract() {
+        ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect("""
+                ## 对比结论
+                三款产品适配方向不同。
+                ## 产品对比表
+                | 产品 | 类型 | 核心保障/权益 | 适配点 | 主要限制 | 信息完整度 |
+                | --- | --- | --- | --- | --- | --- |
+                ## 适配排序
+                当前依据有限。
+                ## 关键风险
+                当前信息不足，需人工复核。
+                ## 后续建议
+                建议人工复核。
+                """);
+
+        assertThat(inspection.outputFormatValid()).isTrue();
+        assertThat(inspection.missingSections()).isEmpty();
+    }
+
+    @Test
+    void productAnalysisAnswerInspectorReportsMissingSections() {
+        ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect("""
+                ## 分析结论
+                需要进一步评估。
+                ## 产品事实
+                产品事实来自工具结果。
+                """);
+
+        assertThat(inspection.outputFormatValid()).isFalse();
+        assertThat(inspection.missingSections()).contains("## 适配分析", "## 风险提示", "## 后续建议");
+    }
+
+    @Test
+    void openApiContainsProductAnalysisInvocationObservationFields() throws Exception {
+        mockMvc.perform(get("/v3/api-docs")
+                        .header("X-Trace-Id", "test-trace-003"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.invocationId").exists())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.answeredAt").exists())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.answerLength").exists())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.durationMs").exists())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.outputFormatValid").exists())
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.missingSections").exists());
     }
 
     private String readClasspathResource(String location) throws Exception {

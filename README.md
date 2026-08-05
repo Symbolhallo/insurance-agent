@@ -28,6 +28,8 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase1-Task7：统一 API 响应、异常处理与 TraceId 边界
 - Phase1-Task8：AI 模型联调状态 API
 - Phase1-Task9：Skill 输出格式约束与 DeepSeek 手工联调指南
+- Phase1-Task10：Agent 调用耗时与回答格式检查
+- Phase1-Task11：Agent 单次调用标识、回答时间与回答长度观测
 
 ## 架构边界
 
@@ -148,6 +150,15 @@ curl -X POST http://localhost:8080/api/v1/product-analysis-agent/chat \
   "timestamp": "2026-08-05T00:00:00Z"
 }
 ```
+
+产品分析智能体响应中的 `data` 会包含：
+
+- `invocationId`：单次 Agent 调用标识，可用于对齐响应和日志
+- `durationMs`：模型调用耗时，单位毫秒
+- `answeredAt`：模型回答生成完成时间
+- `answerLength`：模型回答字符长度
+- `outputFormatValid`：回答是否满足当前 Skill 输出格式合同
+- `missingSections`：缺失的小标题
 
 ## 项目记忆
 

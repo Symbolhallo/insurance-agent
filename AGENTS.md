@@ -26,6 +26,8 @@ Current phase:
 - Phase1-Task7 production-style API response, error handling, and traceId boundary is complete.
 - Phase1-Task8 AI model status API for local DeepSeek verification is complete.
 - Phase1-Task9 Skill-level output contract and DeepSeek manual verification guide is complete.
+- Phase1-Task10 Agent invocation duration and answer format inspection is complete.
+- Phase1-Task11 Agent invocation id, answered timestamp, and answer length observation is complete.
 
 ## Technology Baseline
 
