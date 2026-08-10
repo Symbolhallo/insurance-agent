@@ -1,5 +1,6 @@
 package com.xxx.insurance.ai.workflow.service;
 
+import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.ConversationTopicRelation;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
@@ -87,7 +88,8 @@ class IntentRecognitionServiceTests {
     private IntentRoutingResult recognize(String modelOutput, String rewrittenQuestion) {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.call(any(SystemMessage.class), any(UserMessage.class))).thenReturn(modelOutput);
-        return new IntentRecognitionService(chatModel).recognize(new AlignedWorkflowContext(
+        return new IntentRecognitionService(chatModel, mock(ChatModelStreamingExecutor.class))
+                .recognize(new AlignedWorkflowContext(
                 "conversation-001",
                 rewrittenQuestion,
                 ConversationTopicRelation.NO_HISTORY,

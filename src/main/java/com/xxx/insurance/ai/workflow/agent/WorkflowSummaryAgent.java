@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
 import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
@@ -54,6 +55,14 @@ public class WorkflowSummaryAgent {
 
     /** 根据 SSE 执行模式选择 ReactAgent.call 或 ReactAgent.stream，业务汇总规则保持一致。 */
     public WorkflowSummaryResult summarize(DagExecutionResult dagResult, boolean tokenStreamingEnabled) {
+        return summarize(dagResult, tokenStreamingEnabled, null, null);
+    }
+
+    /** 在 SSE 工作流中实时发布 Summary 模型增量内容，完整结果仍返回给后续审核节点。 */
+    public WorkflowSummaryResult summarize(DagExecutionResult dagResult,
+                                           boolean tokenStreamingEnabled,
+                                           String workflowInstanceId,
+                                           String conversationId) {
         Instant startedAt = Instant.now();
         List<AgentTaskExecutionResult> successfulTasks = dagResult.taskResults().stream()
                 .filter(task -> task.status() == AgentTaskStatus.SUCCESS)
@@ -73,8 +82,17 @@ public class WorkflowSummaryAgent {
             log.info("[Agent] name={} action=summarize status=start summaryId={} taskCount={} successCount={}",
                     AGENT_NAME, summaryId, dagResult.taskResults().size(), successfulTasks.size());
             String input = buildInput(dagResult);
+            AgentTokenStreamContext streamContext = StringUtils.hasText(workflowInstanceId)
+                    && StringUtils.hasText(conversationId)
+                    ? new AgentTokenStreamContext(
+                            workflowInstanceId,
+                            conversationId,
+                            null,
+                            AGENT_NAME,
+                            AgentTokenStreamContext.PHASE_SUMMARY)
+                    : null;
             String answer = tokenStreamingEnabled
-                    ? streamingExecutor.execute(reactAgent, input).getText()
+                    ? streamingExecutor.execute(reactAgent, input, streamContext).getText()
                     : reactAgent.call(input).getText();
             if (!StringUtils.hasText(answer)) {
                 throw new IllegalStateException("Summary Agent returned blank answer");

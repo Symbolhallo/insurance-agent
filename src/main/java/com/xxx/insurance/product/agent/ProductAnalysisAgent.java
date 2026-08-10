@@ -3,6 +3,7 @@ package com.xxx.insurance.product.agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
@@ -264,15 +265,31 @@ public class ProductAnalysisAgent {
                                             AgentExecutionContext executionContext)
             throws Exception {
         if (executionContext.tokenStreamingEnabled()) {
+            AgentTokenStreamContext streamContext = tokenStreamContext(
+                    request.conversationId(), executionContext);
             if (!memoryCallContext.memoryEnabled()) {
-                return streamingExecutor.execute(reactAgent, request.message());
+                return streamingExecutor.execute(reactAgent, request.message(), streamContext);
             }
-            return streamingExecutor.execute(reactAgent, memoryCallContext.requestMessages());
+            return streamingExecutor.execute(reactAgent, memoryCallContext.requestMessages(), streamContext);
         }
         if (!memoryCallContext.memoryEnabled()) {
             return reactAgent.call(request.message());
         }
         return reactAgent.call(memoryCallContext.requestMessages());
+    }
+
+    /** 将编排上下文收敛为前端可识别的产品 Agent Token 流标识。 */
+    private AgentTokenStreamContext tokenStreamContext(String conversationId,
+                                                       AgentExecutionContext executionContext) {
+        if (!StringUtils.hasText(executionContext.workflowInstanceId())) {
+            return null;
+        }
+        return new AgentTokenStreamContext(
+                executionContext.workflowInstanceId(),
+                conversationId,
+                executionContext.taskId(),
+                AGENT_NAME,
+                AgentTokenStreamContext.PHASE_SUB_AGENT);
     }
 
     /** 保存完整对话记忆，或在 DAG 模式下只保存成功调用审计。 */

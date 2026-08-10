@@ -235,6 +235,8 @@ flux.subscribe(output -> {
 
 生产适配必须：在 `emitter.onCompletion/onTimeout/onError` 中取消 Reactor `Disposable`；用有界 Executor；串行化 `SseEmitter.send`；设置心跳和总超时；客户端断开后停止模型流；`doFinally` 清理资源。Spring MVC `SseEmitter` 没有完整 Reactive 背压，若吞吐上升应考虑 WebFlux 或在协议层合并 Token。
 
+当前保险项目选择实时发布子智能体与 Summary 的 `AGENT_MODEL_STREAMING` 文本，事件携带 `streamId`、`taskId`、`agentName` 和 `phase`。输出审核只读取完整 `WorkflowSummaryResult.answer`，在 Summary 结束后执行；因此前端流式区域属于临时内容，收到 `complete` 后必须使用其中的 `finalAnswer` 覆盖最终展示。
+
 ## 8. 多智能体模式
 
 ### Routing

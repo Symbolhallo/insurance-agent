@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.workflow.config;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.workflow.agent.WorkflowPlannerAgent;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
 import com.xxx.insurance.ai.workflow.service.WorkflowPlanValidator;
@@ -100,7 +101,9 @@ public class WorkflowPlannerAgentConfig {
             @Qualifier(WORKFLOW_PLANNER_REACT_AGENT) ReactAgent reactAgent,
             @Qualifier(WORKFLOW_PLANNER_OUTPUT_CONVERTER)
             BeanOutputConverter<WorkflowPlan> outputConverter,
-            WorkflowPlanValidator workflowPlanValidator) {
-        return new WorkflowPlannerAgent(reactAgent, outputConverter, workflowPlanValidator);
+            WorkflowPlanValidator workflowPlanValidator,
+            ReactAgentStreamingExecutor streamingExecutor) {
+        return new WorkflowPlannerAgent(
+                reactAgent, outputConverter, workflowPlanValidator, streamingExecutor);
     }
 }

@@ -74,6 +74,51 @@ class LocalDbWorkflowSseEventServiceTests {
                         ex -> assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.GONE));
     }
 
+    @Test
+    void subscribesClaimedConfirmationBeforeGraphResume() {
+        WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
+        WorkflowExecutionMapper executionMapper = mock(WorkflowExecutionMapper.class);
+        when(executionMapper.findInstance("wfi-001")).thenReturn(new WorkflowInstanceExecutionView(
+                "wfi-001", "conversation-001", "CONFIRMING", Instant.parse("2026-08-10T00:00:00Z")));
+        when(eventMapper.findReplayEvents(any(), any(Long.class), any(Instant.class))).thenReturn(List.of());
+
+        assertThat(service(eventMapper, executionMapper)
+                .subscribeConfirmationResume("wfi-001", "wfi-001:4"))
+                .isNotNull();
+    }
+
+    @Test
+    void rejectsConfirmationStreamForNonWaitingInstance() {
+        WorkflowExecutionMapper executionMapper = mock(WorkflowExecutionMapper.class);
+        when(executionMapper.findInstance("wfi-001")).thenReturn(new WorkflowInstanceExecutionView(
+                "wfi-001", "conversation-001", "SUCCESS", Instant.parse("2026-08-10T00:00:00Z")));
+
+        assertThatThrownBy(() -> service(mock(WorkflowSseEventMapper.class), executionMapper)
+                .subscribeConfirmationResume("wfi-001", "wfi-001:4"))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        ex -> assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    @Test
+    void advancesDatabasePollingCursorAfterDeliveringCrossInstanceEvent() {
+        WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
+        LocalDbWorkflowSseEventService service = service(eventMapper, mock(WorkflowExecutionMapper.class));
+        WorkflowSseEventRecord event = new WorkflowSseEventRecord(
+                "wfi-001:3", "wfi-001", "conversation-001", 3L, "stage", "planner",
+                "{\"status\":\"SUCCESS\"}", Instant.now(), Instant.now().plus(Duration.ofDays(7)));
+        when(eventMapper.findReplayEvents(any(), any(Long.class), any(Instant.class)))
+                .thenReturn(List.of(event), List.of());
+        service.subscribeNewRun("wfi-001");
+
+        service.pollPersistedEvents();
+        service.pollPersistedEvents();
+
+        ArgumentCaptor<Long> sequenceCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(eventMapper, org.mockito.Mockito.times(2)).findReplayEvents(
+                org.mockito.ArgumentMatchers.eq("wfi-001"), sequenceCaptor.capture(), any(Instant.class));
+        assertThat(sequenceCaptor.getAllValues()).containsExactly(0L, 3L);
+    }
+
     private LocalDbWorkflowSseEventService service(WorkflowSseEventMapper eventMapper,
                                                    WorkflowExecutionMapper executionMapper) {
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
@@ -83,7 +128,7 @@ class LocalDbWorkflowSseEventServiceTests {
                 eventMapper,
                 executionMapper,
                 new ObjectMapper().findAndRegisterModules(),
-                new WorkflowSseProperties(Duration.ofMinutes(5), Duration.ofDays(7)),
+                new WorkflowSseProperties(Duration.ofMinutes(5), Duration.ofDays(7), Duration.ofMillis(500)),
                 transactionManager);
     }
 }

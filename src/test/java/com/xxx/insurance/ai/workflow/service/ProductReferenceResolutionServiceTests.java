@@ -1,5 +1,6 @@
 package com.xxx.insurance.ai.workflow.service;
 
+import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.ProductRecallTrigger;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
@@ -96,7 +97,8 @@ class ProductReferenceResolutionServiceTests {
                 ConversationConfirmedProductService.class);
         when(confirmedProductService.findConfirmedProducts("conversation-001"))
                 .thenReturn(confirmedProducts);
-        return new ProductReferenceResolutionService(chatModel, confirmedProductService)
+        return new ProductReferenceResolutionService(
+                chatModel, confirmedProductService, mock(ChatModelStreamingExecutor.class))
                 .resolve(new MainWorkflowRequest(message, "conversation-001"));
     }
 

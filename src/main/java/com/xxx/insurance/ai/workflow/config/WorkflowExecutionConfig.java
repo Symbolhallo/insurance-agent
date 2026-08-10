@@ -5,6 +5,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.util.Map;
 
@@ -12,6 +13,7 @@ import java.util.Map;
  * 主工作流内部任务执行资源配置。
  */
 @Configuration
+@EnableScheduling
 @EnableConfigurationProperties(WorkflowSseProperties.class)
 public class WorkflowExecutionConfig {
 

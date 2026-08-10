@@ -1,5 +1,7 @@
 package com.xxx.insurance.ai.workflow.service;
 
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
+import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.IntentRecognitionModelOutput;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
@@ -57,10 +59,14 @@ public class IntentRecognitionService {
 
     private final ChatModel chatModel;
 
+    private final ChatModelStreamingExecutor streamingExecutor;
+
     private final BeanOutputConverter<IntentRecognitionModelOutput> outputConverter;
 
-    public IntentRecognitionService(ChatModel chatModel) {
+    public IntentRecognitionService(ChatModel chatModel,
+                                    ChatModelStreamingExecutor streamingExecutor) {
         this.chatModel = chatModel;
+        this.streamingExecutor = streamingExecutor;
         this.outputConverter = new BeanOutputConverter<>(IntentRecognitionModelOutput.class);
     }
 
@@ -71,9 +77,18 @@ public class IntentRecognitionService {
      * 并在本地完成目标映射。返回的 routes 将作为 Planner 允许任务集合。</p>
      */
     public IntentRoutingResult recognize(AlignedWorkflowContext context) {
-        String modelOutput = chatModel.call(
-                new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat())),
-                new UserMessage("<user_request>\n" + context.rewrittenQuestion() + "\n</user_request>"));
+        return recognize(context, null);
+    }
+
+    /** 在 SSE 模式下额外发布意图识别模型的原始增量 JSON Token。 */
+    public IntentRoutingResult recognize(AlignedWorkflowContext context,
+                                         AgentTokenStreamContext streamContext) {
+        SystemMessage systemMessage = new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat()));
+        UserMessage userMessage = new UserMessage(
+                "<user_request>\n" + context.rewrittenQuestion() + "\n</user_request>");
+        String modelOutput = streamContext == null
+                ? chatModel.call(systemMessage, userMessage)
+                : streamingExecutor.execute(chatModel, List.of(systemMessage, userMessage), streamContext);
         IntentRecognitionModelOutput output = outputConverter.convert(modelOutput);
         if (output == null || output.intentions() == null || output.intentions().isEmpty()
                 || output.intentions().size() > 4 || !StringUtils.hasText(output.reason())) {

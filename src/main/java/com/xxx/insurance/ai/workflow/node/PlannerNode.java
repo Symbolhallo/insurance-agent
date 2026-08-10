@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.node;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.workflow.agent.WorkflowPlannerAgent;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
@@ -39,7 +40,23 @@ public class PlannerNode implements NodeAction {
                 context.conversationId(),
                 routingResult.intent());
         // 主工作流链路 9：调用 Planner Agent 生成受白名单约束的结构化执行计划。
-        WorkflowPlan plan = workflowPlannerAgent.plan(context, routingResult);
+        WorkflowPlan plan = workflowPlannerAgent.plan(context, routingResult, streamContext(state, context));
         return Map.of(MainWorkflowStateKeys.WORKFLOW_PLAN, plan);
+    }
+
+    /** 仅在 SSE 运行中创建 Planner ReactAgent 的 Token 发布上下文。 */
+    private AgentTokenStreamContext streamContext(OverAllState state, AlignedWorkflowContext context) {
+        boolean enabled = state.value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class).orElse(false);
+        if (!enabled) {
+            return null;
+        }
+        String workflowInstanceId = state.value(MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, String.class)
+                .orElseThrow(() -> new IllegalStateException("Missing workflow instance id in graph state"));
+        return new AgentTokenStreamContext(
+                workflowInstanceId,
+                context.conversationId(),
+                null,
+                WorkflowPlannerAgent.AGENT_NAME,
+                AgentTokenStreamContext.PHASE_PLANNER);
     }
 }

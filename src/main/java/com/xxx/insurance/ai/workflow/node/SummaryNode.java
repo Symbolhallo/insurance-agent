@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.action.NodeAction;
 import com.xxx.insurance.ai.workflow.agent.WorkflowSummaryAgent;
 import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
+import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,8 +40,18 @@ public class SummaryNode implements NodeAction {
         boolean tokenStreamingEnabled = state
                 .value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class)
                 .orElse(false);
+        String workflowInstanceId = state
+                .value(MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, String.class)
+                .orElseThrow(() -> new IllegalStateException("Missing workflow instance id in graph state"));
+        AlignedWorkflowContext alignedContext = state
+                .value(MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class)
+                .orElseThrow(() -> new IllegalStateException("Missing aligned context in graph state"));
         // 主工作流链路 11：单任务直接透传，多任务调用 Summary Agent 汇总为唯一待审核答案。
-        WorkflowSummaryResult summaryResult = workflowSummaryAgent.summarize(dagResult, tokenStreamingEnabled);
+        WorkflowSummaryResult summaryResult = workflowSummaryAgent.summarize(
+                dagResult,
+                tokenStreamingEnabled,
+                workflowInstanceId,
+                alignedContext.conversationId());
         log.info("[Workflow] node=summary action=complete summaryId={} modelInvoked={} sourceTaskCount={}",
                 summaryResult.summaryId(), summaryResult.modelInvoked(), summaryResult.sourceTaskCount());
         return Map.of(MainWorkflowStateKeys.SUMMARY_RESULT, summaryResult);

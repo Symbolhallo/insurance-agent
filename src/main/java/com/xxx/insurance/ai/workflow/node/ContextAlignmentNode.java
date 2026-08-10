@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.node;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
@@ -41,8 +42,27 @@ public class ContextAlignmentNode implements NodeAction {
                 productResolution.productRecallDecision(),
                 resolvedProducts);
         // 主工作流链路 7：结合已解析或人工确认的标准产品与会话历史，完成话题对齐和问题改写。
-        AlignedWorkflowContext context = contextAlignmentService.align(request, effectiveResolution);
+        AlignedWorkflowContext context = contextAlignmentService.align(
+                request,
+                effectiveResolution,
+                streamContext(state, request.conversationId()));
         return Map.of(MainWorkflowStateKeys.ALIGNED_CONTEXT, context);
+    }
+
+    /** 仅在 SSE 运行中创建上下文对齐模型的 Token 发布上下文。 */
+    private AgentTokenStreamContext streamContext(OverAllState state, String conversationId) {
+        boolean enabled = state.value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class).orElse(false);
+        if (!enabled) {
+            return null;
+        }
+        String workflowInstanceId = state.value(MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, String.class)
+                .orElseThrow(() -> new IllegalStateException("Missing workflow instance id in graph state"));
+        return new AgentTokenStreamContext(
+                workflowInstanceId,
+                conversationId,
+                null,
+                "context-alignment-model",
+                AgentTokenStreamContext.PHASE_CONTEXT_ALIGNMENT);
     }
 
     @SuppressWarnings("unchecked")

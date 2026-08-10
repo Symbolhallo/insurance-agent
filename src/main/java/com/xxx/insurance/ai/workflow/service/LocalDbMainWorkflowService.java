@@ -8,6 +8,8 @@ import com.alibaba.cloud.ai.graph.state.StateSnapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
+import com.xxx.insurance.common.exception.BusinessException;
+import com.xxx.insurance.common.exception.ErrorCode;
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
@@ -76,6 +78,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     private static final String STATUS_RUNNING = "RUNNING";
 
     private static final String STATUS_WAITING_CONFIRM = "WAITING_CONFIRM";
+
+    private static final String STATUS_CONFIRMING = "CONFIRMING";
 
     private final WorkflowExecutionMapper workflowExecutionMapper;
 
@@ -202,28 +206,60 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     @Override
     public MainWorkflowResponse confirmProducts(String workflowInstanceId,
                                                 ProductConfirmationRequest request) {
-        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
-        validateConfirmationInstance(instance, request);
-        RunnableConfig baseConfig = runnableConfig(workflowInstanceId, request.conversationId());
-        StateSnapshot snapshot = mainWorkflowGraph.getState(baseConfig);
-        ProductRecallResult recallResult = snapshot.state()
-                .value(MainWorkflowStateKeys.PRODUCT_RECALL_RESULT, ProductRecallResult.class)
-                .orElseThrow(() -> new IllegalStateException("Workflow checkpoint has no product candidates"));
-        ProductReferenceResolution resolution = snapshot.state()
-                .value(MainWorkflowStateKeys.PRODUCT_REFERENCE_RESOLUTION, ProductReferenceResolution.class)
-                .orElseThrow(() -> new IllegalStateException("Workflow checkpoint has no product resolution"));
-        List<ConfirmedProduct> selectedProducts = selectedProducts(
-                workflowInstanceId, request, recallResult, resolution);
+        return confirmProducts(workflowInstanceId, request, false);
+    }
 
-        // 主工作流链路 6：校验选择属于当前 Checkpoint 候选后，持久化当前会话确认产品。
-        confirmedProductService.saveConfirmedProducts(selectedProducts);
-        workflowExecutionMapper.updateInstanceStatus(workflowInstanceId, STATUS_RUNNING, null, Instant.now());
+    /** 确认产品并按调用入口指定的流式模式原子抢占、恢复 Graph。 */
+    @Override
+    public MainWorkflowResponse confirmProducts(String workflowInstanceId,
+                                                ProductConfirmationRequest request,
+                                                boolean tokenStreamingEnabled) {
+        claimProductConfirmation(workflowInstanceId, request.conversationId());
+        return confirmClaimedProducts(workflowInstanceId, request, tokenStreamingEnabled);
+    }
+
+    /** 原子抢占 WAITING_CONFIRM 实例，确保并发请求只有一个能够进入恢复链路。 */
+    @Override
+    public void claimProductConfirmation(String workflowInstanceId, String conversationId) {
+        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
+        validateConfirmationInstance(instance, conversationId, STATUS_WAITING_CONFIRM);
+        // 主工作流链路 6：用数据库条件更新抢占确认权，只有一个请求能恢复当前 Checkpoint。
+        if (workflowExecutionMapper.claimProductConfirmation(
+                workflowInstanceId, conversationId, Instant.now()) != 1) {
+            throw new BusinessException(
+                    ErrorCode.WORKFLOW_STATE_CONFLICT,
+                    "产品确认已被处理，请勿重复提交");
+        }
+    }
+
+    /** 使用当前请求已经获得的确认权写入产品并恢复 Graph。 */
+    @Override
+    public MainWorkflowResponse confirmClaimedProducts(String workflowInstanceId,
+                                                       ProductConfirmationRequest request,
+                                                       boolean tokenStreamingEnabled) {
+        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
+        validateConfirmationInstance(instance, request.conversationId(), STATUS_CONFIRMING);
         try {
+            RunnableConfig baseConfig = runnableConfig(workflowInstanceId, request.conversationId());
+            StateSnapshot snapshot = mainWorkflowGraph.getState(baseConfig);
+            ProductRecallResult recallResult = snapshot.state()
+                    .value(MainWorkflowStateKeys.PRODUCT_RECALL_RESULT, ProductRecallResult.class)
+                    .orElseThrow(() -> new IllegalStateException("Workflow checkpoint has no product candidates"));
+            ProductReferenceResolution resolution = snapshot.state()
+                    .value(MainWorkflowStateKeys.PRODUCT_REFERENCE_RESOLUTION, ProductReferenceResolution.class)
+                    .orElseThrow(() -> new IllegalStateException("Workflow checkpoint has no product resolution"));
+            List<ConfirmedProduct> selectedProducts = selectedProducts(
+                    workflowInstanceId, request, recallResult, resolution);
+
+            // 主工作流链路 7：抢占成功后持久化当前会话确认产品，再恢复 Graph。
+            confirmedProductService.saveConfirmedProducts(selectedProducts);
+            workflowExecutionMapper.updateInstanceStatus(workflowInstanceId, STATUS_RUNNING, null, Instant.now());
             RunnableConfig updatedConfig = mainWorkflowGraph.updateState(
                     snapshot.config(),
                     Map.of(
                             MainWorkflowStateKeys.RESOLVED_PRODUCTS, selectedProducts,
-                            MainWorkflowStateKeys.HUMAN_CONFIRM_REQUIRED, false));
+                            MainWorkflowStateKeys.HUMAN_CONFIRM_REQUIRED, false,
+                            MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, tokenStreamingEnabled));
             NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(Map.of(), updatedConfig.withResume())
                     .orElseThrow(() -> new IllegalStateException("Resumed workflow graph returned empty output"));
             if (!output.isEND()) {
@@ -234,6 +270,16 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         catch (Exception ex) {
             fail(workflowInstanceId, ex);
             throw new IllegalStateException("Main workflow resume failed", ex);
+        }
+    }
+
+    /** 后台恢复任务未提交时将 CONFIRMING 安全退回 WAITING_CONFIRM。 */
+    @Override
+    public void releaseProductConfirmationClaim(String workflowInstanceId, String conversationId) {
+        if (workflowExecutionMapper.releaseProductConfirmationClaim(
+                workflowInstanceId, conversationId, Instant.now()) != 1) {
+            log.warn("[Workflow] action=release-confirmation-claim status=ignored workflowInstanceId={}",
+                    workflowInstanceId);
         }
     }
 
@@ -331,12 +377,26 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 Map.of(
                         "status", STATUS_WAITING_CONFIRM,
                         "checkpointId", checkpointId,
-                        "candidateCount", recallResult.candidates().size()));
+                        "candidateCount", recallResult.candidates().size(),
+                        "candidates", confirmationCandidates(recallResult)));
         workflowEventPublisher.completeSubscribers(workflowInstanceId);
         log.info("[Workflow] code={} action=run status=waiting-confirm workflowInstanceId={} checkpointId={} "
                         + "candidateCount={}",
                 WORKFLOW_CODE, workflowInstanceId, checkpointId, recallResult.candidates().size());
         return response;
+    }
+
+    /** 只向人工确认事件暴露可展示的脱敏候选字段，不发送完整召回审计或 Graph State。 */
+    private List<Map<String, Object>> confirmationCandidates(ProductRecallResult recallResult) {
+        return recallResult.candidates().stream()
+                .map(candidate -> Map.<String, Object>of(
+                        "productCode", candidate.productCode(),
+                        "productName", candidate.productName(),
+                        "productType", candidate.productType(),
+                        "insurerName", candidate.insurerName(),
+                        "score", candidate.score(),
+                        "matchReason", candidate.matchReason()))
+                .toList();
     }
 
     /**
@@ -530,17 +590,20 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 .toList();
     }
 
-    /** 校验确认请求与等待中的工作流实例、conversationId 和状态一致。 */
+    /** 校验确认请求与工作流实例的 conversationId 和预期状态一致。 */
     private void validateConfirmationInstance(WorkflowInstanceExecutionView instance,
-                                               ProductConfirmationRequest request) {
+                                               String conversationId,
+                                               String expectedStatus) {
         if (instance == null) {
             throw new IllegalArgumentException("workflowInstanceId does not exist");
         }
-        if (!instance.conversationId().equals(request.conversationId())) {
+        if (!instance.conversationId().equals(conversationId)) {
             throw new IllegalArgumentException("conversationId does not match workflow instance");
         }
-        if (!STATUS_WAITING_CONFIRM.equals(instance.status())) {
-            throw new IllegalArgumentException("workflow instance is not waiting for product confirmation");
+        if (!expectedStatus.equals(instance.status())) {
+            throw new BusinessException(
+                    ErrorCode.WORKFLOW_STATE_CONFLICT,
+                    "工作流当前不能处理产品确认，status=" + instance.status());
         }
     }
 

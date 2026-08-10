@@ -3,6 +3,7 @@ package com.xxx.insurance.ai.workflow.mapper;
 import com.xxx.insurance.ai.workflow.model.WorkflowSseEventRecord;
 import org.apache.ibatis.annotations.Arg;
 import org.apache.ibatis.annotations.ConstructorArgs;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -75,4 +76,8 @@ public interface WorkflowSseEventMapper {
             where workflow_instance_id = #{workflowInstanceId}
             """)
     Long findHighWatermark(@Param("workflowInstanceId") String workflowInstanceId);
+
+    /** 删除已超过重放保留期的 SSE 事件。 */
+    @Delete("delete from ai_workflow_sse_event where expire_at <= #{now}")
+    int deleteExpiredEvents(@Param("now") Instant now);
 }

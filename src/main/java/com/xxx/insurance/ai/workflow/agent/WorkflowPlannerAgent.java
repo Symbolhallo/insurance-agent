@@ -1,6 +1,8 @@
 package com.xxx.insurance.ai.workflow.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
+import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.IntentRoute;
@@ -30,15 +32,19 @@ public class WorkflowPlannerAgent {
 
     private final WorkflowPlanValidator workflowPlanValidator;
 
+    private final ReactAgentStreamingExecutor streamingExecutor;
+
     /**
      * 创建 Planner 业务门面，组合模型执行、结构化转换和本地安全校验。
      */
     public WorkflowPlannerAgent(ReactAgent reactAgent,
                                 BeanOutputConverter<WorkflowPlan> outputConverter,
-                                WorkflowPlanValidator workflowPlanValidator) {
+                                WorkflowPlanValidator workflowPlanValidator,
+                                ReactAgentStreamingExecutor streamingExecutor) {
         this.reactAgent = reactAgent;
         this.outputConverter = outputConverter;
         this.workflowPlanValidator = workflowPlanValidator;
+        this.streamingExecutor = streamingExecutor;
     }
 
     /**
@@ -49,6 +55,13 @@ public class WorkflowPlannerAgent {
      */
     public WorkflowPlan plan(AlignedWorkflowContext context,
                              IntentRoutingResult routingResult) {
+        return plan(context, routingResult, null);
+    }
+
+    /** 在 SSE 模式下实时发布 Planner ReactAgent 的结构化计划 Token。 */
+    public WorkflowPlan plan(AlignedWorkflowContext context,
+                             IntentRoutingResult routingResult,
+                             AgentTokenStreamContext streamContext) {
         String plannerInput = """
                 请为下面的请求生成执行计划。
 
@@ -70,7 +83,9 @@ public class WorkflowPlannerAgent {
                     AGENT_NAME,
                     context.conversationId(),
                     routingResult.intent());
-            String modelOutput = reactAgent.call(plannerInput).getText();
+            String modelOutput = streamContext == null
+                    ? reactAgent.call(plannerInput).getText()
+                    : streamingExecutor.execute(reactAgent, plannerInput, streamContext).getText();
             WorkflowPlan plan = workflowPlanValidator.validate(outputConverter.convert(modelOutput), routingResult);
             log.info("[Agent] name={} action=plan status=success conversationId={} taskCount={} targetAgents={}",
                     AGENT_NAME,

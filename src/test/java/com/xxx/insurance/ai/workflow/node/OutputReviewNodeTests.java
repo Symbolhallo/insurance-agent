@@ -15,7 +15,6 @@ import com.xxx.insurance.ai.workflow.model.ProductRecallDecision;
 import com.xxx.insurance.ai.workflow.model.ProductRecallTrigger;
 import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
-import com.xxx.insurance.ai.workflow.service.ReviewedAnswerStreamPublisher;
 import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
 import org.junit.jupiter.api.Test;
 
@@ -26,9 +25,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class OutputReviewNodeTests {
@@ -47,8 +44,7 @@ class OutputReviewNodeTests {
                     1,
                     Instant.parse("2026-08-10T00:00:02Z"));
         });
-        ReviewedAnswerStreamPublisher streamPublisher = mock(ReviewedAnswerStreamPublisher.class);
-        OutputReviewNode node = new OutputReviewNode(gateway, streamPublisher);
+        OutputReviewNode node = new OutputReviewNode(gateway);
 
         Map<String, Object> result = node.apply(state());
 
@@ -58,8 +54,6 @@ class OutputReviewNodeTests {
                     assertThat(review.publishableAnswer()).isEqualTo("知识问答结果");
                 });
         assertThat(result.get(MainWorkflowStateKeys.FINAL_ANSWER)).isEqualTo("知识问答结果");
-        verify(streamPublisher).publish(
-                eq("workflow-001"), eq("conversation-001"), eq(true), any(OutputReviewResult.class));
     }
 
     @Test
@@ -72,7 +66,7 @@ class OutputReviewNodeTests {
                 true,
                 1,
                 Instant.parse("2026-08-10T00:00:02Z"));
-        OutputReviewNode node = new OutputReviewNode(gateway, mock(ReviewedAnswerStreamPublisher.class));
+        OutputReviewNode node = new OutputReviewNode(gateway);
 
         assertThatThrownBy(() -> node.apply(state()))
                 .isInstanceOf(IllegalStateException.class)

@@ -1,5 +1,7 @@
 package com.xxx.insurance.ai.workflow.service;
 
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
+import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.ProductRecallDecision;
 import com.xxx.insurance.ai.workflow.model.ProductRecallTrigger;
@@ -71,12 +73,16 @@ public class ProductReferenceResolutionService {
 
     private final ConversationConfirmedProductService confirmedProductService;
 
+    private final ChatModelStreamingExecutor streamingExecutor;
+
     private final BeanOutputConverter<ProductReferenceResolutionModelOutput> outputConverter;
 
     public ProductReferenceResolutionService(ChatModel chatModel,
-                                             ConversationConfirmedProductService confirmedProductService) {
+                                             ConversationConfirmedProductService confirmedProductService,
+                                             ChatModelStreamingExecutor streamingExecutor) {
         this.chatModel = chatModel;
         this.confirmedProductService = confirmedProductService;
+        this.streamingExecutor = streamingExecutor;
         this.outputConverter = new BeanOutputConverter<>(ProductReferenceResolutionModelOutput.class);
     }
 
@@ -88,11 +94,19 @@ public class ProductReferenceResolutionService {
      * required=true 时进入候选召回和人工确认，否则直接进入 context-alignment。</p>
      */
     public ProductReferenceResolution resolve(MainWorkflowRequest request) {
+        return resolve(request, null);
+    }
+
+    /** 在 SSE 模式下额外发布产品线索解析模型的原始增量 JSON Token。 */
+    public ProductReferenceResolution resolve(MainWorkflowRequest request,
+                                              AgentTokenStreamContext streamContext) {
         List<ConfirmedProduct> confirmedProducts = confirmedProductService
                 .findConfirmedProducts(request.conversationId());
-        String modelOutput = chatModel.call(
-                new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat())),
-                new UserMessage(buildUserPrompt(request.message(), confirmedProducts)));
+        SystemMessage systemMessage = new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat()));
+        UserMessage userMessage = new UserMessage(buildUserPrompt(request.message(), confirmedProducts));
+        String modelOutput = streamContext == null
+                ? chatModel.call(systemMessage, userMessage)
+                : streamingExecutor.execute(chatModel, List.of(systemMessage, userMessage), streamContext);
         ProductReferenceResolutionModelOutput output = outputConverter.convert(modelOutput);
         validate(output, confirmedProducts);
 

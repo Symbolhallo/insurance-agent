@@ -10,11 +10,16 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "insurance.ai.workflow.sse")
 public record WorkflowSseProperties(
         Duration connectionTimeout,
-        Duration eventRetention) {
+        Duration eventRetention,
+        Duration databasePollInterval) {
 
     /** 为未配置属性提供生产验证阶段的保守默认值。 */
     public WorkflowSseProperties {
         connectionTimeout = connectionTimeout == null ? Duration.ofMinutes(5) : connectionTimeout;
         eventRetention = eventRetention == null ? Duration.ofDays(7) : eventRetention;
+        databasePollInterval = databasePollInterval == null ? Duration.ofMillis(500) : databasePollInterval;
+        if (databasePollInterval.isNegative() || databasePollInterval.isZero()) {
+            throw new IllegalArgumentException("databasePollInterval must be positive");
+        }
     }
 }

@@ -8,11 +8,14 @@ import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
 import com.xxx.insurance.ai.workflow.model.WorkflowInstanceExecutionView;
 import com.xxx.insurance.ai.workflow.model.WorkflowResumeRequest;
+import com.xxx.insurance.common.exception.BusinessException;
+import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import com.xxx.insurance.product.service.ConversationConfirmedProductService;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -53,6 +56,25 @@ class LocalDbMainWorkflowServiceTests {
                 .hasMessageContaining("only RUNNING");
 
         verify(executionMapper, never()).claimResume(any(), any(), any());
+    }
+
+    @Test
+    void rejectsProductConfirmationWhenAnotherRequestAlreadyClaimedInstance() {
+        WorkflowExecutionMapper executionMapper = mock(WorkflowExecutionMapper.class);
+        CompiledGraph graph = mock(CompiledGraph.class);
+        LocalDbMainWorkflowService service = service(executionMapper, graph);
+        when(executionMapper.findInstance("wfi-003")).thenReturn(new WorkflowInstanceExecutionView(
+                "wfi-003", "conversation-003", "WAITING_CONFIRM", Instant.parse("2026-08-10T00:00:00Z")));
+        when(executionMapper.claimProductConfirmation(any(), any(), any())).thenReturn(0);
+
+        ProductConfirmationRequest request = new ProductConfirmationRequest(
+                "conversation-003", List.of("product-001"));
+
+        assertThatThrownBy(() -> service.confirmProducts("wfi-003", request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("请勿重复提交");
+
+        verify(executionMapper, never()).updateInstanceStatus(any(), any(), any(), any());
     }
 
     private LocalDbMainWorkflowService service(WorkflowExecutionMapper executionMapper,

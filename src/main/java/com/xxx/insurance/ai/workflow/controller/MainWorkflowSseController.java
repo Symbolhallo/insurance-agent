@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.controller;
 
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.service.WorkflowSseService;
+import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -35,7 +36,7 @@ public class MainWorkflowSseController {
     /** 启动新的后台 Main Graph，并持续返回带 id 和 event 名称的阶段事件。 */
     @Operation(
             summary = "以 SSE 启动 Main Graph",
-            description = "返回 start、stage、human_confirm、summary、review、complete 或 error 事件；事件会写入 OceanBase。")
+            description = "返回 start、stage、human_confirm、agent_stream、summary、review、complete 或 error 事件；事件会写入 OceanBase。")
     @PostMapping(value = "/runs/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamRun(@Valid @RequestBody MainWorkflowRequest request) {
         return workflowSseService.start(request);
@@ -50,5 +51,19 @@ public class MainWorkflowSseController {
             @PathVariable String workflowInstanceId,
             @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
         return workflowSseService.reconnect(workflowInstanceId, lastEventId);
+    }
+
+    /** 提交产品确认，并从人工中断点继续实时返回后续工作流事件。 */
+    @Operation(
+            summary = "确认产品候选并以 SSE 恢复 Main Graph",
+            description = "建议携带 human_confirm 的事件 ID；服务先原子抢占确认权，再重放遗漏事件、建立订阅并从 Checkpoint 恢复执行。")
+    @PostMapping(
+            value = "/runs/{workflowInstanceId}/product-confirmations/stream",
+            produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter confirmProducts(
+            @PathVariable String workflowInstanceId,
+            @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
+            @Valid @RequestBody ProductConfirmationRequest request) {
+        return workflowSseService.confirmProducts(workflowInstanceId, request, lastEventId);
     }
 }

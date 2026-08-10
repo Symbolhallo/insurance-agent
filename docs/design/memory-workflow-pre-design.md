@@ -361,7 +361,8 @@ AgentInvocation
 - 默认 profile 下使用 no-op Workflow 服务，不写本地数据库；`local-db` profile 下才落库执行。
 - 阶段级 SSE 已接入：独立线程池后台执行同步 Main Graph，节点记录器发布脱敏事件，V12 使用 `ai_workflow_sse_event` 保存 7 天重放数据，并通过 `Last-Event-ID` 恢复遗漏事件。
 - SSE 工作流中的 Product、Knowledge 和多任务 Summary 已改用 `ReactAgent.stream()`，最终 AssistantMessage 从流的 END State 提取。
-- 金融合规边界要求原始模型 Token 只在服务端消费；`output-review` 完成后才把 PASS/REWRITE 的 `publishableAnswer` 分片为 `agent_stream`，BLOCK 不发送正文。
+- SSE 模式实时发布 Product、Knowledge 和多任务 Summary 的 `AGENT_MODEL_STREAMING` 增量文本；并行流使用 `streamId + taskId` 隔离。
+- `output-review` 只在完整 Summary 生成后执行。前端把实时 Token 作为临时内容，并在 `complete` 到达后使用 `finalAnswer` 覆盖为权威结果。
 
 ### WorkflowDefinition
 

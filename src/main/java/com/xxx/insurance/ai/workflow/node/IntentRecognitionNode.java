@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.node;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
@@ -42,11 +43,27 @@ public class IntentRecognitionNode implements NodeAction {
                 .value(MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class)
                 .orElseThrow(() -> new IllegalStateException("Missing aligned context in graph state"));
         // 主工作流链路 8：基于对齐后的问题识别业务意图，并确定目标子智能体。
-        IntentRoutingResult result = intentRecognitionService.recognize(context);
+        IntentRoutingResult result = intentRecognitionService.recognize(context, streamContext(state, context));
         log.info("[Workflow] node=intent-recognition action=recognize conversationId={} intent={} targetAgent={}",
                 context.conversationId(),
                 result.intent(),
                 result.targetAgent());
         return Map.of(MainWorkflowStateKeys.INTENT_ROUTING_RESULT, result);
+    }
+
+    /** 仅在 SSE 运行中创建意图识别模型的 Token 发布上下文。 */
+    private AgentTokenStreamContext streamContext(OverAllState state, AlignedWorkflowContext context) {
+        boolean enabled = state.value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class).orElse(false);
+        if (!enabled) {
+            return null;
+        }
+        String workflowInstanceId = state.value(MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, String.class)
+                .orElseThrow(() -> new IllegalStateException("Missing workflow instance id in graph state"));
+        return new AgentTokenStreamContext(
+                workflowInstanceId,
+                context.conversationId(),
+                null,
+                "intent-recognition-model",
+                AgentTokenStreamContext.PHASE_INTENT_RECOGNITION);
     }
 }

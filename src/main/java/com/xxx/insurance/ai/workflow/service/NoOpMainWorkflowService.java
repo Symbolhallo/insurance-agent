@@ -73,7 +73,32 @@ public class NoOpMainWorkflowService implements MainWorkflowService {
     @Override
     public MainWorkflowResponse confirmProducts(String workflowInstanceId,
                                                 ProductConfirmationRequest request) {
+        return confirmProducts(workflowInstanceId, request, false);
+    }
+
+    /** 默认 profile 忽略确认恢复流式开关并返回统一禁用响应。 */
+    @Override
+    public MainWorkflowResponse confirmProducts(String workflowInstanceId,
+                                                ProductConfirmationRequest request,
+                                                boolean tokenStreamingEnabled) {
         return run(new MainWorkflowRequest("product confirmation", request.conversationId()));
+    }
+
+    @Override
+    public void claimProductConfirmation(String workflowInstanceId, String conversationId) {
+        // 默认 profile 不启用持久化，不存在可抢占的确认实例。
+    }
+
+    @Override
+    public MainWorkflowResponse confirmClaimedProducts(String workflowInstanceId,
+                                                       ProductConfirmationRequest request,
+                                                       boolean tokenStreamingEnabled) {
+        return confirmProducts(workflowInstanceId, request, tokenStreamingEnabled);
+    }
+
+    @Override
+    public void releaseProductConfirmationClaim(String workflowInstanceId, String conversationId) {
+        // 默认 profile 不启用持久化，不需要释放状态。
     }
 
     /** 默认 profile 不启用持久化恢复，返回统一禁用响应。 */

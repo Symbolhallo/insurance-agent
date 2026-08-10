@@ -27,3 +27,7 @@ insurance:
       sse:
         connection-timeout: 5m
         event-retention: 7d
+        database-poll-interval: 500ms
+      maintenance:
+        cleanup-initial-delay: 1m
+        cleanup-interval: 1h

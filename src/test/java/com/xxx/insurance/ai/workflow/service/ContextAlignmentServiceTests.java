@@ -1,5 +1,6 @@
 package com.xxx.insurance.ai.workflow.service;
 
+import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
 import com.xxx.insurance.ai.memory.model.ChatMemoryMessageView;
 import com.xxx.insurance.ai.memory.model.ConversationMemorySnapshot;
 import com.xxx.insurance.ai.memory.service.AgentMemoryQueryService;
@@ -55,7 +56,8 @@ class ContextAlignmentServiceTests {
                 List.of(),
                 List.of(),
                 List.of());
-        ContextAlignmentService service = new ContextAlignmentService(chatModel, memoryQueryService);
+        ContextAlignmentService service = new ContextAlignmentService(
+                chatModel, memoryQueryService, mock(ChatModelStreamingExecutor.class));
 
         MainWorkflowRequest request = new MainWorkflowRequest("它收益怎么样？", "conversation-001");
         ConfirmedProduct confirmedProduct = confirmedProduct("conversation-001", "PA-001", "鑫享人生");
@@ -97,7 +99,8 @@ class ContextAlignmentServiceTests {
         AgentMemoryQueryService memoryQueryService = (conversationId, limit) ->
                 new ConversationMemorySnapshot(false, conversationId, null,
                         List.of(), List.of(), List.of(), List.of());
-        ContextAlignmentService service = new ContextAlignmentService(chatModel, memoryQueryService);
+        ContextAlignmentService service = new ContextAlignmentService(
+                chatModel, memoryQueryService, mock(ChatModelStreamingExecutor.class));
 
         MainWorkflowRequest request = new MainWorkflowRequest("盛世典藏怎么样？", "conversation-002");
         AlignedWorkflowContext result = service.align(request, new ProductReferenceResolution(
@@ -133,7 +136,8 @@ class ContextAlignmentServiceTests {
         AgentMemoryQueryService memoryQueryService = (conversationId, limit) ->
                 new ConversationMemorySnapshot(false, conversationId, null,
                         List.of(), List.of(), List.of(), List.of());
-        ContextAlignmentService service = new ContextAlignmentService(chatModel, memoryQueryService);
+        ContextAlignmentService service = new ContextAlignmentService(
+                chatModel, memoryQueryService, mock(ChatModelStreamingExecutor.class));
 
         MainWorkflowRequest request = new MainWorkflowRequest(
                 "35岁男性，年交50万，找收益高的分红险", "conversation-003");

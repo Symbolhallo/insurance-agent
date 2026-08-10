@@ -5,6 +5,8 @@ import com.xxx.insurance.ai.memory.model.ConversationMemorySnapshot;
 import com.xxx.insurance.ai.memory.model.ConversationSummaryView;
 import com.xxx.insurance.ai.memory.model.LongTermMemoryView;
 import com.xxx.insurance.ai.memory.service.AgentMemoryQueryService;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
+import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.ConversationTopicRelation;
 import com.xxx.insurance.ai.workflow.model.ContextAlignmentModelOutput;
@@ -89,12 +91,16 @@ public class ContextAlignmentService {
 
     private final AgentMemoryQueryService agentMemoryQueryService;
 
+    private final ChatModelStreamingExecutor streamingExecutor;
+
     private final BeanOutputConverter<ContextAlignmentModelOutput> outputConverter;
 
     public ContextAlignmentService(ChatModel chatModel,
-                                   AgentMemoryQueryService agentMemoryQueryService) {
+                                   AgentMemoryQueryService agentMemoryQueryService,
+                                   ChatModelStreamingExecutor streamingExecutor) {
         this.chatModel = chatModel;
         this.agentMemoryQueryService = agentMemoryQueryService;
+        this.streamingExecutor = streamingExecutor;
         this.outputConverter = new BeanOutputConverter<>(ContextAlignmentModelOutput.class);
     }
 
@@ -106,15 +112,25 @@ public class ContextAlignmentService {
      */
     public AlignedWorkflowContext align(MainWorkflowRequest request,
                                         ProductReferenceResolution productResolution) {
+        return align(request, productResolution, null);
+    }
+
+    /** 在 SSE 模式下额外发布上下文对齐模型的原始增量 JSON Token。 */
+    public AlignedWorkflowContext align(MainWorkflowRequest request,
+                                        ProductReferenceResolution productResolution,
+                                        AgentTokenStreamContext streamContext) {
         ConversationMemorySnapshot snapshot = agentMemoryQueryService.getConversationSnapshot(
                 request.conversationId(),
                 MEMORY_LIMIT);
         log.info("[Workflow] node=context-alignment action=align status=start conversationId={} memoryEnabled={}",
                 request.conversationId(),
                 snapshot.memoryEnabled());
-        String modelOutput = chatModel.call(
-                new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat())),
-                new UserMessage(buildUserPrompt(request.message(), snapshot, productResolution.resolvedProducts())));
+        SystemMessage systemMessage = new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat()));
+        UserMessage userMessage = new UserMessage(
+                buildUserPrompt(request.message(), snapshot, productResolution.resolvedProducts()));
+        String modelOutput = streamContext == null
+                ? chatModel.call(systemMessage, userMessage)
+                : streamingExecutor.execute(chatModel, List.of(systemMessage, userMessage), streamContext);
         ContextAlignmentModelOutput aligned = outputConverter.convert(modelOutput);
         validate(aligned);
         ConversationTopicRelation topicRelation = hasConversationHistory(snapshot)

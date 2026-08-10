@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.workflow.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.workflow.config.WorkflowPlannerAgentConfig;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.ConversationTopicRelation;
@@ -57,7 +58,8 @@ class WorkflowPlannerAgentTests {
         WorkflowPlannerAgent plannerAgent = config.workflowPlannerAgent(
                 reactAgent,
                 outputConverter,
-                new WorkflowPlanValidator());
+                new WorkflowPlanValidator(),
+                mock(ReactAgentStreamingExecutor.class));
         AlignedWorkflowContext context = new AlignedWorkflowContext(
                 "conversation-001",
                 "分析 PA-001",

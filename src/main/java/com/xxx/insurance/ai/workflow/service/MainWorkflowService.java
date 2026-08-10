@@ -29,6 +29,22 @@ public interface MainWorkflowService {
     /** 确认候选产品并恢复中断的主工作流。 */
     MainWorkflowResponse confirmProducts(String workflowInstanceId, ProductConfirmationRequest request);
 
+    /** 确认候选产品并恢复中断工作流，同时显式控制恢复后模型节点是否流式执行。 */
+    MainWorkflowResponse confirmProducts(String workflowInstanceId,
+                                         ProductConfirmationRequest request,
+                                         boolean tokenStreamingEnabled);
+
+    /** 原子抢占等待确认实例；SSE 入口在建立响应前调用，冲突请求直接返回 409。 */
+    void claimProductConfirmation(String workflowInstanceId, String conversationId);
+
+    /** 恢复已经由当前入口抢占为 CONFIRMING 的产品确认工作流。 */
+    MainWorkflowResponse confirmClaimedProducts(String workflowInstanceId,
+                                                ProductConfirmationRequest request,
+                                                boolean tokenStreamingEnabled);
+
+    /** SSE 后台任务未能提交时释放尚未消费的确认抢占。 */
+    void releaseProductConfirmationClaim(String workflowInstanceId, String conversationId);
+
     /** 从最新持久化 Checkpoint 主动恢复异常中断但仍处于 RUNNING 的工作流。 */
     MainWorkflowResponse resume(String workflowInstanceId, WorkflowResumeRequest request);
 }

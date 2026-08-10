@@ -14,8 +14,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -30,8 +32,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * local-db profile 下的 SSE 事件存储、实时广播和断线重放服务。
  *
- * <p>同一 workflowInstanceId 的分配、写入和广播在同一 JVM 锁内保持顺序；事件序号由
- * OceanBase 实例行原子分配，因此多实例部署时持久化顺序仍不会冲突。</p>
+ * <p>OceanBase 事件表是唯一事实源，事件序号由实例行原子分配。本机写入后立即按游标读取
+ * 以降低延迟，定时增量追踪负责补偿其他 JVM 发布的事件，因此不依赖负载均衡粘性会话。</p>
  */
 @Service
 @Profile("local-db")
@@ -84,12 +86,30 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
      * 根据 Last-Event-ID 重放持久事件，并在工作流仍运行时衔接实时事件。
      */
     public SseEmitter reconnect(String workflowInstanceId, String lastEventId) {
+        return subscribeExistingRun(workflowInstanceId, lastEventId, false);
+    }
+
+    /**
+     * 为已经原子抢占为 CONFIRMING 的实例重放遗漏事件并建立实时订阅。
+     */
+    public SseEmitter subscribeConfirmationResume(String workflowInstanceId, String lastEventId) {
+        return subscribeExistingRun(workflowInstanceId, lastEventId, true);
+    }
+
+    /** 在同一实例锁内完成历史重放和实时订阅，避免重放与新事件之间出现窗口。 */
+    private SseEmitter subscribeExistingRun(String workflowInstanceId,
+                                            String lastEventId,
+                                            boolean confirmationResume) {
         long afterSequence = parseLastSequence(workflowInstanceId, lastEventId);
         Object lock = workflowLocks.computeIfAbsent(workflowInstanceId, ignored -> new Object());
         synchronized (lock) {
             WorkflowInstanceExecutionView instance = executionMapper.findInstance(workflowInstanceId);
             if (instance == null) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow instance not found");
+            }
+            if (confirmationResume && !"CONFIRMING".equals(instance.status())) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT, "Workflow instance confirmation has not been claimed");
             }
             Long highWatermark = eventMapper.findHighWatermark(workflowInstanceId);
             List<WorkflowSseEventRecord> replayEvents = eventMapper.findReplayEvents(
@@ -100,10 +120,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
             }
 
             SseEmitter emitter = new SseEmitter(properties.connectionTimeout().toMillis());
-            SseClient client = new SseClient(emitter);
+            SseClient client = new SseClient(emitter, afterSequence);
             configureCallbacks(workflowInstanceId, client);
             replayEvents.forEach(record -> sendOrRemove(workflowInstanceId, client, toEvent(record)));
-            if (isOpenStatus(instance.status())) {
+            if (confirmationResume || isOpenStatus(instance.status())) {
                 subscribers.computeIfAbsent(workflowInstanceId, ignored -> new CopyOnWriteArrayList<>()).add(client);
             }
             else {
@@ -113,9 +133,19 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         }
     }
 
-    /**
-     * 在同一数据库事务中分配序号并写入事件，随后按序广播给当前订阅者。
-     */
+    /** 仅在恢复订阅仍存在时发送兜底错误并关闭连接，避免重复系统级失败事件。 */
+    public void failSubscribedRun(String workflowInstanceId,
+                                  String conversationId,
+                                  String message) {
+        if (!subscribers.containsKey(workflowInstanceId)) {
+            return;
+        }
+        publish(workflowInstanceId, conversationId, WorkflowSseEventType.ERROR, null,
+                Map.of("status", "FAILED", "message", message));
+        completeSubscribers(workflowInstanceId);
+    }
+
+    /** 在同一数据库事务中分配序号并写入事件，随后从事实表按序投递给本地订阅者。 */
     @Override
     public void publish(String workflowInstanceId,
                         String conversationId,
@@ -130,13 +160,49 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                 if (event == null) {
                     throw new IllegalStateException("SSE event transaction returned no event");
                 }
-                broadcast(workflowInstanceId, event);
+                deliverPersistedEvents(workflowInstanceId);
             }
             catch (Exception ex) {
                 // SSE 属于观测与交付通道，失败不能回滚已成功的业务 Graph。
                 log.error("[Workflow] action=sse-publish status=failed workflowInstanceId={} type={}",
                         workflowInstanceId, type.eventName(), ex);
             }
+        }
+    }
+
+    /**
+     * 从 OceanBase 事件事实表增量追踪所有本地活跃连接。
+     *
+     * <p>每个应用实例只维护自己持有的网络连接，但会读取其他实例写入的后续序号。
+     * SseClient 在发送成功后原子推进游标，可抵御即时读取和定时轮询产生的重复投递。</p>
+     */
+    @Scheduled(fixedDelayString = "${insurance.ai.workflow.sse.database-poll-interval:500ms}")
+    public void pollPersistedEvents() {
+        subscribers.keySet().forEach(this::deliverPersistedEvents);
+    }
+
+    /** 从最慢客户端的游标开始读取事实表，并按 sequenceNo 顺序幂等投递。 */
+    private void deliverPersistedEvents(String workflowInstanceId) {
+        List<SseClient> clients = subscribers.get(workflowInstanceId);
+        if (clients == null || clients.isEmpty()) {
+            return;
+        }
+        long afterSequence = clients.stream()
+                .mapToLong(SseClient::lastDeliveredSequence)
+                .min()
+                .orElse(0L);
+        try {
+            List<WorkflowSseEventRecord> records = eventMapper.findReplayEvents(
+                    workflowInstanceId, afterSequence, Instant.now());
+            records.stream()
+                    .map(this::toEvent)
+                    .forEach(event -> clients.forEach(client ->
+                            sendOrRemove(workflowInstanceId, client, event)));
+        }
+        catch (Exception ex) {
+            // 短暂查询失败不关闭连接，下一轮仍从客户端最后成功序号继续补偿。
+            log.warn("[Workflow] action=sse-database-poll status=failed workflowInstanceId={}",
+                    workflowInstanceId, ex);
         }
     }
 
@@ -167,6 +233,14 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         return event;
     }
 
+    /** 清理已超过 Last-Event-ID 重放保留期的 OceanBase SSE 事件。 */
+    @Transactional(rollbackFor = Exception.class)
+    public int purgeExpiredEvents(Instant now) {
+        int deleted = eventMapper.deleteExpiredEvents(now);
+        log.info("[Workflow] action=sse-event-purge status=success eventCount={}", deleted);
+        return deleted;
+    }
+
     /** 完成并移除当前工作流的全部实时连接。 */
     @Override
     public void completeSubscribers(String workflowInstanceId) {
@@ -188,7 +262,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
 
     /** 注册客户端并绑定断开、超时和错误清理回调。 */
     private void register(String workflowInstanceId, SseEmitter emitter) {
-        SseClient client = new SseClient(emitter);
+        SseClient client = new SseClient(emitter, 0L);
         configureCallbacks(workflowInstanceId, client);
         subscribers.computeIfAbsent(workflowInstanceId, ignored -> new CopyOnWriteArrayList<>()).add(client);
     }
@@ -201,16 +275,14 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         client.emitter().onError(error -> remove.run());
     }
 
-    /** 向当前连接广播同一条持久事件。 */
-    private void broadcast(String workflowInstanceId, WorkflowSseEvent event) {
-        List<SseClient> clients = subscribers.getOrDefault(workflowInstanceId, new CopyOnWriteArrayList<>());
-        clients.forEach(client -> sendOrRemove(workflowInstanceId, client, event));
-    }
-
     /** 串行发送单连接事件；发送失败即移除连接，后台工作流继续执行并持久化后续事件。 */
     private void sendOrRemove(String workflowInstanceId, SseClient client, WorkflowSseEvent event) {
         try {
-            client.send(event);
+            boolean sent = client.send(event);
+            if (sent && isStreamTerminalEvent(event.type())) {
+                client.emitter().complete();
+                removeClient(workflowInstanceId, client);
+            }
         }
         catch (IOException | IllegalStateException ex) {
             removeClient(workflowInstanceId, client);
@@ -253,7 +325,14 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
 
     /** 判断实例是否仍可能产生实时事件。 */
     private boolean isOpenStatus(String status) {
-        return "RUNNING".equals(status) || "RESUMING".equals(status);
+        return "RUNNING".equals(status) || "RESUMING".equals(status) || "CONFIRMING".equals(status);
+    }
+
+    /** 判断事件是否结束当前这一次 SSE 连接；人工确认后可通过独立恢复接口建立新连接。 */
+    private boolean isStreamTerminalEvent(String eventType) {
+        return WorkflowSseEventType.COMPLETE.eventName().equals(eventType)
+                || WorkflowSseEventType.ERROR.eventName().equals(eventType)
+                || WorkflowSseEventType.HUMAN_CONFIRM.eventName().equals(eventType);
     }
 
     /** 将数据库记录恢复为前端协议事件。 */
@@ -280,13 +359,36 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     }
 
     /** 对单个 SseEmitter 的 send 操作加锁，避免并行 DAG 节点交叉写响应。 */
-    private record SseClient(SseEmitter emitter) {
+    private static final class SseClient {
 
-        private synchronized void send(WorkflowSseEvent event) throws IOException {
+        private final SseEmitter emitter;
+
+        private long lastDeliveredSequence;
+
+        private SseClient(SseEmitter emitter, long lastDeliveredSequence) {
+            this.emitter = emitter;
+            this.lastDeliveredSequence = lastDeliveredSequence;
+        }
+
+        private SseEmitter emitter() {
+            return emitter;
+        }
+
+        private synchronized long lastDeliveredSequence() {
+            return lastDeliveredSequence;
+        }
+
+        /** 只发送游标之后的事件，并在网络写成功后推进游标。 */
+        private synchronized boolean send(WorkflowSseEvent event) throws IOException {
+            if (event.sequence() <= lastDeliveredSequence) {
+                return false;
+            }
             emitter.send(SseEmitter.event()
                     .id(event.eventId())
                     .name(event.type())
                     .data(event));
+            lastDeliveredSequence = event.sequence();
+            return true;
         }
     }
 }

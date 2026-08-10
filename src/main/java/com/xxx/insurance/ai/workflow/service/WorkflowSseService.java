@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.service;
 
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
+import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -56,6 +57,26 @@ public class WorkflowSseService {
         return eventService.reconnect(workflowInstanceId, lastEventId);
     }
 
+    /**
+     * 先原子抢占 WAITING_CONFIRM 实例，再建立订阅并在后台流式恢复原 Graph。
+     */
+    public SseEmitter confirmProducts(String workflowInstanceId,
+                                      ProductConfirmationRequest request,
+                                      String lastEventId) {
+        mainWorkflowService.claimProductConfirmation(workflowInstanceId, request.conversationId());
+        try {
+            SseEmitter emitter = eventService.subscribeConfirmationResume(workflowInstanceId, lastEventId);
+            taskExecutor.execute(() -> executeConfirmation(workflowInstanceId, request));
+            return emitter;
+        }
+        catch (RuntimeException ex) {
+            eventService.completeSubscribers(workflowInstanceId);
+            mainWorkflowService.releaseProductConfirmationClaim(
+                    workflowInstanceId, request.conversationId());
+            throw ex;
+        }
+    }
+
     /** 在 SSE 专属线程中执行原有 MainWorkflowService，复用完整 Graph 与持久化链路。 */
     private void execute(String workflowInstanceId, MainWorkflowRequest request) {
         try {
@@ -65,6 +86,19 @@ public class WorkflowSseService {
             // LocalDbMainWorkflowService 会持久化 error 事件；这里兜底处理实例创建前失败。
             eventService.failNewRun(workflowInstanceId, ex);
             log.error("[Workflow] action=sse-run status=failed workflowInstanceId={}", workflowInstanceId, ex);
+        }
+    }
+
+    /** 从人工确认 Checkpoint 恢复，并保持后续前置节点、子智能体和 Summary 的模型流。 */
+    private void executeConfirmation(String workflowInstanceId, ProductConfirmationRequest request) {
+        try {
+            mainWorkflowService.confirmClaimedProducts(workflowInstanceId, request, true);
+        }
+        catch (Exception ex) {
+            eventService.failSubscribedRun(
+                    workflowInstanceId, request.conversationId(), "产品确认后工作流恢复失败");
+            log.error("[Workflow] action=sse-confirm-resume status=failed workflowInstanceId={}",
+                    workflowInstanceId, ex);
         }
     }
 }
