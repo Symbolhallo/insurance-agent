@@ -36,6 +36,19 @@ Current phase:
 - ProductAnalysisAgent uses optional ChatMemory: default profile is stateless, local-db profile enables conversation history through `ReactAgent.call(List<Message>)`.
 - local-db profile writes successful ProductAnalysisAgent requests to both `ai_chat_memory` and `ai_long_term_memory`; long-term memory is append-only history.
 - `ai_chat_memory` and `ai_long_term_memory` must be written through `AgentMemoryService.saveSuccessfulExchange(...)` in one transaction.
+- Phase2-Task11 Spring AI Alibaba Main Graph v1 skeleton is complete.
+- Phase2-Task12 merges request loading, memory loading, and query understanding into `ContextAlignmentNode`.
+- Main Graph v1 currently runs `ProductReferenceResolution -> (Mock ProductRecall -> HumanConfirm) -> ContextAlignment -> IntentRecognition -> PlannerAgent -> DagExecutor -> Summary`.
+- `ProductReferenceResolutionNode` is the single source of truth for product clues and candidate recall routing. It may only load confirmed products from the current `conversationId`.
+- A first, fuzzy, or unresolved product reference enters candidate recall and persistent Human Confirm. A pure condition filter or a reference uniquely mapped to a product confirmed in the same conversation goes directly to context alignment.
+- `ContextAlignmentNode` runs only after product resolution and uses standardized product data to align history and rewrite the question.
+- `WorkflowPlannerAgent` is a dedicated Spring AI Alibaba `ReactAgent`; Planner v2 emits one or two whitelisted ProductAnalysisAgent/KnowledgeQAAgent tasks and only allows dependencies on earlier tasks.
+- Phase2 OceanBase Graph Checkpoint foundation is complete: V4 creates thread/checkpoint tables, `OceanBaseCheckpointSaver` implements `BaseCheckpointSaver`, and Main Graph uses `workflowInstanceId` as threadId under the `local-db` profile.
+- Phase2 Mock product recall, retrieval audit, context-alignment recall decision, and V6 workflow definition are complete.
+- Phase2 Human Confirm, conversation-scoped confirmed products, Checkpoint update/resume API, and V7 workflow definition are complete.
+- Phase2 KnowledgeQAAgent, isolated knowledge Skill/Tool, two-intent routing, dynamic single-agent invocation, and V8 workflow definition are complete.
+- Phase2 dynamic DAG execution is complete: independent tasks run on a bounded executor, dependency failures skip successors, partial results are summarized, and V9 records the workflow definition.
+- DAG child agents write invocation audit only; Main Workflow writes one final user/assistant exchange to ChatMemory and long-term memory after aggregation.
 
 ## Technology Baseline
 
@@ -117,6 +130,21 @@ common
 ```
 
 ## Spring AI Alibaba Verified Classes
+
+For every task involving Spring AI Alibaba architecture, Agent Framework, Graph Core,
+ReactAgent, Tool, Skill, Hook, Interceptor, Memory, Checkpoint, streaming, or multi-agent
+APIs, first consult the project reference documents under:
+
+```text
+docs/spring-ai-alibaba/
+```
+
+Use those documents as the project's primary development reference, then verify exact
+class names, packages, builders, and method signatures against the locally resolved
+dependency sources for the project's current version. When the documents and local
+sources differ, the local dependency sources control compile-time decisions and the
+difference must be documented. Do not rely on memory or unverified rolling website
+examples for Spring AI Alibaba code.
 
 Do not guess imports for Spring AI Alibaba Agent or Skill classes. The following classes were verified from local Gradle cache for version `1.1.2.3`.
 
@@ -266,6 +294,22 @@ Service returns raw domain data
 Formatter converts data for agent context or final output
 ```
 
+## Stage Acceptance Output
+
+After completing every development stage, provide acceptance cases that include:
+
+- Swagger UI request examples for the newly completed capability
+- Expected HTTP response and important application log markers
+- OceanBase verification SQL when the stage changes persistent data
+- Negative or boundary cases relevant to the stage
+- A clear completed / next stage / unfinished progress summary
+
+Do not repeat IDEA Run/Debug configuration after every stage. Include IDEA startup information
+only when the stage changes startup parameters, active profiles, environment variables, ports,
+or other local launch requirements.
+
+Do not treat automated tests alone as sufficient stage acceptance guidance.
+
 ## Logging Rules
 
 Reserve consistent log markers for the agent execution chain:
@@ -289,6 +333,11 @@ Spring AI Alibaba integration code must include detailed comments explaining:
 - Why the design is used
 - How Spring AI Alibaba calls are wired
 - How future ReactAgent, Skill, Tool, Memory, or Workflow layers will consume it
+
+Every Spring `@Bean` factory method must have method-level JavaDoc explaining the Bean purpose,
+key dependencies, framework call relationship, and primary consumer. Every public business method
+must describe its responsibility and important side effects. Private helper methods added for Agent,
+Memory, or Workflow orchestration must have a concise purpose comment.
 
 Normal Java business code should follow enterprise style:
 
@@ -324,9 +373,9 @@ Do not implement the following outside the task boundary:
 - ReactAgent assembly
 - Tool Calling
 - Graph Workflow
-- Planner
-- DAG Executor
-- Human Confirm
+- Additional Planner capabilities beyond the validated two-task Planner v2
+- Policy and asset agents
+- Additional Human Confirm scenarios beyond product candidate confirmation
 - Vector Database
 - Custom agent framework that bypasses Spring AI Alibaba
 - Hard-coded API keys or secrets

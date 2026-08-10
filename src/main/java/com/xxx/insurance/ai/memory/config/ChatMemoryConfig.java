@@ -21,11 +21,25 @@ import org.springframework.context.annotation.Profile;
 @Profile("local-db")
 public class ChatMemoryConfig {
 
+    /**
+     * 创建基于 MyBatis 和 OceanBase 的 Spring AI ChatMemoryRepository。
+     *
+     * @param chatMemoryMapper 会话消息持久化 Mapper
+     * @param objectMapper 消息元数据 JSON 编解码器
+     * @return ChatMemory 使用的持久化仓库
+     */
     @Bean
     public ChatMemoryRepository chatMemoryRepository(ChatMemoryMapper chatMemoryMapper, ObjectMapper objectMapper) {
         return new MyBatisChatMemoryRepository(chatMemoryMapper, objectMapper);
     }
 
+    /**
+     * 创建带窗口裁剪能力的全局 ChatMemory。
+     *
+     * @param chatMemoryRepository 本地数据库消息仓库
+     * @param maxMessages 单个 conversationId 最多保留的上下文消息数
+     * @return 子智能体和主工作流共享的窗口记忆组件
+     */
     @Bean
     public ChatMemory chatMemory(
             ChatMemoryRepository chatMemoryRepository,

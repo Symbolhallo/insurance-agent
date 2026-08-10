@@ -34,6 +34,7 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
 
     private final AgentConversationService agentConversationService;
 
+    /** 创建 local-db profile 下的记忆协调服务。 */
     public JdbcAgentMemoryService(ChatMemory chatMemory,
                                   LongTermMemoryService longTermMemoryService,
                                   AgentInvocationService agentInvocationService,
@@ -44,16 +45,19 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
         this.agentConversationService = agentConversationService;
     }
 
+    /** local-db 实现始终启用持久化记忆。 */
     @Override
     public boolean isEnabled() {
         return true;
     }
 
+    /** 从 Spring AI ChatMemory 读取指定会话的窗口消息。 */
     @Override
     public List<Message> getHistory(String conversationId) {
         return chatMemory.get(conversationId);
     }
 
+    /** 原子保存窗口消息、两条长期消息、会话主记录和成功调用流水。 */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveSuccessfulExchange(AgentMemoryExchange exchange, AgentInvocationRecord invocationRecord) {
@@ -67,6 +71,15 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
         agentInvocationService.save(invocationRecord);
     }
 
+    /** 保存 DAG 子智能体成功调用流水，但不并发修改会话消息。 */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void saveSuccessfulInvocation(AgentInvocationRecord invocationRecord) {
+        agentConversationService.upsertActiveConversation(toConversationRecord(invocationRecord));
+        agentInvocationService.save(invocationRecord);
+    }
+
+    /** 保存失败调用流水和会话主记录，不写入不存在的助手回答。 */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveFailedInvocation(AgentInvocationRecord invocationRecord) {
@@ -74,6 +87,7 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
         agentInvocationService.save(invocationRecord);
     }
 
+    /** 从调用流水提取会话主表的新增或更新字段。 */
     private AgentConversationRecord toConversationRecord(AgentInvocationRecord invocationRecord) {
         return new AgentConversationRecord(
                 invocationRecord.conversationId(),
@@ -87,6 +101,7 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
                 invocationRecord.createdAt());
     }
 
+    /** 将一条 Spring AI 消息转换为长期记忆表记录。 */
     private LongTermMemoryRecord toLongTermMemoryRecord(AgentMemoryExchange exchange,
                                                         MessageType role,
                                                         String content) {
@@ -99,16 +114,19 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
                 role,
                 content,
                 summarize(content),
-                "[\"product-analysis\"]",
+                "[\"agent-chat\"]",
                 BigDecimal.valueOf(50),
-                "{\"source\":\"product-analysis-chat\"}",
+                "{\"source\":\"workflow-or-agent-chat\",\"agentName\":\""
+                        + exchange.agentName() + "\"}",
                 exchange.occurredAt());
     }
 
+    /** 生成全局唯一的长期记忆记录编号。 */
     private String newMemoryId() {
         return "ltm-" + UUID.randomUUID().toString().replace("-", "");
     }
 
+    /** 生成最多 200 字符的可检索内容摘要。 */
     private String summarize(String content) {
         if (content == null) {
             return "";
@@ -120,13 +138,14 @@ public class JdbcAgentMemoryService implements AgentMemoryService {
         return normalized.substring(0, 200);
     }
 
+    /** 使用首次用户问题生成简短会话标题。 */
     private String toConversationTitle(String userMessage) {
         if (userMessage == null) {
-            return "产品分析会话";
+            return "保险智能体会话";
         }
         String normalized = userMessage.replaceAll("\\s+", " ").trim();
         if (normalized.isBlank()) {
-            return "产品分析会话";
+            return "保险智能体会话";
         }
         if (normalized.length() <= 80) {
             return normalized;

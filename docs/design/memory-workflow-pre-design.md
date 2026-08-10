@@ -2,7 +2,7 @@
 
 本文档定义 `insurance-agent` 在 ProductAnalysisAgent Phase1 完成后的 Memory 与 Workflow 前置设计。
 
-当前阶段只做设计定界，不实现 Memory、Workflow、Planner、DAG Executor、Human Confirm 或向量数据库。
+本文档最初用于设计定界；当前 Memory、Main Graph v1、Human Confirm、双意图 Planner v2 和动态 DAG Executor 已按分阶段路线落地，向量数据库仍未实现。
 
 ## 目标
 
@@ -49,7 +49,7 @@ ReactAgent.call(List<Message>)
 ↓
 ChatMemory.add(conversationId, user + assistant)
 ↓
-JdbcChatMemoryRepository
+MyBatisChatMemoryRepository
 ```
 
 注意：
@@ -345,12 +345,27 @@ WorkflowStep
 AgentInvocation
 ```
 
+当前接入策略：
+
+- 实现 `main-workflow-v1` 主工作流骨架。
+- API 入口创建 `ai_workflow_instance`，并为每个 Graph 节点创建 `ai_workflow_step`。
+- 通过 Spring AI Alibaba Graph 执行 `START -> product-reference-resolution -> (product-recall -> human-confirm) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> END`。
+- `context-alignment` 合并请求归一、记忆加载和 Query Understanding，在内部保留清晰职责分层，并输出原始问题、改写问题和实体列表。
+- `intent-recognition` 可拆分产品分析与知识问答两个意图，并通过本地白名单映射目标 Agent。
+- `planner-agent` 使用独立 Spring AI Alibaba ReactAgent 生成结构化计划。Planner v2 允许一到两个任务，依赖只能指向更早任务，并由本地校验器做确定性约束。
+- `dag-executor` 在受控线程池中并行执行无依赖任务，依赖失败时跳过后继任务，结果写回 Graph state。
+- `summary` 按计划顺序汇总成功结果并披露未完成任务；后续可升级为独立 Summary Agent。
+- 工作流终态支持 `SUCCESS`、`PARTIAL_SUCCESS` 和 `FAILED`。
+- 当前不实现向量数据库、PolicyAgent、AssetAgent、独立 Summary Agent 或输出审核 Agent。
+- 默认 profile 下使用 no-op Workflow 服务，不写本地数据库；`local-db` profile 下才落库执行。
+
 ### WorkflowDefinition
 
 表示一个工作流模板。
 
 示例：
 
+- `main-workflow-v1`
 - `product-analysis-only`
 - `product-analysis-with-knowledge`
 - `customer-policy-analysis`
@@ -437,8 +452,9 @@ com.xxx.insurance
 │   │   ├── repository
 │   │   └── service
 │   ├── workflow
+│   │   ├── controller
+│   │   ├── mapper
 │   │   ├── model
-│   │   ├── repository
 │   │   ├── service
 │   │   └── config
 │   └── retrieval
@@ -462,7 +478,7 @@ ai-core
 - 引入本地数据库依赖。
 - 增加 datasource 配置。
 - 建立 Spring AI ChatMemory / Invocation / Workflow 表结构。
-- 实现 `JdbcChatMemoryRepository`。
+- 实现 `MyBatisChatMemoryRepository`。
 - 暂不接 Agent。
 
 ### Phase2-Task2：Invocation 持久化
@@ -478,7 +494,7 @@ ai-core
 - 调用后写入用户消息和 Assistant 消息。
 - 使用 `ReactAgent.call(List<Message>)` 保留 Skill 和 Tool Calling 能力。
 - 默认 profile 没有 `ChatMemory` Bean，仍保持单轮调用。
-- `local-db` profile 下创建 `ChatMemory` Bean，并使用 `JdbcChatMemoryRepository` 持久化消息窗口。
+- `local-db` profile 下创建 `ChatMemory` Bean，并使用 `MyBatisChatMemoryRepository` 持久化消息窗口。
 
 ### Phase2-Task4：Memory Context Provider
 
@@ -489,8 +505,8 @@ ai-core
 ### Phase2-Task5：Workflow 状态模型
 
 - 建立 WorkflowInstance / WorkflowStep。
-- 支持单节点 `product-analysis-only`。
-- 只记录状态，不做复杂 DAG。
+- 支持 `main-workflow-v1` 主工作流节点状态记录。
+- 基于 Spring AI Alibaba Graph 做固定拓扑编排，不做复杂 DAG。
 
 ### Phase2-Task6：Retrieval Port
 
@@ -498,12 +514,12 @@ ai-core
 - 用 mock 实现返回召回数据。
 - 后续替换为行内成熟召回服务。
 
-## 需要确认的关键数据
+## 已确认关键数据
 
-1. 本地数据库优先用 H2 file mode，还是你更希望直接用 MySQL / PostgreSQL？
-2. 是否已经有用户体系？如果有，`userId`、`customerId`、`operatorId` 是否需要分开？
-3. 会话数据是否需要区分“客户会话”和“内部测试会话”？
-4. 模型输入和模型输出是否允许明文落本地库？如果不允许，需要做脱敏或只存摘要。
-5. 本地库数据保留周期是多少？例如 7 天、30 天、永久保留。
-6. Workflow 第一版是否只做 `product-analysis-only` 单节点状态记录？
-7. 外部向量召回服务最终会通过 HTTP、RPC，还是 Java SDK 调用？
+1. 本地数据库使用 OceanBase/MySQL 协议。
+2. 当前先使用 mock `userId`、`customerId`、`operatorId`。
+3. 会话类型当前默认 `INTERNAL_TEST`。
+4. 技术验证阶段允许模型输入和输出明文落本地库。
+5. 本地库数据永久保留。
+6. Workflow 第一版升级为 `main-workflow-v1`，当前固定拓扑为 ContextAlignment、IntentRecognition、PlannerAgent、ProductAnalysisAgent、Summary。
+7. 外部向量召回服务后续通过 Java 代码调用其他系统微应用接口。

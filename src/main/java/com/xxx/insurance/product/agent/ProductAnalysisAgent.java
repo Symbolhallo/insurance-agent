@@ -2,6 +2,7 @@ package com.xxx.insurance.product.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import com.xxx.insurance.ai.agent.AgentExecutionContext;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
@@ -65,6 +66,7 @@ public class ProductAnalysisAgent {
 
     private final AiModelProperties aiModelProperties;
 
+    /** 创建产品分析业务入口并组合 ReactAgent、Skill、Tool、Formatter、Memory 和审计能力。 */
     public ProductAnalysisAgent(ReactAgent reactAgent,
                                 SkillsAgentHook skillsAgentHook,
                                 ProductAnalysisService productAnalysisService,
@@ -81,10 +83,12 @@ public class ProductAnalysisAgent {
         this.aiModelProperties = aiModelProperties;
     }
 
+    /** 返回 ReactAgent 注册名称。 */
     public String name() {
         return reactAgent.name();
     }
 
+    /** 返回 ReactAgent 能力描述。 */
     public String description() {
         return reactAgent.description();
     }
@@ -114,10 +118,23 @@ public class ProductAnalysisAgent {
      * 记忆服务，仍保持无记忆单轮调用。</p>
      */
     public ProductAnalysisChatResponse chat(ProductAnalysisChatRequest request) {
+        String userMessage = request == null ? null : request.message();
+        return chat(request, AgentExecutionContext.standalone(userMessage));
+    }
+
+    /**
+     * Workflow 调用入口。
+     *
+     * <p>模型使用 request.message 中的标准化问题推理；记忆和调用审计使用
+     * executionContext.originalUserMessage 保存用户原话，并关联 Workflow 实例与步骤。</p>
+     */
+    public ProductAnalysisChatResponse chat(ProductAnalysisChatRequest request,
+                                            AgentExecutionContext executionContext) {
         validateChatRequest(request);
+        Objects.requireNonNull(executionContext, "Agent execution context must not be null");
         String invocationId = newInvocationId();
         long startNanos = System.nanoTime();
-        MemoryCallContext memoryCallContext = buildMemoryCallContext(request);
+        MemoryCallContext memoryCallContext = buildMemoryCallContext(request, executionContext);
         try {
             log.info("[Agent] name={} action=chat status=start invocationId={} conversationId={} messageLength={} memoryEnabled={} memoryMessageCount={}",
                     AGENT_NAME,
@@ -133,6 +150,7 @@ public class ProductAnalysisAgent {
             ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect(answer);
             AgentInvocationRecord invocationRecord = successInvocationRecord(
                     request,
+                    executionContext,
                     invocationId,
                     answer,
                     durationMs,
@@ -163,7 +181,7 @@ public class ProductAnalysisAgent {
         }
         catch (Exception ex) {
             long durationMs = elapsedMillis(startNanos);
-            saveFailedInvocation(request, invocationId, durationMs, ex);
+            saveFailedInvocation(request, executionContext, invocationId, durationMs, ex);
             log.error("[Agent] name={} action=chat status=failed invocationId={} conversationId={} durationMs={}",
                     AGENT_NAME,
                     invocationId,
@@ -194,6 +212,7 @@ public class ProductAnalysisAgent {
         return skillsAgentHook;
     }
 
+    /** 校验确定性产品分析请求至少包含一个产品编码。 */
     private void validateRequest(ProductAnalysisRequest request) {
         Objects.requireNonNull(request, "Product analysis request must not be null");
         List<String> productCodes = request.productCodes();
@@ -202,6 +221,7 @@ public class ProductAnalysisAgent {
         }
     }
 
+    /** 校验模型调用消息不能为空且不超过输入长度限制。 */
     private void validateChatRequest(ProductAnalysisChatRequest request) {
         Objects.requireNonNull(request, "Product analysis chat request must not be null");
         if (!StringUtils.hasText(request.message())) {
@@ -212,22 +232,28 @@ public class ProductAnalysisAgent {
         }
     }
 
-    private MemoryCallContext buildMemoryCallContext(ProductAnalysisChatRequest request) {
-        if (!agentMemoryService.isEnabled() || !StringUtils.hasText(request.conversationId())) {
+    /** 构建模型消息和持久化用户原话；DAG 子任务会显式禁用会话记忆。 */
+    private MemoryCallContext buildMemoryCallContext(ProductAnalysisChatRequest request,
+                                                     AgentExecutionContext executionContext) {
+        if (!executionContext.conversationMemoryEnabled()
+                || !agentMemoryService.isEnabled()
+                || !StringUtils.hasText(request.conversationId())) {
             return MemoryCallContext.disabled();
         }
         List<Message> historyMessages = agentMemoryService.getHistory(request.conversationId());
-        UserMessage userMessage = new UserMessage(request.message());
+        UserMessage modelUserMessage = new UserMessage(request.message());
+        UserMessage persistedUserMessage = new UserMessage(executionContext.auditedUserMessage(request.message()));
         List<Message> requestMessages = new ArrayList<>(historyMessages);
-        requestMessages.add(userMessage);
+        requestMessages.add(modelUserMessage);
         return new MemoryCallContext(
                 true,
                 request.conversationId(),
-                userMessage,
+                persistedUserMessage,
                 requestMessages,
                 historyMessages.size());
     }
 
+    /** 根据是否启用会话记忆选择单消息或历史消息列表调用 ReactAgent。 */
     private AssistantMessage callReactAgent(ProductAnalysisChatRequest request, MemoryCallContext memoryCallContext)
             throws Exception {
         if (!memoryCallContext.memoryEnabled()) {
@@ -236,11 +262,15 @@ public class ProductAnalysisAgent {
         return reactAgent.call(memoryCallContext.requestMessages());
     }
 
+    /** 保存完整对话记忆，或在 DAG 模式下只保存成功调用审计。 */
     private void saveMemory(MemoryCallContext memoryCallContext,
                             AgentInvocationRecord invocationRecord,
                             AssistantMessage assistantMessage,
                             Instant answeredAt) {
         if (!memoryCallContext.memoryEnabled()) {
+            if (agentMemoryService.isEnabled() && StringUtils.hasText(invocationRecord.conversationId())) {
+                agentMemoryService.saveSuccessfulInvocation(invocationRecord);
+            }
             return;
         }
         agentMemoryService.saveSuccessfulExchange(new AgentMemoryExchange(
@@ -252,7 +282,9 @@ public class ProductAnalysisAgent {
                 answeredAt), invocationRecord);
     }
 
+    /** 尝试保存失败调用审计，持久化异常不会覆盖原始模型异常。 */
     private void saveFailedInvocation(ProductAnalysisChatRequest request,
+                                      AgentExecutionContext executionContext,
                                       String invocationId,
                                       long durationMs,
                                       Exception exception) {
@@ -260,7 +292,12 @@ public class ProductAnalysisAgent {
             return;
         }
         try {
-            agentMemoryService.saveFailedInvocation(failedInvocationRecord(request, invocationId, durationMs, exception));
+            agentMemoryService.saveFailedInvocation(failedInvocationRecord(
+                    request,
+                    executionContext,
+                    invocationId,
+                    durationMs,
+                    exception));
         }
         catch (Exception persistenceException) {
             log.warn("[Agent] name={} action=saveFailedInvocation status=failed invocationId={} conversationId={}",
@@ -271,7 +308,9 @@ public class ProductAnalysisAgent {
         }
     }
 
+    /** 构造包含回答格式检查结果的成功调用审计记录。 */
     private AgentInvocationRecord successInvocationRecord(ProductAnalysisChatRequest request,
+                                                          AgentExecutionContext executionContext,
                                                           String invocationId,
                                                           String answer,
                                                           long durationMs,
@@ -282,14 +321,14 @@ public class ProductAnalysisAgent {
                 request.conversationId(),
                 AGENT_NAME,
                 TraceIdUtil.currentTraceId(),
-                null,
-                null,
+                executionContext.workflowInstanceId(),
+                executionContext.workflowStepId(),
                 "openai-compatible",
                 modelName(),
                 "mock-user",
                 "mock-customer",
                 "mock-operator",
-                request.message(),
+                executionContext.auditedUserMessage(request.message()),
                 answer,
                 durationMs,
                 answerLength(answer),
@@ -301,7 +340,9 @@ public class ProductAnalysisAgent {
                 createdAt);
     }
 
+    /** 构造不包含助手回答的失败调用审计记录。 */
     private AgentInvocationRecord failedInvocationRecord(ProductAnalysisChatRequest request,
+                                                         AgentExecutionContext executionContext,
                                                          String invocationId,
                                                          long durationMs,
                                                          Exception exception) {
@@ -310,14 +351,14 @@ public class ProductAnalysisAgent {
                 request.conversationId(),
                 AGENT_NAME,
                 TraceIdUtil.currentTraceId(),
-                null,
-                null,
+                executionContext.workflowInstanceId(),
+                executionContext.workflowStepId(),
                 "openai-compatible",
                 modelName(),
                 "mock-user",
                 "mock-customer",
                 "mock-operator",
-                request.message(),
+                executionContext.auditedUserMessage(request.message()),
                 null,
                 durationMs,
                 null,
@@ -329,6 +370,7 @@ public class ProductAnalysisAgent {
                 Instant.now());
     }
 
+    /** 从全局模型配置读取当前模型名称。 */
     private String modelName() {
         if (aiModelProperties.getChat() == null || aiModelProperties.getChat().getOptions() == null) {
             return null;
@@ -336,6 +378,7 @@ public class ProductAnalysisAgent {
         return aiModelProperties.getChat().getOptions().getModel();
     }
 
+    /** 将异常消息截断到审计字段允许的长度。 */
     private String truncateErrorMessage(Exception exception) {
         if (exception == null || exception.getMessage() == null) {
             return null;
@@ -347,14 +390,17 @@ public class ProductAnalysisAgent {
         return message.substring(0, 1024);
     }
 
+    /** 根据单调时钟计算 Agent 调用耗时。 */
     private long elapsedMillis(long startNanos) {
         return (System.nanoTime() - startNanos) / 1_000_000;
     }
 
+    /** 计算回答字符数量，空回答记为零。 */
     private int answerLength(String answer) {
         return answer == null ? 0 : answer.length();
     }
 
+    /** 生成产品分析 Agent 调用编号。 */
     private String newInvocationId() {
         return "pai-" + UUID.randomUUID().toString().replace("-", "");
     }
@@ -366,6 +412,7 @@ public class ProductAnalysisAgent {
             List<Message> requestMessages,
             int historyMessageCount) {
 
+        /** 创建不携带历史消息的调用上下文。 */
         static MemoryCallContext disabled() {
             return new MemoryCallContext(false, null, null, List.of(), 0);
         }

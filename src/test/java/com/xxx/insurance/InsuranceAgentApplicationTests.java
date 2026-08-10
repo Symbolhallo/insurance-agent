@@ -1,7 +1,11 @@
 package com.xxx.insurance;
 
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
+import com.xxx.insurance.ai.workflow.agent.WorkflowPlannerAgent;
+import com.xxx.insurance.ai.workflow.config.MainWorkflowGraphConfig;
+import com.xxx.insurance.ai.workflow.config.WorkflowPlannerAgentConfig;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.config.ProductAnalysisAgentConfig;
@@ -11,6 +15,10 @@ import com.xxx.insurance.product.model.ProductAnalysisChatRequest;
 import com.xxx.insurance.product.model.ProductAnalysisRequest;
 import com.xxx.insurance.product.model.ProductAnalysisResult;
 import com.xxx.insurance.product.tool.ProductAnalysisTool;
+import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
+import com.xxx.insurance.knowledge.config.KnowledgeQaAgentConfig;
+import com.xxx.insurance.knowledge.model.KnowledgeQueryResult;
+import com.xxx.insurance.knowledge.tool.InsuranceKnowledgeTool;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -62,7 +70,34 @@ class InsuranceAgentApplicationTests {
     private List<ToolCallback> productAnalysisToolCallbacks;
 
     @Autowired
+    @Qualifier(SkillConfig.KNOWLEDGE_QA_SKILL_REGISTRY)
+    private SkillRegistry knowledgeQaSkillRegistry;
+
+    @Autowired
+    @Qualifier(SkillConfig.KNOWLEDGE_QA_SKILLS_AGENT_HOOK)
+    private SkillsAgentHook knowledgeQaSkillsAgentHook;
+
+    @Autowired
+    @Qualifier(KnowledgeQaAgentConfig.KNOWLEDGE_QA_AGENT)
+    private KnowledgeQaAgent knowledgeQaAgent;
+
+    @Autowired
+    private InsuranceKnowledgeTool insuranceKnowledgeTool;
+
+    @Autowired
+    @Qualifier(KnowledgeQaAgentConfig.KNOWLEDGE_QA_TOOL_CALLBACKS)
+    private ToolCallback[] knowledgeQaToolCallbacks;
+
+    @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    @Qualifier(MainWorkflowGraphConfig.MAIN_WORKFLOW_GRAPH)
+    private CompiledGraph mainWorkflowGraph;
+
+    @Autowired
+    @Qualifier(WorkflowPlannerAgentConfig.WORKFLOW_PLANNER_AGENT)
+    private WorkflowPlannerAgent workflowPlannerAgent;
 
     @Test
     void contextLoads() {
@@ -97,6 +132,38 @@ class InsuranceAgentApplicationTests {
         assertThat(productAnalysisAgent.reactAgent()).isNotNull();
         assertThat(productAnalysisAgent.skillsAgentHook()).isSameAs(productAnalysisSkillsAgentHook);
         assertThat(productAnalysisAgent.skillsAgentHook().getSkillCount()).isEqualTo(2);
+    }
+
+    @Test
+    void knowledgeQaAgentUsesOnlyKnowledgeSkillsAndTools() {
+        assertThat(knowledgeQaSkillRegistry.size()).isEqualTo(1);
+        assertThat(knowledgeQaSkillRegistry.contains("insurance-business-qa")).isTrue();
+        assertThat(knowledgeQaSkillRegistry.listAll())
+                .extracting(skill -> skill.getSkillPath().replace('\\', '/'))
+                .allMatch(path -> path.contains("skills/knowledge-qa"));
+        assertThat(knowledgeQaSkillsAgentHook.getSkillRegistry()).isSameAs(knowledgeQaSkillRegistry);
+        assertThat(knowledgeQaAgent.name()).isEqualTo(KnowledgeQaAgent.AGENT_NAME);
+        assertThat(knowledgeQaAgent.skillsAgentHook()).isSameAs(knowledgeQaSkillsAgentHook);
+        assertThat(knowledgeQaToolCallbacks).singleElement().satisfies(callback ->
+                assertThat(callback.getToolDefinition().name()).isEqualTo(InsuranceKnowledgeTool.TOOL_NAME));
+    }
+
+    @Test
+    void insuranceKnowledgeToolReturnsMockKnowledgeWithSource() {
+        KnowledgeQueryResult result = insuranceKnowledgeTool.search("犹豫期是什么", null, 3);
+
+        assertThat(result.mockData()).isTrue();
+        assertThat(result.articles()).singleElement().satisfies(article -> {
+            assertThat(article.articleId()).isEqualTo("K-001");
+            assertThat(article.source()).isNotBlank();
+        });
+    }
+
+    @Test
+    void mainWorkflowGraphIsAssembledWithSpringAiAlibabaGraph() {
+        assertThat(mainWorkflowGraph).isNotNull();
+        assertThat(mainWorkflowGraph.stateGraph.getName()).isEqualTo("main-workflow-v1");
+        assertThat(workflowPlannerAgent.reactAgent().name()).isEqualTo(WorkflowPlannerAgent.AGENT_NAME);
     }
 
     @Test
@@ -197,6 +264,21 @@ class InsuranceAgentApplicationTests {
     }
 
     @Test
+    void knowledgeQaChatApiRejectsBlankMessage() throws Exception {
+        mockMvc.perform(post("/api/v1/knowledge-qa-agent/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": " ",
+                                  "conversationId": "knowledge-test-001"
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON-400"));
+    }
+
+    @Test
     void aiModelStatusApiReturnsMaskedModelConfiguration() throws Exception {
         mockMvc.perform(get("/api/v1/ai/model/status")
                         .header("X-Trace-Id", "test-trace-002"))
@@ -264,6 +346,85 @@ class InsuranceAgentApplicationTests {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.code").value("COMMON-400"))
                 .andExpect(jsonPath("$.message").value("maxMemories: maxMemories must be less than or equal to 200"));
+    }
+
+    @Test
+    void mainWorkflowApiReturnsNoOpResponseByDefault() throws Exception {
+        mockMvc.perform(post("/api/v1/workflows/main/runs")
+                        .header("X-Trace-Id", "test-trace-workflow-001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": "请分析 PA-001",
+                                  "conversationId": "workflow-test-001"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Trace-Id", "test-trace-workflow-001"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.workflowEnabled").value(false))
+                .andExpect(jsonPath("$.data.workflowCode").value("main-workflow-v1"))
+                .andExpect(jsonPath("$.data.conversationId").value("workflow-test-001"))
+                .andExpect(jsonPath("$.data.originalQuestion").value("请分析 PA-001"))
+                .andExpect(jsonPath("$.data.status").value("DISABLED"));
+    }
+
+    @Test
+    void mainWorkflowApiRejectsBlankConversationId() throws Exception {
+        mockMvc.perform(post("/api/v1/workflows/main/runs")
+                        .header("X-Trace-Id", "test-trace-workflow-002")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "message": "请分析 PA-001",
+                                  "conversationId": " "
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON-400"))
+                .andExpect(jsonPath("$.message").value("conversationId: conversationId must not be blank"));
+    }
+
+    @Test
+    void productRecallApiReturnsMockCandidates() throws Exception {
+        mockMvc.perform(post("/api/v1/products/recall")
+                        .header("X-Trace-Id", "test-trace-recall-001")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "query": "我想找一款重大疾病保险",
+                                  "conversationId": "recall-test-001",
+                                  "topK": 2,
+                                  "filters": {
+                                    "channel": "mobile-banking"
+                                  }
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Trace-Id", "test-trace-recall-001"))
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.mockData").value(true))
+                .andExpect(jsonPath("$.data.topK").value(2))
+                .andExpect(jsonPath("$.data.candidates.length()").value(2))
+                .andExpect(jsonPath("$.data.candidates[0].productCode").value("PA-002"));
+    }
+
+    @Test
+    void productRecallApiRejectsTopKAboveLimit() throws Exception {
+        mockMvc.perform(post("/api/v1/products/recall")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "query": "养老保险",
+                                  "conversationId": "recall-test-002",
+                                  "topK": 11
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON-400"))
+                .andExpect(jsonPath("$.message").value("topK: topK must be less than or equal to 10"));
     }
 
     @Test
@@ -373,13 +534,22 @@ class InsuranceAgentApplicationTests {
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.memoryEnabled").exists())
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.memoryMessageCount").exists())
                 .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.outputFormatValid").exists())
-                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.missingSections").exists());
+                .andExpect(jsonPath("$.components.schemas.ProductAnalysisChatResponse.properties.missingSections").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowRequest").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.workflowInstanceId").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.workflowStepIds").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.alignedQuestion").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.intent").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.plan").exists())
+                .andExpect(jsonPath("$.components.schemas.WorkflowPlan").exists())
+                .andExpect(jsonPath("$.components.schemas.WorkflowPlanTask").exists());
     }
 
     @Test
     void memoryWorkflowMigrationUsesSpringAiChatMemoryRepositoryShape() throws Exception {
         String migration = readClasspathResource("db/migration/V1__create_memory_workflow_tables.sql");
         String longTermMemoryMigration = readClasspathResource("db/migration/V2__create_long_term_memory_table.sql");
+        String mainWorkflowMigration = readClasspathResource("db/migration/V3__insert_main_workflow_definition.sql");
 
         assertThat(ChatMemory.CONVERSATION_ID).isEqualTo("chat_memory_conversation_id");
         assertThat(migration)
@@ -397,6 +567,13 @@ class InsuranceAgentApplicationTests {
                 .contains("importance_score")
                 .contains("archived")
                 .contains("AI 长期记忆表");
+        assertThat(mainWorkflowMigration)
+                .contains("main-workflow-v1")
+                .contains("context-alignment")
+                .contains("intent-recognition")
+                .contains("planner-agent")
+                .doesNotContain("context-loader")
+                .doesNotContain("memory-loader");
     }
 
     private String readClasspathResource(String location) throws Exception {

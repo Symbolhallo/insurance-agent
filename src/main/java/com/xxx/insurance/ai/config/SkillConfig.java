@@ -31,6 +31,10 @@ public class SkillConfig {
 
     public static final String PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK = "productAnalysisSkillsAgentHook";
 
+    public static final String KNOWLEDGE_QA_SKILL_REGISTRY = "knowledgeQaSkillRegistry";
+
+    public static final String KNOWLEDGE_QA_SKILLS_AGENT_HOOK = "knowledgeQaSkillsAgentHook";
+
     /**
      * ProductAnalysisAgent 专属 Skill 根路径。
      *
@@ -40,6 +44,8 @@ public class SkillConfig {
      * limited-product-analysis 与 batch-product-analysis。</p>
      */
     private static final String PRODUCT_ANALYSIS_SKILL_CLASSPATH = "skills/product-analysis";
+
+    private static final String KNOWLEDGE_QA_SKILL_CLASSPATH = "skills/knowledge-qa";
 
     /**
      * 创建产品分析智能体专属 SkillRegistry。
@@ -74,6 +80,31 @@ public class SkillConfig {
     @Bean(PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK)
     public SkillsAgentHook productAnalysisSkillsAgentHook(
             @Qualifier(PRODUCT_ANALYSIS_SKILL_REGISTRY) SkillRegistry skillRegistry) {
+        return SkillsAgentHook.builder()
+                .skillRegistry(skillRegistry)
+                .autoReload(false)
+                .build();
+    }
+
+    /**
+     * 创建知识问答智能体专属 SkillRegistry。
+     *
+     * <p>知识 Skill 使用独立 classpath 根目录，避免 ProductAnalysisAgent 和
+     * KnowledgeQAAgent 相互加载对方的领域规则与工具声明。</p>
+     */
+    @Bean(KNOWLEDGE_QA_SKILL_REGISTRY)
+    public SkillRegistry knowledgeQaSkillRegistry() {
+        return ClasspathSkillRegistry.builder()
+                .classpathPath(KNOWLEDGE_QA_SKILL_CLASSPATH)
+                .build();
+    }
+
+    /**
+     * 将知识问答 SkillRegistry 接入 KnowledgeQAAgent 的 ReactAgent 生命周期。
+     */
+    @Bean(KNOWLEDGE_QA_SKILLS_AGENT_HOOK)
+    public SkillsAgentHook knowledgeQaSkillsAgentHook(
+            @Qualifier(KNOWLEDGE_QA_SKILL_REGISTRY) SkillRegistry skillRegistry) {
         return SkillsAgentHook.builder()
                 .skillRegistry(skillRegistry)
                 .autoReload(false)

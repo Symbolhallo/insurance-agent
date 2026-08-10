@@ -40,6 +40,12 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase2-Task8：会话主表、调用流水、长期记忆写入侧迁移为 MyBatis Mapper
 - Phase2-Task9：Spring AI ChatMemoryRepository 适配层迁移为 MyBatis Mapper
 - Phase2-Task10：调用模型生成 Conversation Summary 并保存到本地数据库
+- Phase2-Task11：Spring AI Alibaba Graph 主工作流 v1 骨架
+- Phase2-Task12：Context Alignment 上下文对齐与 Planner Agent v0
+- Phase2-Task13：OceanBase Graph Checkpoint Saver 与状态恢复
+- Phase2-Task14：上下文对齐召回判断、Mock 产品召回与召回审计
+- Phase2-Task15：产品实体前置解析、会话级产品确认与 Graph Checkpoint 暂停恢复
+- Phase2-Task16：保险业务知识问答 Agent 与双意图单任务路由
 
 ## 架构边界
 
@@ -55,7 +61,8 @@ com.xxx.insurance
 │   ├── model
 │   ├── service
 │   ├── skill
-│   └── tool
+│   ├── tool
+│   └── workflow
 ├── product
 │   ├── agent
 │   ├── config
@@ -164,6 +171,15 @@ curl -X POST http://localhost:8080/api/v1/ai/memory/conversations/local-test-001
   -d '{"maxMemories":100}'
 ```
 
+运行主工作流 Main Graph v1：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/workflows/main/runs \
+  -H 'X-Trace-Id: local-workflow-001' \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"鑫享人生收益怎么样？","conversationId":"local-test-001"}'
+```
+
 当前记忆查询侧使用 MyBatis Mapper 实现；会话主表、调用流水、长期记忆写入侧也已迁移为 MyBatis Mapper。
 Spring AI `ChatMemoryRepository` 适配层同样已迁移为 MyBatis Mapper，并保留 `saveAll` 覆盖当前窗口消息列表的语义。
 
@@ -236,6 +252,12 @@ ai_long_term_memory
 
 会话摘要通过手动接口触发，读取 `ai_long_term_memory` 历史消息，调用全局 `ChatModel` 生成结构化摘要，并写入 `ai_conversation_summary`。
 
+当前 Workflow 已接入 Main Graph v1：通过 Spring AI Alibaba Graph 定义 `START -> resolve-product-reference -> (retrieve-product-candidates -> human-confirm-product) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> END`。
+
+`resolve-product-reference` 只读取当前 `conversationId` 已确认产品并识别本轮产品线索。首次具体产品、模糊产品名和无法映射的产品追问进入 Mock 候选召回，并在 `human-confirm-product` 前持久化中断；确认接口把标准产品写入 State 后从 OceanBase Checkpoint 恢复。纯条件筛选或唯一映射到当前会话已确认产品的追问直接进入 `context-alignment`。上下文对齐随后读取历史记忆、判断话题延续/切换并完成五步问题改写。意图节点可拆分 `PRODUCT_ANALYSIS` 与 `KNOWLEDGE_QA`，`planner-agent` 生成一到两个受控任务，`dag-executor` 按依赖串行、并行或混合执行，并在部分失败时保留可用结果。
+
+Workflow 调用子智能体时，模型使用 Planner 拆分后的任务指令；子智能体并行阶段只写 `ai_agent_invocation` 审计，Summary 完成后由 Main Workflow 向 `ai_chat_memory` 和 `ai_long_term_memory` 一次性写入用户原话与最终回答，调用流水同时关联 `workflow_instance_id` 与 `workflow_step_id`。
+
 启用本地数据库：
 
 ```text
@@ -250,6 +272,13 @@ DB_PASSWORD=你的本地数据库密码
 ```text
 src/main/resources/db/migration/V1__create_memory_workflow_tables.sql
 src/main/resources/db/migration/V2__create_long_term_memory_table.sql
+src/main/resources/db/migration/V3__insert_main_workflow_definition.sql
+src/main/resources/db/migration/V4__create_graph_checkpoint_tables.sql
+src/main/resources/db/migration/V5__add_product_recall_nodes.sql
+src/main/resources/db/migration/V6__move_product_recall_decision_to_context_alignment.sql
+src/main/resources/db/migration/V7__create_conversation_confirmed_product_and_human_confirm_workflow.sql
+src/main/resources/db/migration/V8__add_knowledge_qa_agent_to_main_workflow.sql
+src/main/resources/db/migration/V9__add_dynamic_dag_executor.sql
 ```
 
 你只需要手动创建 `insurance_agent` 数据库，业务表由 Flyway 自动创建。

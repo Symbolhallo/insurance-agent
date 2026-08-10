@@ -15,6 +15,11 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class OpenApiConfig {
 
+    /**
+     * 创建保险智能体 OpenAPI 元数据，供 springdoc 生成 Swagger UI。
+     *
+     * @return 应用接口标题、说明和版本配置
+     */
     @Bean
     public OpenAPI insuranceAgentOpenAPI() {
         return new OpenAPI()
