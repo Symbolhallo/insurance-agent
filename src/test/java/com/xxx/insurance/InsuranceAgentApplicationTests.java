@@ -23,7 +23,11 @@ import com.xxx.insurance.knowledge.model.KnowledgeQueryResult;
 import com.xxx.insurance.knowledge.tool.InsuranceKnowledgeTool;
 import com.xxx.insurance.ai.workflow.config.CustomerQueryAgentConfig;
 import com.xxx.insurance.asset.agent.AssetQueryAgent;
+import com.xxx.insurance.asset.model.AssetQueryResult;
+import com.xxx.insurance.asset.tool.AssetQueryTool;
 import com.xxx.insurance.policy.agent.PolicyQueryAgent;
+import com.xxx.insurance.policy.model.PolicyQueryResult;
+import com.xxx.insurance.policy.tool.PolicyQueryTool;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -109,6 +113,9 @@ class InsuranceAgentApplicationTests {
     private ToolCallback[] policyQueryToolCallbacks;
 
     @Autowired
+    private PolicyQueryTool policyQueryTool;
+
+    @Autowired
     @Qualifier(SkillConfig.ASSET_QUERY_SKILL_REGISTRY)
     private SkillRegistry assetQuerySkillRegistry;
 
@@ -122,6 +129,9 @@ class InsuranceAgentApplicationTests {
     @Autowired
     @Qualifier(CustomerQueryAgentConfig.ASSET_QUERY_TOOL_CALLBACKS)
     private ToolCallback[] assetQueryToolCallbacks;
+
+    @Autowired
+    private AssetQueryTool assetQueryTool;
 
     @Autowired
     private MockMvc mockMvc;
@@ -191,40 +201,74 @@ class InsuranceAgentApplicationTests {
     }
 
     @Test
-    void customerQueryAgentsExposeIsolatedSkillAndToolExtensionPoints() {
+    void customerQueryAgentsExposeIsolatedSkillsAndSingleDomainTools() {
         assertThat(policyQuerySkillRegistry).isNotSameAs(assetQuerySkillRegistry);
-        assertThat(policyQuerySkillRegistry.contains("policy-query-scaffold")).isTrue();
+        assertThat(policyQuerySkillRegistry.contains("customer-policy-query")).isTrue();
         assertThat(policyQuerySkillRegistry.listAll())
                 .extracting(skill -> skill.getSkillPath().replace('\\', '/'))
                 .allMatch(path -> path.contains("skills/policy-query"));
-        assertThat(assetQuerySkillRegistry.contains("asset-query-scaffold")).isTrue();
+        assertThat(assetQuerySkillRegistry.contains("customer-asset-query")).isTrue();
         assertThat(assetQuerySkillRegistry.listAll())
                 .extracting(skill -> skill.getSkillPath().replace('\\', '/'))
                 .allMatch(path -> path.contains("skills/asset-query"));
 
         assertThat(policyQueryAgent.reactAgent().name()).isEqualTo(PolicyQueryAgent.AGENT_NAME);
         assertThat(policyQueryAgent.skillsAgentHook()).isSameAs(policyQuerySkillsAgentHook);
-        assertThat(policyQueryAgent.toolCallbacks()).isEmpty();
-        assertThat(policyQueryToolCallbacks).isEmpty();
+        assertThat(policyQueryAgent.toolCallbacks()).singleElement().satisfies(callback ->
+                assertThat(callback.getToolDefinition().name()).isEqualTo(PolicyQueryTool.TOOL_NAME));
+        assertThat(policyQueryToolCallbacks).singleElement().satisfies(callback ->
+                assertThat(callback.getToolDefinition().name()).isEqualTo(PolicyQueryTool.TOOL_NAME));
 
         assertThat(assetQueryAgent.reactAgent().name()).isEqualTo(AssetQueryAgent.AGENT_NAME);
         assertThat(assetQueryAgent.skillsAgentHook()).isSameAs(assetQuerySkillsAgentHook);
-        assertThat(assetQueryAgent.toolCallbacks()).isEmpty();
-        assertThat(assetQueryToolCallbacks).isEmpty();
+        assertThat(assetQueryAgent.toolCallbacks()).singleElement().satisfies(callback ->
+                assertThat(callback.getToolDefinition().name()).isEqualTo(AssetQueryTool.TOOL_NAME));
+        assertThat(assetQueryToolCallbacks).singleElement().satisfies(callback ->
+                assertThat(callback.getToolDefinition().name()).isEqualTo(AssetQueryTool.TOOL_NAME));
     }
 
     @Test
-    void customerQueryAgentsReturnExplicitMockResultsWithoutInvokingModel() {
-        assertThat(policyQueryAgent.query("查询我的有效保单", "customer-query-test-001"))
-                .satisfies(result -> {
-                    assertThat(result.modelInvoked()).isFalse();
-                    assertThat(result.answer()).contains("保单查询 Mock").contains("尚未接入");
+    void customerQueryToolsReturnDeterministicMaskedMockData() {
+        PolicyQueryResult policies = policyQueryTool.queryPolicies("MOCK-CUSTOMER-001", "IN_FORCE");
+        AssetQueryResult assets = assetQueryTool.queryAssets("MOCK-CUSTOMER-001", null);
+
+        assertThat(policies.mockData()).isTrue();
+        assertThat(policies.policies()).hasSize(2)
+                .allSatisfy(policy -> {
+                    assertThat(policy.policyNumberMasked()).contains("****");
+                    assertThat(policy.source()).isEqualTo("MockPolicyQueryService");
                 });
-        assertThat(assetQueryAgent.query("查询我的资产余额", "customer-query-test-001"))
-                .satisfies(result -> {
-                    assertThat(result.modelInvoked()).isFalse();
-                    assertThat(result.answer()).contains("资产查询 Mock").contains("尚未接入");
+        assertThat(assets.mockData()).isTrue();
+        assertThat(assets.positions()).hasSize(3)
+                .allSatisfy(position -> {
+                    assertThat(position.accountNumberMasked()).contains("****");
+                    assertThat(position.source()).isEqualTo("MockAssetQueryService");
                 });
+    }
+
+    @Test
+    void customerQueryToolCallbacksExecuteWithModelJsonArguments() {
+        String policyResult = policyQueryToolCallbacks[0].call("""
+                {
+                  "customerId": "MOCK-CUSTOMER-001",
+                  "policyStatus": "IN_FORCE"
+                }
+                """);
+        String assetResult = assetQueryToolCallbacks[0].call("""
+                {
+                  "customerId": "MOCK-CUSTOMER-001",
+                  "assetType": "DEPOSIT"
+                }
+                """);
+
+        assertThat(policyResult)
+                .contains("P2024****0018")
+                .contains("MockPolicyQueryService")
+                .contains("\"mockData\":true");
+        assertThat(assetResult)
+                .contains("6222 **** **** 0188")
+                .contains("MockAssetQueryService")
+                .contains("\"mockData\":true");
     }
 
     @Test
@@ -705,13 +749,19 @@ class InsuranceAgentApplicationTests {
     }
 
     @Test
-    void reviewedAgentStreamMigrationDocumentsAuditBeforeDelivery() throws Exception {
-        String migration = readClasspathResource("db/migration/V13__add_reviewed_agent_stream.sql");
+    void liveAgentStreamMigrationOverridesHistoricalBufferedDeliveryDefinition() throws Exception {
+        String historicalMigration = readClasspathResource("db/migration/V13__add_reviewed_agent_stream.sql");
+        String liveStreamMigration = readClasspathResource("db/migration/V15__enable_live_agent_token_stream.sql");
 
-        assertThat(migration)
+        assertThat(historicalMigration)
                 .contains("review、agent_stream、complete")
                 .contains("未经审核的模型 Token 不外发")
                 .contains("version = 10");
+        assertThat(liveStreamMigration)
+                .contains("子智能体与 Summary 实时发布模型增量内容")
+                .contains("完整 Summary 生成后执行最终输出审核")
+                .doesNotContain("create table")
+                .doesNotContain("alter table");
     }
 
     private String readClasspathResource(String location) throws Exception {

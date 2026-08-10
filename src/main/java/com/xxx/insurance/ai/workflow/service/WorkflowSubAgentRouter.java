@@ -49,8 +49,10 @@ public class WorkflowSubAgentRouter {
                     new ProductAnalysisChatRequest(query, taskContext.conversationId()), executionContext));
             case KnowledgeQaAgent.AGENT_NAME -> from(knowledgeQaAgent.chat(
                     new KnowledgeQaChatRequest(query, taskContext.conversationId()), executionContext));
-            case PolicyQueryAgent.AGENT_NAME -> policyQueryAgent.query(query, taskContext.conversationId());
-            case AssetQueryAgent.AGENT_NAME -> assetQueryAgent.query(query, taskContext.conversationId());
+            case PolicyQueryAgent.AGENT_NAME -> policyQueryAgent.query(
+                    query, taskContext.conversationId(), executionContext);
+            case AssetQueryAgent.AGENT_NAME -> assetQueryAgent.query(
+                    query, taskContext.conversationId(), executionContext);
             default -> throw new IllegalArgumentException(
                     "Unsupported workflow agent type: " + taskContext.task().agentType());
         };

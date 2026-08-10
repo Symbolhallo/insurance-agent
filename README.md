@@ -260,7 +260,7 @@ ai_long_term_memory
 
 当前 Workflow 已接入 Main Graph v1：通过 Spring AI Alibaba Graph 定义 `START -> resolve-product-reference -> (retrieve-product-candidates -> human-confirm-product) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> output-review -> END`。
 
-`resolve-product-reference` 只读取当前 `conversationId` 已确认产品并识别本轮产品线索。首次具体产品、模糊产品名和无法映射的产品追问进入 Mock 候选召回，并在 `human-confirm-product` 前持久化中断；确认接口把标准产品写入 State 后从 OceanBase Checkpoint 恢复。纯条件筛选或唯一映射到当前会话已确认产品的追问直接进入 `context-alignment`。上下文对齐随后读取历史记忆、判断话题延续/切换并完成五步问题改写。意图节点可拆分产品分析、知识问答、保单查询和资产查询，Planner 生成带 `dependsOn` 的受控任务图。`dag-executor` 按单个任务完成事件立即释放后继，不等待无关并行任务；每个任务使用独立 Spring AI Alibaba 子图和 OceanBase Checkpoint thread，恢复时不会重复执行已成功任务。`summary` 对单任务结果直接透传，对多个成功、失败和跳过结果调用独立 ReactAgent 汇总；`output-review` 再通过 `OutputReviewGateway.review(...)` 审核唯一候选答案。保单和资产查询当前为明确 Mock 边界，待行内微应用接入。
+`resolve-product-reference` 只读取当前 `conversationId` 已确认产品并识别本轮产品线索。首次具体产品、模糊产品名和无法映射的产品追问进入 Mock 候选召回，并在 `human-confirm-product` 前持久化中断；确认接口把标准产品写入 State 后从 OceanBase Checkpoint 恢复。纯条件筛选或唯一映射到当前会话已确认产品的追问直接进入 `context-alignment`。上下文对齐随后读取历史记忆、判断话题延续/切换并完成五步问题改写。意图节点可拆分产品分析、知识问答、保单查询和资产查询，Planner 生成带 `dependsOn` 的受控任务图。`dag-executor` 按单个任务完成事件立即释放后继，不等待无关并行任务；每个任务使用独立 Spring AI Alibaba 子图和 OceanBase Checkpoint thread，恢复时不会重复执行已成功任务。四个领域 Agent 均真实调用全局 ChatModel，并且只能通过各自隔离 Tool 获取 Mock 业务事实。`summary` 对单任务结果直接透传，对多个成功、失败和跳过结果调用独立 ReactAgent 汇总；`output-review` 再通过 `OutputReviewGateway.review(...)` 审核唯一候选答案。
 
 Workflow 调用子智能体时，模型使用 Planner 拆分后的任务指令；子智能体并行阶段只写 `ai_agent_invocation` 审计，Summary 完成后由 Main Workflow 向 `ai_chat_memory` 和 `ai_long_term_memory` 一次性写入用户原话与最终回答，调用流水同时关联 `workflow_instance_id` 与 `workflow_step_id`。
 
@@ -288,7 +288,11 @@ src/main/resources/db/migration/V7__create_conversation_confirmed_product_and_hu
 src/main/resources/db/migration/V8__add_knowledge_qa_agent_to_main_workflow.sql
 src/main/resources/db/migration/V9__add_dynamic_dag_executor.sql
 src/main/resources/db/migration/V10__add_output_review_node.sql
+src/main/resources/db/migration/V11__add_workflow_summary_agent.sql
+src/main/resources/db/migration/V12__add_workflow_sse_events.sql
+src/main/resources/db/migration/V13__add_reviewed_agent_stream.sql
 src/main/resources/db/migration/V14__support_workflow_task_graph_threads.sql
+src/main/resources/db/migration/V15__enable_live_agent_token_stream.sql
 ```
 
 你只需要手动创建 `insurance_agent` 数据库，业务表由 Flyway 自动创建。

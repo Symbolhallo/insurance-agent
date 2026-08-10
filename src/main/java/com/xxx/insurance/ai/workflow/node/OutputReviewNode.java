@@ -9,7 +9,6 @@ import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
 import com.xxx.insurance.ai.workflow.model.OutputReviewRequest;
 import com.xxx.insurance.ai.workflow.model.OutputReviewResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
-import com.xxx.insurance.ai.workflow.service.ReviewedAnswerStreamPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -32,13 +31,9 @@ public class OutputReviewNode implements NodeAction {
 
     private final OutputReviewGateway outputReviewGateway;
 
-    private final ReviewedAnswerStreamPublisher reviewedAnswerStreamPublisher;
-
-    /** 创建输出审核节点并注入行内 Gateway 和审核后流式正文发布器。 */
-    public OutputReviewNode(OutputReviewGateway outputReviewGateway,
-                            ReviewedAnswerStreamPublisher reviewedAnswerStreamPublisher) {
+    /** 创建输出审核节点并注入行内 Gateway。 */
+    public OutputReviewNode(OutputReviewGateway outputReviewGateway) {
         this.outputReviewGateway = outputReviewGateway;
-        this.reviewedAnswerStreamPublisher = reviewedAnswerStreamPublisher;
     }
 
     /**
@@ -71,11 +66,6 @@ public class OutputReviewNode implements NodeAction {
         // 主工作流链路 12：审核 Summary 的唯一候选答案；只有 publishableAnswer 能写入最终输出。
         OutputReviewResult result = outputReviewGateway.review(request);
         validateResult(reviewRequestId, result);
-        boolean tokenStreamingEnabled = state
-                .value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class)
-                .orElse(false);
-        reviewedAnswerStreamPublisher.publish(
-                workflowInstanceId, context.conversationId(), tokenStreamingEnabled, result);
         log.info("[Workflow] node=output-review action=complete workflowInstanceId={} reviewRequestId={} decision={}",
                 workflowInstanceId, reviewRequestId, result.decision());
         return Map.of(

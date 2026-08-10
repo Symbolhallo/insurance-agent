@@ -28,12 +28,12 @@ flowchart TD
 | 主智能体 | Main `StateGraph` + Facade | 请求生命周期、路由、并行、HITL、恢复 | 不直接查询客户数据 |
 | 产品分析 | `ProductAnalysisAgent`/ReactAgent | 条款、责任、客群、风险与产品对比 | 只加载 `skills/product-analysis` 和产品 Tool |
 | 知识问答 | ReactAgent | 解释保险业务知识和引用召回材料 | 只读知识召回接口，不访问客户数据 |
-| 保单查询 | 受限 ReactAgent 或 Java 节点 | 查询当前客户保单并解释字段 | ToolContext 注入 customerId，服务端再次鉴权 |
-| 资产查询 | 受限 ReactAgent 或 Java 节点 | 查询资产摘要 | 与保单域隔离 Tool 和数据权限 |
+| 保单查询 | 受限 ReactAgent | 调用只读保单 Tool 并解释脱敏字段 | 当前固定 Mock 客户；生产由 ToolContext 注入 customerId 并再次鉴权 |
+| 资产查询 | 受限 ReactAgent | 调用只读资产 Tool 并说明结构、风险和流动性 | 当前固定 Mock 客户；与保单域隔离 Tool 和数据权限 |
 | 总结 Agent | ReactAgent/结构化 LLM 节点 | 汇总已成功的结果和缺失项 | 不重新调用业务 Tool，不补造失败结果 |
 | 输出审核 | Java 规则 + 结构化 LLM 节点 | 隐私、承诺收益、事实来源和格式检查 | 可阻断发布；保留审核记录 |
 
-保单/资产查询若只是精确 API 调用，不应为了“看起来像 Agent”引入 ReAct 循环。未来只有在需要多个只读 Tool 自主组合时再升级为 ReactAgent。
+当前技术验证使用 ReactAgent + 单个只读 Mock Tool，目的是跑通四 Agent 的统一编排、流式输出与审计合同。生产接入若仍是单次精确 API 查询，应重新评估是否降为确定性 Java 节点；只有需要多个只读 Tool 自主组合时才保留 ReAct 循环。
 
 ## 3. Graph 节点设计
 
@@ -160,7 +160,7 @@ ChatMemory 与长期历史保持当前事务一致性；Checkpoint 不替代长�
 
 ## 8. 统一 SSE 协议
 
-事件类型：`start`、`stage`、`agent_start`、`agent_stream`、`tool_start`、`tool_result`、`human_confirm`、`review`、`summary`、`complete`、`error`。当前保险项目的 `agent_stream` 采用 `BUFFERED_UNTIL_REVIEW`：内部 ReactAgent 使用流式 API，但只发布输出审核后的正文。
+事件类型：`start`、`stage`、`agent_start`、`agent_stream`、`tool_start`、`tool_result`、`human_confirm`、`review`、`summary`、`complete`、`error`。当前保险项目的 `agent_stream` 采用 `LIVE_MODEL_STREAM`：子智能体和 Summary 的 `AGENT_MODEL_STREAMING` 文本实时发布，并通过 `streamId + taskId` 隔离并行流。Summary 完成后再执行输出审核，因此流式正文属于临时展示，客户端必须以 `complete.finalAnswer` 覆盖为最终结果。
 
 ```java
 import java.time.Instant;
@@ -224,7 +224,7 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 - OceanBase `BaseCheckpointSaver`、V4 数据表、状态序列化、版本链和保留策略。
 - 同步 Swagger API 验证。
 - 阶段级 SSE 协议、OceanBase 七天事件重放和 `Last-Event-ID` 断线重连。
-- ReactAgent 流式执行与审核后 `agent_stream`；BLOCK 决策不外发原始 Token 或答案正文。
+- ReactAgent 逐块流式执行；子智能体和 Summary 无需前置审核，最终 Summary 生成完成后调用输出审核节点，`complete.finalAnswer` 是审核后的权威答案。
 - 产品实体前置解析、Mock 产品召回和召回审计记录。
 - `interruptBefore` Human Confirm、会话级确认产品表、Checkpoint 更新和恢复 API。
 - KnowledgeQAAgent、隔离 Skill/Tool、PRODUCT_ANALYSIS/KNOWLEDGE_QA 双意图单任务路由。

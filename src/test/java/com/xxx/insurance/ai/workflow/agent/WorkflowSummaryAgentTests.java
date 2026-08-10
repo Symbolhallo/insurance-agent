@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.agent;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
 import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
@@ -59,16 +60,22 @@ class WorkflowSummaryAgentTests {
     void usesStreamingExecutorForMultiTaskSseRun() throws Exception {
         ReactAgent reactAgent = mock(ReactAgent.class);
         ReactAgentStreamingExecutor streamingExecutor = mock(ReactAgentStreamingExecutor.class);
-        when(streamingExecutor.execute(eq(reactAgent), anyString()))
+        when(streamingExecutor.execute(
+                eq(reactAgent), anyString(), org.mockito.ArgumentMatchers.any(AgentTokenStreamContext.class)))
                 .thenReturn(AssistantMessage.builder().content("流式执行后的完整汇总").build());
         WorkflowSummaryAgent agent = new WorkflowSummaryAgent(reactAgent, streamingExecutor);
 
         WorkflowSummaryResult result = agent.summarize(dagResult(List.of(
                 successTask("task-1", 1, "产品分析回答"),
-                successTask("task-2", 2, "知识问答回答"))), true);
+                successTask("task-2", 2, "知识问答回答"))), true,
+                "workflow-001", "conversation-001");
 
         assertThat(result.answer()).isEqualTo("流式执行后的完整汇总");
-        verify(streamingExecutor).execute(eq(reactAgent), anyString());
+        verify(streamingExecutor).execute(
+                eq(reactAgent), anyString(), org.mockito.ArgumentMatchers.argThat(context ->
+                        "workflow-001".equals(context.workflowInstanceId())
+                                && "conversation-001".equals(context.conversationId())
+                                && "SUMMARY".equals(context.phase())));
         verify(reactAgent, never()).call(anyString());
     }
 

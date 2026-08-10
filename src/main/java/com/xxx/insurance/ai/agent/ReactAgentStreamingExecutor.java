@@ -3,39 +3,83 @@ package com.xxx.insurance.ai.agent;
 import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.streaming.OutputType;
+import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Spring AI Alibaba ReactAgent 流式执行适配器。
  *
- * <p>该组件消费完整 {@link ReactAgent#stream(String)}，并从最后 Graph State 提取最终
- * AssistantMessage。原始模型 Token 不在这里外发，避免绕过主工作流输出审核。</p>
+ * <p>该组件消费完整 {@link ReactAgent#stream(String)}，将 AGENT_MODEL_STREAMING 的增量
+ * Message 实时交给 Token Sink，同时从最终 Graph State 提取完整 AssistantMessage。</p>
  */
 @Component
 public class ReactAgentStreamingExecutor {
 
+    private final AgentTokenStreamSink tokenStreamSink;
+
+    /** 创建流式执行器并注入与具体 SSE 实现解耦的 Token 发布端口。 */
+    public ReactAgentStreamingExecutor(AgentTokenStreamSink tokenStreamSink) {
+        this.tokenStreamSink = tokenStreamSink;
+    }
+
     /** 使用字符串输入执行 ReactAgent 流，并返回最终助手消息。 */
     public AssistantMessage execute(ReactAgent reactAgent, String input) throws Exception {
+        return execute(reactAgent, input, null);
+    }
+
+    /** 执行字符串输入，并在存在工作流上下文时实时发布模型增量内容。 */
+    public AssistantMessage execute(ReactAgent reactAgent,
+                                    String input,
+                                    AgentTokenStreamContext streamContext) throws Exception {
         AtomicReference<OverAllState> lastState = new AtomicReference<>();
+        StreamPublication publication = new StreamPublication(streamContext);
         reactAgent.stream(input)
-                .doOnNext(output -> rememberState(output, lastState))
+                .doOnNext(output -> handleOutput(output, lastState, publication))
                 .blockLast();
+        publication.complete();
         return validateFinalMessage(extractAssistantMessage(lastState.get()));
     }
 
     /** 使用历史消息列表执行 ReactAgent 流，并返回最终助手消息。 */
     public AssistantMessage execute(ReactAgent reactAgent, List<Message> input) throws Exception {
+        return execute(reactAgent, input, null);
+    }
+
+    /** 执行历史消息输入，并在存在工作流上下文时实时发布模型增量内容。 */
+    public AssistantMessage execute(ReactAgent reactAgent,
+                                    List<Message> input,
+                                    AgentTokenStreamContext streamContext) throws Exception {
         AtomicReference<OverAllState> lastState = new AtomicReference<>();
+        StreamPublication publication = new StreamPublication(streamContext);
         reactAgent.stream(input)
-                .doOnNext(output -> rememberState(output, lastState))
+                .doOnNext(output -> handleOutput(output, lastState, publication))
                 .blockLast();
+        publication.complete();
         return validateFinalMessage(extractAssistantMessage(lastState.get()));
+    }
+
+    /** 同时维护最终 State，并严格过滤可向前端发布的模型增量事件。 */
+    private void handleOutput(NodeOutput output,
+                              AtomicReference<OverAllState> lastState,
+                              StreamPublication publication) {
+        rememberState(output, lastState);
+        if (!(output instanceof StreamingOutput<?> streamingOutput)
+                || streamingOutput.getOutputType() != OutputType.AGENT_MODEL_STREAMING
+                || !(streamingOutput.message() instanceof AssistantMessage message)
+                || message.hasToolCalls()
+                || !StringUtils.hasText(message.getText())) {
+            return;
+        }
+        publication.publish(message.getText());
     }
 
     /** 保存每个 NodeOutput 携带的最新 State，最终 END State 包含完整消息列表。 */
@@ -70,5 +114,30 @@ public class ReactAgentStreamingExecutor {
             throw new IllegalStateException("ReactAgent streaming model call failed");
         }
         return message;
+    }
+
+    /** 保存单次模型调用的流编号和块序号，支持并行子智能体独立拼接。 */
+    private final class StreamPublication {
+
+        private final AgentTokenStreamContext context;
+        private final String streamId;
+        private final AtomicLong chunkIndex = new AtomicLong();
+
+        private StreamPublication(AgentTokenStreamContext context) {
+            this.context = context;
+            this.streamId = "stream-" + UUID.randomUUID().toString().replace("-", "");
+        }
+
+        private void publish(String content) {
+            if (context != null) {
+                tokenStreamSink.publishToken(context, streamId, chunkIndex.incrementAndGet(), content);
+            }
+        }
+
+        private void complete() {
+            if (context != null) {
+                tokenStreamSink.complete(context, streamId, chunkIndex.get());
+            }
+        }
     }
 }

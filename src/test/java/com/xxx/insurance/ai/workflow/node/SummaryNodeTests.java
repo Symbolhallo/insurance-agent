@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.workflow.agent.WorkflowSummaryAgent;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
+import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
 import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
@@ -18,6 +19,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class SummaryNodeTests {
 
@@ -26,8 +28,13 @@ class SummaryNodeTests {
         SummaryNode node = new SummaryNode(new WorkflowSummaryAgent(
                 mock(ReactAgent.class), mock(ReactAgentStreamingExecutor.class)));
 
+        AlignedWorkflowContext alignedContext = mock(AlignedWorkflowContext.class);
+        when(alignedContext.conversationId()).thenReturn("conversation-001");
         Map<String, Object> result = node.apply(new OverAllState(Map.of(
-                MainWorkflowStateKeys.DAG_EXECUTION_RESULT, singleTaskResult())));
+                MainWorkflowStateKeys.DAG_EXECUTION_RESULT, singleTaskResult(),
+                MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, false,
+                MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, "workflow-001",
+                MainWorkflowStateKeys.ALIGNED_CONTEXT, alignedContext)));
 
         assertThat(result.get(MainWorkflowStateKeys.SUMMARY_RESULT))
                 .isInstanceOfSatisfying(WorkflowSummaryResult.class, summary -> {

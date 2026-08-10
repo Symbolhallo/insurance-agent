@@ -3,15 +3,19 @@ package com.xxx.insurance.ai.workflow.config;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.config.SkillConfig;
+import com.xxx.insurance.ai.agent.AuditedReactAgentExecutor;
 import com.xxx.insurance.asset.agent.AssetQueryAgent;
+import com.xxx.insurance.asset.tool.AssetQueryTool;
 import com.xxx.insurance.policy.agent.PolicyQueryAgent;
+import com.xxx.insurance.policy.tool.PolicyQueryTool;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/** 配置保单与资产查询 Agent 的 Skill/Tool 可扩展骨架。 */
+/** 配置保单与资产查询 Agent 的隔离 Skill、Tool 和真实模型调用。 */
 @Configuration
 public class CustomerQueryAgentConfig {
 
@@ -20,24 +24,33 @@ public class CustomerQueryAgentConfig {
     public static final String ASSET_QUERY_REACT_AGENT = "assetQueryReactAgent";
     public static final String ASSET_QUERY_TOOL_CALLBACKS = "assetQueryToolCallbacks";
 
-    private static final String SCAFFOLD_INSTRUCTION = """
-            当前智能体仅完成工程注册骨架，尚未接入客户数据微应用，也不得生成、猜测或返回真实客户数据。
-            后续业务能力必须通过隔离 Skill 和受控 Tool 实现，并遵守客户身份、权限和审计要求。
+    private static final String POLICY_QUERY_INSTRUCTION = """
+            你是客户保单信息查询智能体。当前阶段只处理固定测试客户 MOCK-CUSTOMER-001。
+            回答前必须调用 customer_policy_query 获取脱敏 Mock 保单，不得依据模型记忆编造保单号、金额、状态或日期。
+            明确标注当前结果来自 Mock 数据；区分保单事实与一般性说明，不代替保险公司正式查询结果。
+            只能使用保单域 Skill 和 Tool，不得查询资产或推断客户其他隐私信息。
             """;
 
-    /** 创建保单域 Tool 注册入口；当前阶段不注册任何业务 Tool。 */
+    private static final String ASSET_QUERY_INSTRUCTION = """
+            你是客户资产信息查询智能体。当前阶段只处理固定测试客户 MOCK-CUSTOMER-001。
+            回答前必须调用 customer_asset_query 获取脱敏 Mock 资产，不得依据模型记忆编造账号、余额、市值或风险等级。
+            明确标注当前结果来自 Mock 数据；金额按 Tool 返回值展示，不承诺收益，不构成投资建议。
+            只能使用资产域 Skill 和 Tool，不得查询保单或推断客户其他隐私信息。
+            """;
+
+    /** 将保单查询 Tool 转换为仅供 PolicyQueryAgent 使用的 ToolCallback。 */
     @Bean(POLICY_QUERY_TOOL_CALLBACKS)
-    public ToolCallback[] policyQueryToolCallbacks() {
-        return new ToolCallback[0];
+    public ToolCallback[] policyQueryToolCallbacks(PolicyQueryTool policyQueryTool) {
+        return ToolCallbacks.from(policyQueryTool);
     }
 
-    /** 创建资产域 Tool 注册入口；当前阶段不注册任何业务 Tool。 */
+    /** 将资产查询 Tool 转换为仅供 AssetQueryAgent 使用的 ToolCallback。 */
     @Bean(ASSET_QUERY_TOOL_CALLBACKS)
-    public ToolCallback[] assetQueryToolCallbacks() {
-        return new ToolCallback[0];
+    public ToolCallback[] assetQueryToolCallbacks(AssetQueryTool assetQueryTool) {
+        return ToolCallbacks.from(assetQueryTool);
     }
 
-    /** 创建保单查询 ReactAgent 骨架，当前业务 query 方法不会调用该模型实例。 */
+    /** 创建保单查询 ReactAgent，模型通过 ReAct 循环调用保单 Mock Tool 后生成回答。 */
     @Bean(POLICY_QUERY_REACT_AGENT)
     public ReactAgent policyQueryReactAgent(
             ChatModel chatModel,
@@ -47,14 +60,14 @@ public class CustomerQueryAgentConfig {
                 .name(PolicyQueryAgent.AGENT_NAME)
                 .description(PolicyQueryAgent.AGENT_DESCRIPTION)
                 .model(chatModel)
-                .instruction(SCAFFOLD_INSTRUCTION)
+                .instruction(POLICY_QUERY_INSTRUCTION)
                 .hooks(skillsAgentHook)
                 .tools(toolCallbacks)
                 .enableLogging(true)
                 .build();
     }
 
-    /** 创建资产查询 ReactAgent 骨架，当前业务 query 方法不会调用该模型实例。 */
+    /** 创建资产查询 ReactAgent，模型通过 ReAct 循环调用资产 Mock Tool 后生成回答。 */
     @Bean(ASSET_QUERY_REACT_AGENT)
     public ReactAgent assetQueryReactAgent(
             ChatModel chatModel,
@@ -64,28 +77,30 @@ public class CustomerQueryAgentConfig {
                 .name(AssetQueryAgent.AGENT_NAME)
                 .description(AssetQueryAgent.AGENT_DESCRIPTION)
                 .model(chatModel)
-                .instruction(SCAFFOLD_INSTRUCTION)
+                .instruction(ASSET_QUERY_INSTRUCTION)
                 .hooks(skillsAgentHook)
                 .tools(toolCallbacks)
                 .enableLogging(true)
                 .build();
     }
 
-    /** 创建保单查询业务门面，并固定 Skill/Tool 注册快照。 */
+    /** 创建保单查询业务门面，并接入真实模型、逐 Token SSE 和调用审计。 */
     @Bean
     public PolicyQueryAgent policyQueryAgent(
             @Qualifier(POLICY_QUERY_REACT_AGENT) ReactAgent reactAgent,
             @Qualifier(SkillConfig.POLICY_QUERY_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
-            @Qualifier(POLICY_QUERY_TOOL_CALLBACKS) ToolCallback[] toolCallbacks) {
-        return new PolicyQueryAgent(reactAgent, skillsAgentHook, toolCallbacks);
+            @Qualifier(POLICY_QUERY_TOOL_CALLBACKS) ToolCallback[] toolCallbacks,
+            AuditedReactAgentExecutor agentExecutor) {
+        return new PolicyQueryAgent(reactAgent, skillsAgentHook, toolCallbacks, agentExecutor);
     }
 
-    /** 创建资产查询业务门面，并固定 Skill/Tool 注册快照。 */
+    /** 创建资产查询业务门面，并接入真实模型、逐 Token SSE 和调用审计。 */
     @Bean
     public AssetQueryAgent assetQueryAgent(
             @Qualifier(ASSET_QUERY_REACT_AGENT) ReactAgent reactAgent,
             @Qualifier(SkillConfig.ASSET_QUERY_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
-            @Qualifier(ASSET_QUERY_TOOL_CALLBACKS) ToolCallback[] toolCallbacks) {
-        return new AssetQueryAgent(reactAgent, skillsAgentHook, toolCallbacks);
+            @Qualifier(ASSET_QUERY_TOOL_CALLBACKS) ToolCallback[] toolCallbacks,
+            AuditedReactAgentExecutor agentExecutor) {
+        return new AssetQueryAgent(reactAgent, skillsAgentHook, toolCallbacks, agentExecutor);
     }
 }

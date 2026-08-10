@@ -3,6 +3,7 @@ package com.xxx.insurance.knowledge.agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
+import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
@@ -146,15 +147,31 @@ public class KnowledgeQaAgent {
                                             MemoryCallContext memoryContext,
                                             AgentExecutionContext executionContext) throws Exception {
         if (executionContext.tokenStreamingEnabled()) {
+            AgentTokenStreamContext streamContext = tokenStreamContext(
+                    request.conversationId(), executionContext);
             if (!memoryContext.enabled()) {
-                return streamingExecutor.execute(reactAgent, request.message());
+                return streamingExecutor.execute(reactAgent, request.message(), streamContext);
             }
-            return streamingExecutor.execute(reactAgent, memoryContext.requestMessages());
+            return streamingExecutor.execute(reactAgent, memoryContext.requestMessages(), streamContext);
         }
         if (!memoryContext.enabled()) {
             return reactAgent.call(request.message());
         }
         return reactAgent.call(memoryContext.requestMessages());
+    }
+
+    /** 将编排上下文收敛为前端可识别的知识 Agent Token 流标识。 */
+    private AgentTokenStreamContext tokenStreamContext(String conversationId,
+                                                       AgentExecutionContext executionContext) {
+        if (!StringUtils.hasText(executionContext.workflowInstanceId())) {
+            return null;
+        }
+        return new AgentTokenStreamContext(
+                executionContext.workflowInstanceId(),
+                conversationId,
+                executionContext.taskId(),
+                AGENT_NAME,
+                "SUB_AGENT");
     }
 
     /** 构建模型消息和持久化用户原话；DAG 子任务会显式禁用会话记忆。 */

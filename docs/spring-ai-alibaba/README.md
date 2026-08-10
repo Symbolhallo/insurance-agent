@@ -29,7 +29,7 @@
 - Skill 使用 `ClasspathSkillRegistry`，根目录隔离为 `skills/product-analysis`。
 - 主工作流已使用 `StateGraph`，当前为确定性串行 v1。
 - 记忆使用 Spring AI `MessageWindowChatMemory`、MyBatis 和本地 OceanBase/MySQL 模式表；尚未采用 Graph Checkpoint Saver。
-- 当前已接入 ReactAgent `stream()`、Spring MVC SSE、OceanBase 事件重放和 `Last-Event-ID` 重连；原始 Token 按金融审核边界缓冲，只有审核后的答案以 `agent_stream` 发布。
+- 当前已接入 ReactAgent `stream()`、Spring MVC SSE、OceanBase 事件重放和 `Last-Event-ID` 重连；`AGENT_MODEL_STREAMING` 文本以 `agent_stream` 实时发布，最终 Summary 完成后再进入输出审核，客户端以 `complete.finalAnswer` 作为权威结果。
 - 尚未实现并行子智能体、Human In The Loop、Graph Replay 和持久化恢复。
 
 ## 官网与项目版本差异
