@@ -32,6 +32,36 @@
 - `./gradlew test` 全量 117 项测试通过，`git diff --check` 通过。
 - 未执行 Git 提交或推送。
 
+## 2026-08-10：工程目录职责整理
+
+### 检查结论
+
+- `product`、`knowledge`、`policy`、`asset` 四个业务域的 Agent、Tool、Service 和 Model 分类合理。
+- `ai/memory`、`ai/retrieval`、`ai/workflow/checkpoint` 已形成清晰的基础设施边界，无需拆分。
+- `resources/skills/{agent-domain}` 已按子智能体隔离，Flyway、静态测试页面和环境配置位置合理。
+- 工作流 DTO 当前集中在 `ai/workflow/model`，数量虽多但都属于主图 State、API 或持久化合同；本次不做低收益的细粒度拆包。
+
+### 目录调整
+
+- 删除 Workflow 层的混合配置 `ai/workflow/config/CustomerQueryAgentConfig`。
+- 新增 `policy/config/PolicyQueryAgentConfig`，归属保单 ReactAgent、ToolCallback 和业务门面 Bean。
+- 新增 `asset/config/AssetQueryAgentConfig`，归属资产 ReactAgent、ToolCallback 和业务门面 Bean。
+- 将 `WorkflowPersistenceCleanupJob` 从 `ai/workflow/service` 移到 `ai/workflow/job`。
+- 测试目录同步生产代码包结构移动，并更新 Bean Qualifier 常量引用。
+
+### 兼容性
+
+- 保留原有 ReactAgent、ToolCallback 和业务 Agent Bean 名称。
+- 不改变 SkillRegistry、Graph Workflow、SSE、Checkpoint、数据库表或 REST API。
+- 本次仅调整源码归属和包结构，没有改变业务执行逻辑。
+
+### 验证结果
+
+- 旧包名引用扫描通过，未产生空目录。
+- `./gradlew test` 全量测试通过，四个领域 Agent Bean、Qualifier 和清理任务装配正常。
+- `git diff --check` 通过。
+- 未执行 Git 提交或推送。
+
 ## 2026-08-10：前置模型全链路流式输出与人工确认后流式恢复
 
 ### 变更目标

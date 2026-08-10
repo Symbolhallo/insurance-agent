@@ -1,6 +1,7 @@
-package com.xxx.insurance.ai.workflow.service;
+package com.xxx.insurance.ai.workflow.job;
 
 import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
+import com.xxx.insurance.ai.workflow.service.LocalDbWorkflowSseEventService;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;

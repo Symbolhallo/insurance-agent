@@ -21,7 +21,8 @@ import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
 import com.xxx.insurance.knowledge.config.KnowledgeQaAgentConfig;
 import com.xxx.insurance.knowledge.model.KnowledgeQueryResult;
 import com.xxx.insurance.knowledge.tool.InsuranceKnowledgeTool;
-import com.xxx.insurance.ai.workflow.config.CustomerQueryAgentConfig;
+import com.xxx.insurance.asset.config.AssetQueryAgentConfig;
+import com.xxx.insurance.policy.config.PolicyQueryAgentConfig;
 import com.xxx.insurance.asset.agent.AssetQueryAgent;
 import com.xxx.insurance.asset.model.AssetQueryResult;
 import com.xxx.insurance.asset.tool.AssetQueryTool;
@@ -109,7 +110,7 @@ class InsuranceAgentApplicationTests {
     private PolicyQueryAgent policyQueryAgent;
 
     @Autowired
-    @Qualifier(CustomerQueryAgentConfig.POLICY_QUERY_TOOL_CALLBACKS)
+    @Qualifier(PolicyQueryAgentConfig.POLICY_QUERY_TOOL_CALLBACKS)
     private ToolCallback[] policyQueryToolCallbacks;
 
     @Autowired
@@ -127,7 +128,7 @@ class InsuranceAgentApplicationTests {
     private AssetQueryAgent assetQueryAgent;
 
     @Autowired
-    @Qualifier(CustomerQueryAgentConfig.ASSET_QUERY_TOOL_CALLBACKS)
+    @Qualifier(AssetQueryAgentConfig.ASSET_QUERY_TOOL_CALLBACKS)
     private ToolCallback[] assetQueryToolCallbacks;
 
     @Autowired
