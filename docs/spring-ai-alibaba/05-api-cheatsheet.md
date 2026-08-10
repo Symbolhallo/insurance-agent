@@ -1,6 +1,6 @@
 # API 速查表
 
-> 当前版本：Spring AI Alibaba `1.1.2.3`，Spring AI `1.1.2`。示例省略业务 Bean 定义，但类名和方法已按本地源码核对。
+> 当前版本：Spring AI Alibaba `1.1.2.0`，Spring AI `1.1.2`。示例省略业务 Bean 定义，但类名和方法已按本地源码核对。
 
 ## Agent Framework
 
@@ -137,7 +137,7 @@ SkillsAgentHook hook = SkillsAgentHook.builder()
         .build();
 ```
 
-`1.1.2.3` Hook 提供 `read_skill`、`search_skills`、`disable_skill`。按 Agent 隔离 Registry 根路径。
+`1.1.2.0` Hook 提供 `read_skill`、`search_skills`、`disable_skill`。按 Agent 隔离 Registry 根路径。
 
 ## Graph Core
 
@@ -268,7 +268,7 @@ if (nodeOutput instanceof StreamingOutput<?> streaming
 
 ## 常见包名纠错
 
-| 易错写法 | `1.1.2.3` 正确写法 |
+| 易错写法 | `1.1.2.0` 正确写法 |
 |---|---|
 | `PostgreSqlSaver` | `PostgresSaver` |
 | `graph.strategy.ReplaceStrategy` | `graph.state.strategy.ReplaceStrategy` |

@@ -184,6 +184,18 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
         updateStatus(threadId, STATUS_FAILED, properties.getActiveRetention());
     }
 
+    /** 将同一工作流实例的主图与全部任务子图统一标记为完成。 */
+    @Transactional(rollbackFor = Exception.class)
+    public void markWorkflowCompleted(String workflowInstanceId) {
+        updateWorkflowStatus(workflowInstanceId, STATUS_COMPLETED, properties.getCompletedRetention());
+    }
+
+    /** 将同一工作流实例的主图与全部任务子图统一标记为失败并保留现场。 */
+    @Transactional(rollbackFor = Exception.class)
+    public void markWorkflowFailed(String workflowInstanceId) {
+        updateWorkflowStatus(workflowInstanceId, STATUS_FAILED, properties.getActiveRetention());
+    }
+
     /** 清理已超过保留期的 Checkpoint 和线程记录。 */
     @Transactional(rollbackFor = Exception.class)
     public PurgeResult purgeExpired(Instant now) {
@@ -205,6 +217,21 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
             log.warn("[Memory] type=checkpoint action=status-update status=ignored threadId={} targetStatus={}",
                     threadId,
                     status);
+        }
+    }
+
+    /** 按 workflowInstanceId 批量收口主图和任务子图线程。 */
+    private void updateWorkflowStatus(String workflowInstanceId,
+                                      String status,
+                                      java.time.Duration retention) {
+        Objects.requireNonNull(workflowInstanceId, "workflowInstanceId must not be null");
+        Instant now = Instant.now();
+        int updated = mapper.updateWorkflowThreadStatuses(
+                workflowInstanceId, status, now.plus(retention), now);
+        if (updated == 0) {
+            log.warn("[Memory] type=checkpoint action=workflow-status-update status=ignored "
+                            + "workflowInstanceId={} targetStatus={}",
+                    workflowInstanceId, status);
         }
     }
 

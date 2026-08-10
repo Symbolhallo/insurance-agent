@@ -83,6 +83,19 @@ public interface WorkflowExecutionMapper {
                               @Param("outputJson") String outputJson,
                               @Param("updatedAt") java.time.Instant updatedAt);
 
+    @Update("""
+            update ai_workflow_instance
+            set status = 'RESUMING',
+                error_message = null,
+                updated_at = #{updatedAt}
+            where workflow_instance_id = #{workflowInstanceId}
+              and conversation_id = #{conversationId}
+              and status = 'RUNNING'
+            """)
+    int claimResume(@Param("workflowInstanceId") String workflowInstanceId,
+                    @Param("conversationId") String conversationId,
+                    @Param("updatedAt") java.time.Instant updatedAt);
+
     @Insert("""
             insert into ai_workflow_step (
                 workflow_step_id,

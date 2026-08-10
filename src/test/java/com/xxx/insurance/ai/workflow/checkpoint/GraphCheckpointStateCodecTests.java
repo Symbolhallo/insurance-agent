@@ -10,6 +10,11 @@ import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
 import com.xxx.insurance.ai.workflow.model.ConversationTopicRelation;
 import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
+import com.xxx.insurance.ai.workflow.model.IntentRoute;
+import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
+import com.xxx.insurance.ai.workflow.model.OutputReviewDecision;
+import com.xxx.insurance.ai.workflow.model.OutputReviewResult;
+import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowEntity;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlanTask;
@@ -50,6 +55,27 @@ class GraphCheckpointStateCodecTests {
         assertThat(decoded.get("request")).isEqualTo(state.get("request"));
         assertThat((List<?>) decoded.get("messages")).singleElement().isInstanceOf(UserMessage.class);
         assertThat(decoded.get("iteration")).isEqualTo(3);
+    }
+
+    @Test
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void normalizesIntentRoutesThatGraphRuntimeMaterializedAsMaps() {
+        List degradedRoutes = List.of(Map.of(
+                "intent", "POLICY_QUERY",
+                "targetAgent", "policy-query-agent",
+                "intentionQuery", "查询有效保单",
+                "reason", "客户保单查询"));
+        IntentRoutingResult degradedResult = new IntentRoutingResult(
+                "MULTI_INTENT", null, "混合意图", degradedRoutes);
+
+        GraphCheckpointStateCodec.EncodedState encoded = codec.encode(
+                Map.of("intentRoutingResult", degradedResult));
+        Map<String, Object> decoded = codec.decode(encoded.payload(), encoded.contentType());
+        IntentRoutingResult restored = (IntentRoutingResult) decoded.get("intentRoutingResult");
+
+        assertThat(restored.routes()).singleElement().isInstanceOf(IntentRoute.class);
+        assertThat(restored.routes().getFirst().targetAgent()).isEqualTo("policy-query-agent");
+        codec.encode(decoded);
     }
 
     @Test
@@ -134,13 +160,39 @@ class GraphCheckpointStateCodecTests {
                 Instant.parse("2026-08-07T00:00:01Z"),
                 Instant.parse("2026-08-07T00:00:02Z"),
                 100)));
+        OutputReviewResult reviewResult = new OutputReviewResult(
+                "orr-001",
+                OutputReviewDecision.REWRITE,
+                "审核后的安全回答",
+                List.of("removed risky wording"),
+                false,
+                10,
+                Instant.parse("2026-08-07T00:00:03Z"));
+        WorkflowSummaryResult summaryResult = new WorkflowSummaryResult(
+                "wfs-001",
+                false,
+                1,
+                1,
+                "犹豫期是重新审视投保决定的期间。",
+                1,
+                Instant.parse("2026-08-07T00:00:02Z"));
+        IntentRoutingResult routingResult = new IntentRoutingResult(
+                "MULTI_INTENT",
+                null,
+                "问题包含两个业务目标",
+                List.of(
+                        new IntentRoute("POLICY_QUERY", "policy-query-agent", "查询有效保单", "保单查询"),
+                        new IntentRoute("ASSET_QUERY", "asset-query-agent", "查询资产余额", "资产查询")));
         Map<String, Object> state = Map.of(
                 "alignedContext", alignedContext,
                 "workflowPlan", workflowPlan,
                 "productRecallResult", recallResult,
                 "productReferenceResolution", productResolution,
                 "resolvedProducts", List.of(confirmedProduct),
-                "dagExecutionResult", dagResult);
+                "intentRoutingResult", routingResult,
+                "dagExecutionResult", dagResult,
+                "summaryResult", summaryResult,
+                "outputReviewResult", reviewResult);
 
         GraphCheckpointStateCodec.EncodedState firstEncoded = codec.encode(state);
         Map<String, Object> firstDecoded = codec.decode(firstEncoded.payload(), firstEncoded.contentType());
@@ -151,6 +203,9 @@ class GraphCheckpointStateCodecTests {
         ProductReferenceResolution decodedResolution = (ProductReferenceResolution)
                 firstDecoded.get("productReferenceResolution");
         DagExecutionResult decodedDagResult = (DagExecutionResult) firstDecoded.get("dagExecutionResult");
+        WorkflowSummaryResult decodedSummaryResult = (WorkflowSummaryResult) firstDecoded.get("summaryResult");
+        OutputReviewResult decodedReviewResult = (OutputReviewResult) firstDecoded.get("outputReviewResult");
+        IntentRoutingResult decodedRoutingResult = (IntentRoutingResult) firstDecoded.get("intentRoutingResult");
         assertThat(decodedContext.entities()).singleElement().isInstanceOf(WorkflowEntity.class);
         assertThat(decodedContext.productRecallDecision().triggerType())
                 .isEqualTo(ProductRecallTrigger.CONFIRMED_PRODUCT);
@@ -164,6 +219,11 @@ class GraphCheckpointStateCodecTests {
             assertThat(task).isInstanceOf(AgentTaskExecutionResult.class);
             assertThat(task.response().agentName()).isEqualTo("knowledge-qa-agent");
         });
+        assertThat(decodedReviewResult.decision()).isEqualTo(OutputReviewDecision.REWRITE);
+        assertThat(decodedReviewResult.publishableAnswer()).isEqualTo("审核后的安全回答");
+        assertThat(decodedSummaryResult.summaryId()).isEqualTo("wfs-001");
+        assertThat(decodedSummaryResult.modelInvoked()).isFalse();
+        assertThat(decodedRoutingResult.routes()).hasSize(2).allMatch(IntentRoute.class::isInstance);
 
         // Graph 会在每个节点后再次保存完整 State，第二次序列化必须同样成功。
         GraphCheckpointStateCodec.EncodedState secondEncoded = codec.encode(firstDecoded);
@@ -174,11 +234,17 @@ class GraphCheckpointStateCodecTests {
         ProductReferenceResolution secondResolution = (ProductReferenceResolution)
                 secondDecoded.get("productReferenceResolution");
         DagExecutionResult secondDagResult = (DagExecutionResult) secondDecoded.get("dagExecutionResult");
+        WorkflowSummaryResult secondSummaryResult = (WorkflowSummaryResult) secondDecoded.get("summaryResult");
+        OutputReviewResult secondReviewResult = (OutputReviewResult) secondDecoded.get("outputReviewResult");
+        IntentRoutingResult secondRoutingResult = (IntentRoutingResult) secondDecoded.get("intentRoutingResult");
         assertThat(secondContext.entities()).singleElement().isInstanceOf(WorkflowEntity.class);
         assertThat(secondContext.resolvedProducts()).singleElement().isInstanceOf(ConfirmedProduct.class);
         assertThat(secondPlan.tasks()).singleElement().isInstanceOf(WorkflowPlanTask.class);
         assertThat(secondRecallResult.candidates()).singleElement().isInstanceOf(ProductCandidate.class);
         assertThat(secondResolution.resolvedProducts()).singleElement().isInstanceOf(ConfirmedProduct.class);
         assertThat(secondDagResult.taskResults().getFirst().response().invocationId()).isEqualTo("kqa-001");
+        assertThat(secondSummaryResult.answer()).contains("犹豫期");
+        assertThat(secondReviewResult.reviewRequestId()).isEqualTo("orr-001");
+        assertThat(secondRoutingResult.routes().getFirst().intentionQuery()).isEqualTo("查询有效保单");
     }
 }

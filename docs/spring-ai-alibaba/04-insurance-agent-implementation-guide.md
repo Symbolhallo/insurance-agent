@@ -18,7 +18,7 @@ flowchart TD
     KQ --> J
     PQ --> J
     AQ --> J
-    J --> OR["output_review"] --> SU["summary"] --> F["finish"] --> E["END"]
+    J --> SU["summary"] --> OR["output_review"] --> F["finish"] --> E["END"]
 ```
 
 ## 2. Agent 划分
@@ -49,8 +49,8 @@ flowchart TD
 | `policy_query_agent` | 查询授权保单 | customerId、intentionQuery | policy AgentResult |
 | `asset_query_agent` | 查询授权资产 | customerId、intentionQuery | asset AgentResult |
 | `join_results` | 聚合成功、失败、跳过结果 | 各独立 outputKey | agentResults、failedAgents |
-| `output_review` | 规则 + 模型审核 | agentResults、来源、权限标签 | reviewResult、publishableAnswer |
-| `summary` | 生成统一答案并声明缺失 | reviewResult、agentResults | finalAnswer |
+| `summary` | 单结果透传；多个或混合结果调用模型生成统一候选答案并声明缺失 | agentResults、failedAgents | summaryResult、candidateAnswer |
+| `output_review` | 调用行内审核服务，只有审核返回文本可发布 | candidateAnswer、agentResults、来源、权限标签 | reviewResult、finalAnswer |
 | `finish` | 写审计/长期历史，发 complete | finalAnswer、执行元数据 | completedAt、auditId |
 
 当前工程的 `context-alignment` 已统一输出话题关系、精炼问题、已确认信息和候选召回判断；
@@ -82,10 +82,11 @@ flowchart TD
 | `confirmedProducts` | `List<ProductRef>` | confirm/load memory | 产品 Agent | Replace | 是 | 是 |
 | `humanConfirmRequired` | `boolean` | check/confirm | 条件边/API | Replace | 是 | 是 |
 | `executionPlan` | `List<AgentTask>` | route/planner | 并行执行 | Replace | 是 | 是 |
-| `agentResults` | `Map<String,AgentResult>` | join 或各 Agent 独立 key | review/summary | Merge | 是 | 是 |
+| `agentResults` | `Map<String,AgentResult>` | join 或各 Agent 独立 key | summary/review | Merge | 是 | 是 |
 | `failedAgents` | `List<AgentFailure>` | Agent 包装器/join | summary | Append | 是 | 是 |
-| `reviewResult` | `ReviewResult` | output_review | summary/finish | Replace | 是 | 是 |
-| `finalAnswer` | `String` | summary | finish/API | Replace | 是 | 是 |
+| `summaryResult` | `WorkflowSummaryResult` | summary | output_review/API | Replace | 是 | 是 |
+| `reviewResult` | `ReviewResult` | output_review | finish/API | Replace | 是 | 是 |
+| `finalAnswer` | `String` | output_review | finish/API | Replace | 是 | 是 |
 | `streamEvents` | 不建议放完整事件；最多序号摘要 | publisher | 诊断 | Append/外部事件表 | 可选 | 是 |
 
 State 中不要保存 `SseEmitter`、`Disposable`、Mapper、Service 或完整召回文档。敏感客户字段应使用业务 ID，展示值在授权节点临时获取。
@@ -159,7 +160,7 @@ ChatMemory 与长期历史保持当前事务一致性；Checkpoint 不替代长�
 
 ## 8. 统一 SSE 协议
 
-事件类型：`start`、`stage`、`agent_start`、`agent_stream`、`tool_start`、`tool_result`、`human_confirm`、`review`、`summary`、`complete`、`error`。
+事件类型：`start`、`stage`、`agent_start`、`agent_stream`、`tool_start`、`tool_result`、`human_confirm`、`review`、`summary`、`complete`、`error`。当前保险项目的 `agent_stream` 采用 `BUFFERED_UNTIL_REVIEW`：内部 ReactAgent 使用流式 API，但只发布输出审核后的正文。
 
 ```java
 import java.time.Instant;
@@ -222,14 +223,17 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 - Main StateGraph v1：上下文对齐、意图、Planner、产品 Agent、总结。
 - OceanBase `BaseCheckpointSaver`、V4 数据表、状态序列化、版本链和保留策略。
 - 同步 Swagger API 验证。
+- 阶段级 SSE 协议、OceanBase 七天事件重放和 `Last-Event-ID` 断线重连。
+- ReactAgent 流式执行与审核后 `agent_stream`；BLOCK 决策不外发原始 Token 或答案正文。
 - 产品实体前置解析、Mock 产品召回和召回审计记录。
 - `interruptBefore` Human Confirm、会话级确认产品表、Checkpoint 更新和恢复 API。
 - KnowledgeQAAgent、隔离 Skill/Tool、PRODUCT_ANALYSIS/KNOWLEDGE_QA 双意图单任务路由。
+- 动态 DAG Executor、依赖失败跳过、部分成功汇聚和输出审核 Gateway 节点。
 
 ### 下一阶段
 
-1. 建设 DAG Executor、依赖失败跳过和部分成功汇聚。
-2. 增加知识与产品任务的并行执行测试和结果聚合。
+1. 对接真实行内输出审核微应用协议，替换当前 Mock Gateway。
+2. 实现独立 Summary Agent 或保留确定性 Summary 的选型验证。
 3. 最后实现统一 SSE，避免同时调试多智能体编排和流式两个变量。
 
 ### 未完成
@@ -237,6 +241,6 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 - Checkpoint Replay 管理接口。
 - 产品召回微服务真实接入，以及确认权限、候选有效期和版本冲突校验。
 - 知识、保单、资产子能力。
-- 并行 DAG、失败降级、审核闭环。
+- 行内输出审核真实接口、超时和服务降级策略。
 - SSE Streaming、客户端断连取消、事件持久化与 Last-Event-ID 重放。
 - 多租户鉴权、脱敏、限流和完整观测指标。

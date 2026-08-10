@@ -22,6 +22,10 @@ public class IntentRecognitionNode implements NodeAction {
 
     public static final String KNOWLEDGE_QA_INTENT = "KNOWLEDGE_QA";
 
+    public static final String POLICY_QUERY_INTENT = "POLICY_QUERY";
+
+    public static final String ASSET_QUERY_INTENT = "ASSET_QUERY";
+
     public static final String MULTI_INTENT = "MULTI_INTENT";
 
     private static final Logger log = LoggerFactory.getLogger(IntentRecognitionNode.class);

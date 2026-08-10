@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.controller;
 
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowResponse;
+import com.xxx.insurance.ai.workflow.model.WorkflowResumeRequest;
 import com.xxx.insurance.ai.workflow.service.MainWorkflowService;
 import com.xxx.insurance.common.result.ApiResponse;
 import com.xxx.insurance.product.model.ProductConfirmationRequest;
@@ -30,7 +31,7 @@ public class MainWorkflowController {
 
     @Operation(
             summary = "运行 Main Graph v1",
-            description = "先解析当前会话产品线索；需要召回时返回候选并等待确认，否则直接执行上下文对齐、意图识别、Agent 和总结节点。")
+            description = "先解析当前会话产品线索；需要召回时返回候选并等待确认，否则执行上下文对齐、意图识别、子智能体、总结和输出审核节点。")
     @PostMapping("/runs")
     public ApiResponse<MainWorkflowResponse> run(@Valid @RequestBody MainWorkflowRequest request) {
         // 主工作流链路 1：受理已通过参数校验的请求，进入工作流应用服务。
@@ -45,5 +46,15 @@ public class MainWorkflowController {
             @PathVariable String workflowInstanceId,
             @Valid @RequestBody ProductConfirmationRequest request) {
         return ApiResponse.success(mainWorkflowService.confirmProducts(workflowInstanceId, request));
+    }
+
+    @Operation(
+            summary = "从最新 Checkpoint 恢复 Main Graph",
+            description = "仅恢复因进程退出等原因仍处于 RUNNING 的实例；WAITING_CONFIRM 必须使用产品确认接口。")
+    @PostMapping("/runs/{workflowInstanceId}/resume")
+    public ApiResponse<MainWorkflowResponse> resume(
+            @PathVariable String workflowInstanceId,
+            @Valid @RequestBody WorkflowResumeRequest request) {
+        return ApiResponse.success(mainWorkflowService.resume(workflowInstanceId, request));
     }
 }

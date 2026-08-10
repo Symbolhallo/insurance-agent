@@ -5,7 +5,7 @@
 本文档集面向 `insurance-agent` 的开发、架构评审、源码阅读和故障排查。结论分为三类：
 
 - **官方文档**：来自 java2ai.com 或官方 GitHub。
-- **当前版本源码**：来自本机 Gradle Cache 中 `1.1.2.3` sources JAR，是 API 可用性的首要依据。
+- **当前版本源码**：来自本机 Gradle Cache 中 `1.1.2.0` sources JAR，是 API 可用性的首要依据。
 - **项目建议**：结合保险业务给出的设计，不代表框架强制要求。
 
 ## 当前项目版本
@@ -16,12 +16,12 @@
 | Spring Boot | 3.5.8 |
 | Gradle | Wrapper，Groovy DSL |
 | Spring AI | 1.1.2 |
-| Spring AI Alibaba | 1.1.2.3 |
-| Agent Framework | `com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:1.1.2.3` |
-| Graph Core | 由 Agent Framework 传递引入 `spring-ai-alibaba-graph-core:1.1.2.3` |
+| Spring AI Alibaba | 1.1.2.0 |
+| Agent Framework | `com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:1.1.2.0` |
+| Graph Core | 由 Agent Framework 传递引入 `spring-ai-alibaba-graph-core:1.1.2.0` |
 | 模型 | 全局 `ChatModel`，OpenAI-compatible；当前可接 DeepSeek |
 
-版本依据：[build.gradle](../../build.gradle)、本地构件 `pom.properties`。架构与官方能力说明以具有公开 Tag/Commit 的 `v1.1.2.0` 为文档基准，项目运行和代码编译仍以实际依赖 `1.1.2.3` 为准。官网持续更新，本文所有关键 API 都按本地 `1.1.2.3` 源码复核。
+版本依据：[build.gradle](../../build.gradle)、本地构件 `pom.properties`。架构与官方能力说明以具有公开 Tag/Commit 的 `v1.1.2.0` 为文档基准，项目运行和代码编译仍以实际依赖 `1.1.2.0` 为准。官网持续更新，本文所有关键 API 都按本地 `1.1.2.0` 源码复核。
 
 ## 当前实现基线
 
@@ -29,12 +29,12 @@
 - Skill 使用 `ClasspathSkillRegistry`，根目录隔离为 `skills/product-analysis`。
 - 主工作流已使用 `StateGraph`，当前为确定性串行 v1。
 - 记忆使用 Spring AI `MessageWindowChatMemory`、MyBatis 和本地 OceanBase/MySQL 模式表；尚未采用 Graph Checkpoint Saver。
-- 当前 HTTP API 为同步 MVC；尚未实现 SSE/Flux 流式端点。
+- 当前已接入 ReactAgent `stream()`、Spring MVC SSE、OceanBase 事件重放和 `Last-Event-ID` 重连；原始 Token 按金融审核边界缓冲，只有审核后的答案以 `agent_stream` 发布。
 - 尚未实现并行子智能体、Human In The Loop、Graph Replay 和持久化恢复。
 
 ## 官网与项目版本差异
 
-| 官网当前/历史示例 | 项目 `1.1.2.3` 结论 |
+| 官网当前/历史示例 | 项目 `1.1.2.0` 结论 |
 |---|---|
 | `SupervisorAgent.builder()` | 本地 sources JAR 未发现独立 `SupervisorAgent`；使用 `AgentTool` 或 StateGraph 实现同类模式 |
 | `SaverConfig.register(SaverConstant, saver)` | 当前源码为 `SaverConfig.builder().register(saver).build()` |
@@ -43,14 +43,14 @@
 | AllOf/AnyOf 作为并行聚合名词 | Release 明确提及，但本地没有同名公开类；使用并行边和 `NodeAggregationStrategy` |
 | `StreamingOutput.chunk()` | 当前已 deprecated，使用 `message()` |
 
-官网是滚动文档，不能据此推断项目构件一定具有相同 Builder。以上差异均由本地 `1.1.2.3` 源码确认。
+官网是滚动文档，不能据此推断项目构件一定具有相同 Builder。以上差异均由本地 `1.1.2.0` 源码确认。
 
 ## 已冻结的项目决策
 
 | 决策项 | 结论 |
 |---|---|
 | Graph Checkpoint | 已实现 OceanBase `BaseCheckpointSaver` 自定义实现，不引入 Redis/Postgres Saver 作为生产主方案 |
-| 官方功能基准 | Spring AI Alibaba `v1.1.2.0`；编译兼容基准仍为项目实际依赖 `1.1.2.3` |
+| 官方功能基准 | Spring AI Alibaba `v1.1.2.0`；编译兼容基准仍为项目实际依赖 `1.1.2.0` |
 | Checkpoint 保留 | 运行中、人工中断和失败记录保留 90 天；成功完成记录在线保留 30 天 |
 | 人工确认记录 | 作为业务审计数据保留 5 年 |
 | 工作流执行历史 | 节点结果摘要和审计元数据保留 5 年，敏感原始 State 不随审计记录长期复制 |

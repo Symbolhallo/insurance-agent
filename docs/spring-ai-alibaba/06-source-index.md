@@ -1,6 +1,6 @@
 # 来源索引
 
-访问日期均为 2026-08-06。官网页面会滚动更新；“本地源码”固定为项目解析出的 `1.1.2.3` sources JAR。
+访问日期均为 2026-08-06。官网页面会滚动更新；“本地源码”固定为项目解析出的 `1.1.2.0` sources JAR。
 
 | 模块 | 页面标题/源码 | URL 或路径 | 主要内容 | 对应章节 |
 |---|---|---|---|---|
@@ -37,10 +37,10 @@
 | 发布 | v1.1.2.0 Release | https://github.com/alibaba/spring-ai-alibaba/releases/tag/v1.1.2.0 | Skills、streamMessages、并行、returnDirect | 全部 |
 | GitHub | 官方仓库 README | https://github.com/alibaba/spring-ai-alibaba | 模块关系和当前能力 | README、03 |
 | GitHub | 官方 Examples | https://github.com/spring-ai-alibaba/examples | 示例交叉验证 | 01、02 |
-| 源码 | ReactAgent / Agent / Builder | Gradle Cache `spring-ai-alibaba-agent-framework-1.1.2.3-sources.jar`, `com/alibaba/cloud/ai/graph/agent/` | call/invoke/stream、Builder、内部图 | 01、05 |
+| 源码 | ReactAgent / Agent / Builder | Gradle Cache `spring-ai-alibaba-agent-framework-1.1.2.0-sources.jar`, `com/alibaba/cloud/ai/graph/agent/` | call/invoke/stream、Builder、内部图 | 01、05 |
 | 源码 | Hooks / Interceptors / SkillsAgentHook | 同上，`agent/hook/`、`agent/interceptor/` | 生命周期、read/search/disable skill | 01、05 |
 | 源码 | Flow Agents | 同上，`agent/flow/agent/` | Sequential、Parallel、Routing、Loop | 01、03 |
-| 源码 | StateGraph / CompiledGraph | Gradle Cache `spring-ai-alibaba-graph-core-1.1.2.3-sources.jar`, `com/alibaba/cloud/ai/graph/` | 图 API、状态、流式、恢复 | 02、05 |
+| 源码 | StateGraph / CompiledGraph | Gradle Cache `spring-ai-alibaba-graph-core-1.1.2.0-sources.jar`, `com/alibaba/cloud/ai/graph/` | 图 API、状态、流式、恢复 | 02、05 |
 | 源码 | Saver 实现 | 同上，`graph/checkpoint/savers/` | Memory、Redis、Postgres、Mongo Saver | 02、05 |
 | 源码 | Strategies | 同上，`graph/KeyStrategyFactory.java`、`graph/strategy/` | Replace、Append、Merge | 02、05 |
 | 项目 | build.gradle | `build.gradle` | 当前实际版本与依赖 | README |
@@ -48,4 +48,4 @@
 
 ## Git Tag 与版本说明
 
-官方 GitHub 可核验的 `v1.1.2.0` Tag 对应 Commit `8177021`，本项目将其作为官方架构和功能文档基准；Release 页面当前还列出 `v1.1.2.2` Commit `7405a7d`。项目实际运行使用 Maven 构件 `1.1.2.3`，其 JAR Manifest 与 `pom.properties` 均确认版本，但截至访问时官方仓库没有公开 `v1.1.2.3` Git ref。因此 Java 编译与精确 API 仍以本地 `1.1.2.3` sources JAR 为准，不虚构 Commit。
+官方 GitHub 可核验的 `v1.1.2.0` Tag 对应 Commit `8177021`，本项目将其作为官方架构和功能文档基准；Release 页面当前还列出 `v1.1.2.2` Commit `7405a7d`。项目实际运行使用 Maven 构件 `1.1.2.0`，其 JAR Manifest 与 `pom.properties` 均确认版本。Java 编译与精确 API 仍以本地 `1.1.2.0` sources JAR 为准，并用公开 Tag 交叉核验。

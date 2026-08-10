@@ -27,7 +27,7 @@
 * `node_async`、`nodeasync` 等辅助方法名称存在差异。
 * `checkpointId`、`checkPointId` 的方法命名存在差异。
 * 部分页面将 `CompiledGraph.stream()` 描述为返回 `Flux<NodeOutput>`，部分页面仍使用 `AsyncGenerator<NodeOutput>` 解释底层机制。
-* Redis 示例使用了 `1.0.0.3-SNAPSHOT`，不能直接替换当前项目的 `1.1.2.3`。
+* Redis 示例使用了 `1.0.0.3-SNAPSHOT`，不能直接替换当前项目的 `1.1.2.0`。
 * 部分示例使用已经变化的 Spring AI Function Callback API。
 * 部分示例将 Graph 直接在 Controller 构造器中编译，不适合生产项目。
 
@@ -35,7 +35,7 @@
 
 ```text
 1. 检查 build.gradle 中的实际版本
-2. 查看本地 1.1.2.3-sources.jar
+2. 查看本地 1.1.2.0-sources.jar
 3. 查看对应类的真实方法签名
 4. 编写最小编译测试
 5. 再将实现合入业务工作流
@@ -292,7 +292,7 @@ CompileConfig.builder()
         .checkpointSaver(checkpointer)
 ```
 
-Codex 必须查看 `1.1.2.3` 的 `CompileConfig` 源码后选择正确写法。
+Codex 必须查看 `1.1.2.0` 的 `CompileConfig` 源码后选择正确写法。
 
 ---
 
@@ -411,7 +411,7 @@ implementation("org.redisson:redisson:3.24.3")
 
 该版本不能直接用于当前项目。
 
-Codex 应先确认 `1.1.2.3` 对应的 Redis Checkpoint 模块是否：
+Codex 应先确认 `1.1.2.0` 对应的 Redis Checkpoint 模块是否：
 
 * 已发布正式版本。
 * 包含在 Agent Framework 依赖中。
@@ -815,7 +815,7 @@ graph.stream(null, updatedConfig)
         .blockLast();
 ```
 
-传入 `null` 或空输入，表示基于已保存状态继续运行。具体允许形式需要根据 `1.1.2.3` 方法签名确认。
+传入 `null` 或空输入，表示基于已保存状态继续运行。具体允许形式需要根据 `1.1.2.0` 方法签名确认。
 
 ---
 
@@ -1063,7 +1063,7 @@ RunnableConfig config = RunnableConfig.builder()
 * 并行组标识。
 * 目标节点。
 
-必须以 `1.1.2.3` 源码测试确定，不能仅凭名称推断。
+必须以 `1.1.2.0` 源码测试确定，不能仅凭名称推断。
 
 ---
 
@@ -1744,7 +1744,7 @@ docs/graph/
 
 Graph 执行取消用于停止长时间运行的工作流。
 
-官网底层说明使用 `AsyncGenerator.cancel(boolean mayInterruptIfRunning)`，但当前示例页面的代码又使用 Reactor `Flux` 和 `Disposable.dispose()`；这说明不同版本或适配层的 API 形态存在差异，必须以当前 `1.1.2.3` 源码为准。
+官网底层说明使用 `AsyncGenerator.cancel(boolean mayInterruptIfRunning)`，但当前示例页面的代码又使用 Reactor `Flux` 和 `Disposable.dispose()`；这说明不同版本或适配层的 API 形态存在差异，必须以当前 `1.1.2.0` 源码为准。
 
 ---
 
@@ -1937,7 +1937,7 @@ END
 
 ## 版本检查
 
-* [ ] 检查 `spring-ai-alibaba-agent-framework:1.1.2.3` 源码。
+* [ ] 检查 `spring-ai-alibaba-agent-framework:1.1.2.0` 源码。
 * [ ] 检查是否单独依赖 Graph Core。
 * [ ] 检查 `CompileConfig` 的真实 Builder 方法。
 * [ ] 检查 `RunnableConfig` 中 Checkpoint ID 方法名称。

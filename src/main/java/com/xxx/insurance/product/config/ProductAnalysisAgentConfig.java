@@ -3,6 +3,7 @@ package com.xxx.insurance.product.config;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.config.AiModelProperties;
+import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
@@ -133,7 +134,8 @@ public class ProductAnalysisAgentConfig {
             ProductAnalysisFormatter productAnalysisFormatter,
             ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
             AgentMemoryService agentMemoryService,
-            AiModelProperties aiModelProperties) {
+            AiModelProperties aiModelProperties,
+            ReactAgentStreamingExecutor streamingExecutor) {
         return new ProductAnalysisAgent(
                 reactAgent,
                 skillsAgentHook,
@@ -141,6 +143,7 @@ public class ProductAnalysisAgentConfig {
                 productAnalysisFormatter,
                 productAnalysisAnswerInspector,
                 agentMemoryService,
-                aiModelProperties);
+                aiModelProperties,
+                streamingExecutor);
     }
 }

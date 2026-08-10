@@ -72,8 +72,8 @@ Agent Framework 不能代替 Graph Core 的显式状态机、Checkpoint 和复�
 1. 子任务固定且有依赖：StateGraph。
 2. 子任务固定且只需顺序或并行：`SequentialAgent` / `ParallelAgent` 可简化代码。
 3. 路由由自然语言决定：`LlmRoutingAgent`，但对高风险意图增加 Java 校验。
-4. Supervisor、Handoffs 和 Agent As Tool 在官网属于推荐模式；当前 `1.1.2.3` 本地源码没有独立 `SupervisorAgent` 类，Agent As Tool 可使用 `AgentTool`，Handoffs 建议用 StateGraph 条件边实现。
+4. Supervisor、Handoffs 和 Agent As Tool 在官网属于推荐模式；当前 `1.1.2.0` 本地源码没有独立 `SupervisorAgent` 类，Agent As Tool 可使用 `AgentTool`，Handoffs 建议用 StateGraph 条件边实现。
 5. 需要人工确认和服务重启恢复：无论采用何种 Agent，都以带持久化 Saver 的主 Graph 承载。
 
-来源：官方[项目架构](https://github.com/alibaba/spring-ai-alibaba)、[Agents](https://java2ai.com/en/docs/frameworks/agent-framework/tutorials/agents/)、[Graph Core](https://java2ai.com/docs/frameworks/graph-core/core/core-library/)；API 存在性由本地 `1.1.2.3` 源码确认。
+来源：官方[项目架构](https://github.com/alibaba/spring-ai-alibaba)、[Agents](https://java2ai.com/en/docs/frameworks/agent-framework/tutorials/agents/)、[Graph Core](https://java2ai.com/docs/frameworks/graph-core/core/core-library/)；API 存在性由本地 `1.1.2.0` 源码确认。
 

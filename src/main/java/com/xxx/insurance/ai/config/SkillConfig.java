@@ -35,6 +35,14 @@ public class SkillConfig {
 
     public static final String KNOWLEDGE_QA_SKILLS_AGENT_HOOK = "knowledgeQaSkillsAgentHook";
 
+    public static final String POLICY_QUERY_SKILL_REGISTRY = "policyQuerySkillRegistry";
+
+    public static final String POLICY_QUERY_SKILLS_AGENT_HOOK = "policyQuerySkillsAgentHook";
+
+    public static final String ASSET_QUERY_SKILL_REGISTRY = "assetQuerySkillRegistry";
+
+    public static final String ASSET_QUERY_SKILLS_AGENT_HOOK = "assetQuerySkillsAgentHook";
+
     /**
      * ProductAnalysisAgent 专属 Skill 根路径。
      *
@@ -46,6 +54,10 @@ public class SkillConfig {
     private static final String PRODUCT_ANALYSIS_SKILL_CLASSPATH = "skills/product-analysis";
 
     private static final String KNOWLEDGE_QA_SKILL_CLASSPATH = "skills/knowledge-qa";
+
+    private static final String POLICY_QUERY_SKILL_CLASSPATH = "skills/policy-query";
+
+    private static final String ASSET_QUERY_SKILL_CLASSPATH = "skills/asset-query";
 
     /**
      * 创建产品分析智能体专属 SkillRegistry。
@@ -105,6 +117,42 @@ public class SkillConfig {
     @Bean(KNOWLEDGE_QA_SKILLS_AGENT_HOOK)
     public SkillsAgentHook knowledgeQaSkillsAgentHook(
             @Qualifier(KNOWLEDGE_QA_SKILL_REGISTRY) SkillRegistry skillRegistry) {
+        return SkillsAgentHook.builder()
+                .skillRegistry(skillRegistry)
+                .autoReload(false)
+                .build();
+    }
+
+    /** 创建保单查询 Agent 专属 SkillRegistry，避免加载其他子智能体规则。 */
+    @Bean(POLICY_QUERY_SKILL_REGISTRY)
+    public SkillRegistry policyQuerySkillRegistry() {
+        return ClasspathSkillRegistry.builder()
+                .classpathPath(POLICY_QUERY_SKILL_CLASSPATH)
+                .build();
+    }
+
+    /** 将保单 SkillRegistry 接入保单 ReactAgent；当前仅加载能力边界说明。 */
+    @Bean(POLICY_QUERY_SKILLS_AGENT_HOOK)
+    public SkillsAgentHook policyQuerySkillsAgentHook(
+            @Qualifier(POLICY_QUERY_SKILL_REGISTRY) SkillRegistry skillRegistry) {
+        return SkillsAgentHook.builder()
+                .skillRegistry(skillRegistry)
+                .autoReload(false)
+                .build();
+    }
+
+    /** 创建资产查询 Agent 专属 SkillRegistry，避免加载其他子智能体规则。 */
+    @Bean(ASSET_QUERY_SKILL_REGISTRY)
+    public SkillRegistry assetQuerySkillRegistry() {
+        return ClasspathSkillRegistry.builder()
+                .classpathPath(ASSET_QUERY_SKILL_CLASSPATH)
+                .build();
+    }
+
+    /** 将资产 SkillRegistry 接入资产 ReactAgent；当前仅加载能力边界说明。 */
+    @Bean(ASSET_QUERY_SKILLS_AGENT_HOOK)
+    public SkillsAgentHook assetQuerySkillsAgentHook(
+            @Qualifier(ASSET_QUERY_SKILL_REGISTRY) SkillRegistry skillRegistry) {
         return SkillsAgentHook.builder()
                 .skillRegistry(skillRegistry)
                 .autoReload(false)

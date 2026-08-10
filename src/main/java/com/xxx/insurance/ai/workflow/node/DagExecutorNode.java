@@ -47,14 +47,18 @@ public class DagExecutorNode implements NodeAction {
                 .orElse(null);
         String workflowStepId = MainWorkflowGraphConfig.workflowStepIds(state)
                 .get(WorkflowNodeDefinition.DAG_EXECUTOR.code());
+        boolean tokenStreamingEnabled = state
+                .value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class)
+                .orElse(false);
 
-        // 主工作流链路 10：执行 Planner DAG；同一波次无依赖任务并行，失败只影响其依赖后继。
+        // 主工作流链路 10：执行 Planner DAG；任一任务完成即释放后继，失败只影响其依赖分支。
         DagExecutionResult result = workflowDagExecutor.execute(
                 workflowPlan,
                 routingResult,
                 context,
                 workflowInstanceId,
-                workflowStepId);
+                workflowStepId,
+                tokenStreamingEnabled);
         return Map.of(MainWorkflowStateKeys.DAG_EXECUTION_RESULT, result);
     }
 }

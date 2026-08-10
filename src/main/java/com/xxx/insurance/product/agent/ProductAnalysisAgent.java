@@ -3,6 +3,7 @@ package com.xxx.insurance.product.agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
+import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
@@ -66,6 +67,8 @@ public class ProductAnalysisAgent {
 
     private final AiModelProperties aiModelProperties;
 
+    private final ReactAgentStreamingExecutor streamingExecutor;
+
     /** 创建产品分析业务入口并组合 ReactAgent、Skill、Tool、Formatter、Memory 和审计能力。 */
     public ProductAnalysisAgent(ReactAgent reactAgent,
                                 SkillsAgentHook skillsAgentHook,
@@ -73,7 +76,8 @@ public class ProductAnalysisAgent {
                                 ProductAnalysisFormatter productAnalysisFormatter,
                                 ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
                                 AgentMemoryService agentMemoryService,
-                                AiModelProperties aiModelProperties) {
+                                AiModelProperties aiModelProperties,
+                                ReactAgentStreamingExecutor streamingExecutor) {
         this.reactAgent = reactAgent;
         this.skillsAgentHook = skillsAgentHook;
         this.productAnalysisService = productAnalysisService;
@@ -81,6 +85,7 @@ public class ProductAnalysisAgent {
         this.productAnalysisAnswerInspector = productAnalysisAnswerInspector;
         this.agentMemoryService = agentMemoryService;
         this.aiModelProperties = aiModelProperties;
+        this.streamingExecutor = streamingExecutor;
     }
 
     /** 返回 ReactAgent 注册名称。 */
@@ -143,7 +148,7 @@ public class ProductAnalysisAgent {
                     request.message().length(),
                     memoryCallContext.memoryEnabled(),
                     memoryCallContext.historyMessageCount());
-            AssistantMessage assistantMessage = callReactAgent(request, memoryCallContext);
+            AssistantMessage assistantMessage = callReactAgent(request, memoryCallContext, executionContext);
             long durationMs = elapsedMillis(startNanos);
             String answer = assistantMessage.getText();
             Instant answeredAt = Instant.now();
@@ -254,8 +259,16 @@ public class ProductAnalysisAgent {
     }
 
     /** 根据是否启用会话记忆选择单消息或历史消息列表调用 ReactAgent。 */
-    private AssistantMessage callReactAgent(ProductAnalysisChatRequest request, MemoryCallContext memoryCallContext)
+    private AssistantMessage callReactAgent(ProductAnalysisChatRequest request,
+                                            MemoryCallContext memoryCallContext,
+                                            AgentExecutionContext executionContext)
             throws Exception {
+        if (executionContext.tokenStreamingEnabled()) {
+            if (!memoryCallContext.memoryEnabled()) {
+                return streamingExecutor.execute(reactAgent, request.message());
+            }
+            return streamingExecutor.execute(reactAgent, memoryCallContext.requestMessages());
+        }
         if (!memoryCallContext.memoryEnabled()) {
             return reactAgent.call(request.message());
         }

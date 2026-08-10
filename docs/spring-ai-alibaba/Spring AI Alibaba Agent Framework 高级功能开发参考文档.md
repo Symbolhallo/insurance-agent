@@ -17,7 +17,7 @@ Codex 在开发前必须先检查：
 
 1. `build.gradle` 中的实际依赖版本。
 2. 当前项目已有的 `ReactAgent`、Tool、Skill、Hook、Interceptor、Saver 和 Graph 实现。
-3. 本地 Gradle 缓存中的 `spring-ai-alibaba-agent-framework-1.1.2.3-sources.jar`。
+3. 本地 Gradle 缓存中的 `spring-ai-alibaba-agent-framework-1.1.2.0-sources.jar`。
 4. 官网示例 API 是否与当前版本一致。
 5. 当前工作流是否已经有统一的 `conversationId`、`threadId` 和状态字段定义。
 
@@ -1241,7 +1241,7 @@ workflow.addNode(
         knowledgeAgent.asNode(true, false));
 ```
 
-具体参数含义必须以当前 `1.1.2.3` 源码为准，Codex 不得仅根据布尔值位置猜测含义。
+具体参数含义必须以当前 `1.1.2.0` 源码为准，Codex 不得仅根据布尔值位置猜测含义。
 
 ## 7. 普通 Node 与 Agent Node 混合
 
@@ -1811,7 +1811,7 @@ Structured Output
 
 Codex 每次修改项目时必须检查：
 
-* [ ] 当前 API 是否存在于 `1.1.2.3-sources.jar`。
+* [ ] 当前 API 是否存在于 `1.1.2.0-sources.jar`。
 * [ ] 是否复用了已有 `ChatModel` Bean。
 * [ ] `conversationId` 和 `threadId` 是否统一。
 * [ ] Runtime Context、State、Store 是否职责清晰。

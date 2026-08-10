@@ -8,6 +8,12 @@ import io.swagger.v3.oas.annotations.media.Schema;
 @Schema(description = "DAG 子智能体任务状态")
 public enum AgentTaskStatus {
 
+    PENDING,
+
+    READY,
+
+    RUNNING,
+
     SUCCESS,
 
     FAILED,

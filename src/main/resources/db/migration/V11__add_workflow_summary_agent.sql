@@ -1,0 +1,6 @@
+update ai_workflow_definition
+set description = 'Phase2 主工作流：DAG 单任务结果直接透传，多任务结果由 Summary Agent 调用模型汇总，统一候选答案通过行内输出审核后发布。',
+    definition_json = '{"graph":"main-workflow-v1","nodes":["resolve-product-reference","retrieve-product-candidates","human-confirm-product","context-alignment","intent-recognition","planner-agent","dag-executor","summary","output-review"],"edges":[["START","resolve-product-reference"],["retrieve-product-candidates","human-confirm-product"],["human-confirm-product","context-alignment"],["context-alignment","intent-recognition"],["intent-recognition","planner-agent"],["planner-agent","dag-executor"],["dag-executor","summary"],["summary","output-review"],["output-review","END"]],"conditionalEdges":[{"source":"resolve-product-reference","decisionState":"productRecallDecision","routes":{"recall":"retrieve-product-candidates","skip":"context-alignment"}}],"supportedIntents":["PRODUCT_ANALYSIS","KNOWLEDGE_QA","MULTI_INTENT"],"supportedAgents":["product-analysis-agent","knowledge-qa-agent"],"plannerVersion":2,"executor":"BOUNDED_DYNAMIC_DAG","summary":"SINGLE_PASS_THROUGH_MULTI_MODEL","outputReview":"LINE_SERVICE_GATEWAY","interruptBefore":["human-confirm-product"]}',
+    version = 8,
+    updated_at = current_timestamp
+where workflow_code = 'main-workflow-v1';

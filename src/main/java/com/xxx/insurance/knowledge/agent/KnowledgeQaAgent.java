@@ -3,6 +3,7 @@ package com.xxx.insurance.knowledge.agent;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
+import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
@@ -46,15 +47,19 @@ public class KnowledgeQaAgent {
 
     private final AiModelProperties aiModelProperties;
 
+    private final ReactAgentStreamingExecutor streamingExecutor;
+
     /** 创建知识问答业务入口并组合 ReactAgent、Skill、Memory 和审计配置。 */
     public KnowledgeQaAgent(ReactAgent reactAgent,
                             SkillsAgentHook skillsAgentHook,
                             AgentMemoryService agentMemoryService,
-                            AiModelProperties aiModelProperties) {
+                            AiModelProperties aiModelProperties,
+                            ReactAgentStreamingExecutor streamingExecutor) {
         this.reactAgent = reactAgent;
         this.skillsAgentHook = skillsAgentHook;
         this.agentMemoryService = agentMemoryService;
         this.aiModelProperties = aiModelProperties;
+        this.streamingExecutor = streamingExecutor;
     }
 
     /** 使用独立调用上下文执行知识问答，允许按 profile 读取和写入会话记忆。 */
@@ -75,7 +80,7 @@ public class KnowledgeQaAgent {
             log.info("[Agent] name={} action=chat status=start invocationId={} conversationId={} memoryEnabled={} memoryMessageCount={}",
                     AGENT_NAME, invocationId, request.conversationId(), memoryContext.enabled(),
                     memoryContext.historyMessageCount());
-            AssistantMessage assistantMessage = callReactAgent(request, memoryContext);
+            AssistantMessage assistantMessage = callReactAgent(request, memoryContext, executionContext);
             String answer = assistantMessage.getText();
             long durationMs = elapsedMillis(startNanos);
             Instant answeredAt = Instant.now();
@@ -138,7 +143,14 @@ public class KnowledgeQaAgent {
 
     /** 根据是否启用会话记忆选择单消息或历史消息列表调用 ReactAgent。 */
     private AssistantMessage callReactAgent(KnowledgeQaChatRequest request,
-                                            MemoryCallContext memoryContext) throws Exception {
+                                            MemoryCallContext memoryContext,
+                                            AgentExecutionContext executionContext) throws Exception {
+        if (executionContext.tokenStreamingEnabled()) {
+            if (!memoryContext.enabled()) {
+                return streamingExecutor.execute(reactAgent, request.message());
+            }
+            return streamingExecutor.execute(reactAgent, memoryContext.requestMessages());
+        }
         if (!memoryContext.enabled()) {
             return reactAgent.call(request.message());
         }

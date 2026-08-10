@@ -15,7 +15,7 @@ java {
 
 ext {
     springAiVersion = '1.1.2'
-    springAiAlibabaVersion = '1.1.2.3'
+    springAiAlibabaVersion = '1.1.2.0'
     springdocOpenapiVersion = '2.8.17'
     lombokVersion = '1.18.38'
     mybatisSpringBootVersion = '3.0.5'

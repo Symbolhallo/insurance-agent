@@ -3,6 +3,7 @@ package com.xxx.insurance.knowledge.config;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.config.AiModelProperties;
+import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
@@ -90,7 +91,9 @@ public class KnowledgeQaAgentConfig {
             @Qualifier(KNOWLEDGE_QA_REACT_AGENT) ReactAgent reactAgent,
             @Qualifier(SkillConfig.KNOWLEDGE_QA_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
             AgentMemoryService agentMemoryService,
-            AiModelProperties aiModelProperties) {
-        return new KnowledgeQaAgent(reactAgent, skillsAgentHook, agentMemoryService, aiModelProperties);
+            AiModelProperties aiModelProperties,
+            ReactAgentStreamingExecutor streamingExecutor) {
+        return new KnowledgeQaAgent(
+                reactAgent, skillsAgentHook, agentMemoryService, aiModelProperties, streamingExecutor);
     }
 }

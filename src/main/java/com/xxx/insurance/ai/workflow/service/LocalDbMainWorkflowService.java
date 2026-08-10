@@ -8,6 +8,7 @@ import com.alibaba.cloud.ai.graph.state.StateSnapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
+import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
@@ -23,12 +24,17 @@ import com.xxx.insurance.ai.workflow.model.MainWorkflowResponse;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
 import com.xxx.insurance.ai.workflow.model.ProductRecallDecision;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
+import com.xxx.insurance.ai.workflow.model.OutputReviewDecision;
+import com.xxx.insurance.ai.workflow.model.OutputReviewResult;
 import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowInstanceExecutionView;
 import com.xxx.insurance.ai.workflow.model.WorkflowInstanceRecord;
 import com.xxx.insurance.ai.workflow.model.WorkflowNodeDefinition;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
 import com.xxx.insurance.ai.workflow.model.WorkflowStepRecord;
+import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
+import com.xxx.insurance.ai.workflow.model.WorkflowSseEventType;
+import com.xxx.insurance.ai.workflow.model.WorkflowResumeRequest;
 import com.xxx.insurance.common.util.TraceIdUtil;
 import com.xxx.insurance.product.model.ConfirmedProduct;
 import com.xxx.insurance.product.model.ProductCandidate;
@@ -38,6 +44,7 @@ import com.xxx.insurance.product.service.ConversationConfirmedProductService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.context.annotation.Profile;
@@ -84,6 +91,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
     private final AiModelProperties aiModelProperties;
 
+    private final WorkflowEventPublisher workflowEventPublisher;
+
+    private final ThreadPoolTaskExecutor workflowDagTaskExecutor;
+
     public LocalDbMainWorkflowService(WorkflowExecutionMapper workflowExecutionMapper,
                                       @Qualifier(MainWorkflowGraphConfig.MAIN_WORKFLOW_GRAPH)
                                       CompiledGraph mainWorkflowGraph,
@@ -91,7 +102,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                                       OceanBaseCheckpointSaver checkpointSaver,
                                       ConversationConfirmedProductService confirmedProductService,
                                       AgentMemoryService agentMemoryService,
-                                      AiModelProperties aiModelProperties) {
+                                      AiModelProperties aiModelProperties,
+                                      WorkflowEventPublisher workflowEventPublisher,
+                                      @Qualifier(WorkflowExecutionConfig.WORKFLOW_DAG_TASK_EXECUTOR)
+                                      ThreadPoolTaskExecutor workflowDagTaskExecutor) {
         this.workflowExecutionMapper = workflowExecutionMapper;
         this.mainWorkflowGraph = mainWorkflowGraph;
         this.objectMapper = objectMapper;
@@ -99,6 +113,14 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         this.confirmedProductService = confirmedProductService;
         this.agentMemoryService = agentMemoryService;
         this.aiModelProperties = aiModelProperties;
+        this.workflowEventPublisher = workflowEventPublisher;
+        this.workflowDagTaskExecutor = workflowDagTaskExecutor;
+    }
+
+    /** 生成符合数据库字段长度和日志规范的工作流实例编号。 */
+    @Override
+    public String createWorkflowInstanceId() {
+        return newWorkflowInstanceId();
     }
 
     /**
@@ -109,7 +131,26 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
      */
     @Override
     public MainWorkflowResponse run(MainWorkflowRequest request) {
-        String workflowInstanceId = newWorkflowInstanceId();
+        return run(createWorkflowInstanceId(), request);
+    }
+
+    /**
+     * 使用预先分配的实例编号创建数据库记录并执行 Main Graph。
+     *
+     * <p>SSE 入口会先用该编号注册连接，再在独立线程调用本方法，确保首个 start 事件不丢失。</p>
+     */
+    @Override
+    public MainWorkflowResponse run(String workflowInstanceId, MainWorkflowRequest request) {
+        return run(workflowInstanceId, request, false);
+    }
+
+    /**
+     * 使用预先分配的实例编号执行 Main Graph，并把 Token 流开关写入可恢复 Graph State。
+     */
+    @Override
+    public MainWorkflowResponse run(String workflowInstanceId,
+                                    MainWorkflowRequest request,
+                                    boolean tokenStreamingEnabled) {
         Instant startedAt = Instant.now();
         String inputJson = toJson(request);
         Map<String, String> workflowStepIds = createWorkflowSteps();
@@ -126,6 +167,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 inputJson,
                 startedAt));
         insertWorkflowSteps(workflowInstanceId, workflowStepIds, inputJson, startedAt);
+        publishEvent(workflowInstanceId, request.conversationId(), WorkflowSseEventType.START, null,
+                Map.of("status", STATUS_RUNNING, "workflowCode", WORKFLOW_CODE));
 
         try {
             // 主工作流链路 3：以工作流实例 ID 作为 threadId 启动 Graph，候选召回后可持久化中断。
@@ -134,7 +177,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                             Map.of(
                                     MainWorkflowStateKeys.REQUEST, request,
                                     MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, workflowInstanceId,
-                                    MainWorkflowStateKeys.WORKFLOW_STEP_IDS, workflowStepIds),
+                                    MainWorkflowStateKeys.WORKFLOW_STEP_IDS, workflowStepIds,
+                                    MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, tokenStreamingEnabled),
                             config)
                     .orElseThrow(() -> new IllegalStateException("Main workflow graph returned empty output"));
             if (!output.isEND()) {
@@ -194,6 +238,47 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     }
 
     /**
+     * 从主图最新 Checkpoint 恢复仍处于 RUNNING 的工作流。
+     *
+     * <p>数据库条件更新先把实例原子认领为 RESUMING，防止两个请求同时从同一 Checkpoint
+     * 分叉。动态 DAG 再次进入时，各任务子图会复用自己的终态 Checkpoint。</p>
+     */
+    @Override
+    public MainWorkflowResponse resume(String workflowInstanceId, WorkflowResumeRequest request) {
+        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
+        validateResumeInstance(instance, request);
+        if (workflowExecutionMapper.claimResume(
+                workflowInstanceId, request.conversationId(), Instant.now()) != 1) {
+            throw new IllegalStateException("Workflow instance is not available for resume");
+        }
+
+        RunnableConfig config = runnableConfig(workflowInstanceId, request.conversationId());
+        try {
+            StateSnapshot snapshot = mainWorkflowGraph.getState(config);
+            MainWorkflowRequest originalRequest = snapshot.state()
+                    .value(MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class)
+                    .orElseThrow(() -> new IllegalStateException("Workflow checkpoint has no original request"));
+            publishEvent(workflowInstanceId, request.conversationId(), WorkflowSseEventType.STAGE, null,
+                    Map.of("status", "RESUMING", "checkpointId",
+                            snapshot.config().checkPointId().orElse("")));
+
+            // 主工作流恢复链路 1：从最新主图 Checkpoint 继续；DAG 内 SUCCESS 子任务由独立子图直接复用。
+            NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(Map.of(), snapshot.config())
+                    .orElseThrow(() -> new IllegalStateException("Resumed workflow graph returned empty output"));
+            if (!output.isEND()) {
+                StateSnapshot interrupted = mainWorkflowGraph.getState(config);
+                return waitingConfirmResponse(
+                        interrupted, originalRequest, workflowInstanceId, instance.createdAt());
+            }
+            return complete(output.state(), workflowInstanceId, instance.createdAt());
+        }
+        catch (Exception ex) {
+            fail(workflowInstanceId, ex);
+            throw new IllegalStateException("Main workflow checkpoint resume failed", ex);
+        }
+    }
+
+    /**
      * 将 Graph 中断快照转换为 WAITING_CONFIRM 响应，同时落库 Checkpoint 编号、候选结果和步骤状态。
      */
     private MainWorkflowResponse waitingConfirmResponse(StateSnapshot snapshot,
@@ -231,6 +316,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 null,
                 null,
                 null,
+                null,
+                null,
                 Duration.between(startedAt, Instant.now()).toMillis(),
                 startedAt,
                 null,
@@ -239,6 +326,13 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         workflowExecutionMapper.updateStepWaitingConfirm(humanStepId, toJson(recallResult), Instant.now());
         workflowExecutionMapper.updateInstanceStatus(
                 workflowInstanceId, STATUS_WAITING_CONFIRM, toJson(response), Instant.now());
+        publishEvent(workflowInstanceId, request.conversationId(), WorkflowSseEventType.HUMAN_CONFIRM,
+                WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code(),
+                Map.of(
+                        "status", STATUS_WAITING_CONFIRM,
+                        "checkpointId", checkpointId,
+                        "candidateCount", recallResult.candidates().size()));
+        workflowEventPublisher.completeSubscribers(workflowInstanceId);
         log.info("[Workflow] code={} action=run status=waiting-confirm workflowInstanceId={} checkpointId={} "
                         + "candidateCount={}",
                 WORKFLOW_CODE, workflowInstanceId, checkpointId, recallResult.candidates().size());
@@ -269,6 +363,12 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         DagExecutionResult dagExecutionResult = requiredState(
                 finalState, MainWorkflowStateKeys.DAG_EXECUTION_RESULT,
                 DagExecutionResult.class, "DAG execution result");
+        WorkflowSummaryResult summaryResult = requiredState(
+                finalState, MainWorkflowStateKeys.SUMMARY_RESULT,
+                WorkflowSummaryResult.class, "summary result");
+        OutputReviewResult outputReviewResult = requiredState(
+                finalState, MainWorkflowStateKeys.OUTPUT_REVIEW_RESULT,
+                OutputReviewResult.class, "output review result");
         SubAgentExecutionResult agentResponse = dagExecutionResult.taskResults().stream()
                 .filter(task -> task.status() == AgentTaskStatus.SUCCESS)
                 .map(task -> task.response())
@@ -278,10 +378,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 finalState, MainWorkflowStateKeys.FINAL_ANSWER,
                 String.class, "final answer");
         Instant endedAt = Instant.now();
-        String workflowStatus = workflowStatus(dagExecutionResult);
-        String errorMessage = dagExecutionResult.successCount() == 0
-                ? "All planned agent tasks failed or were skipped"
-                : null;
+        String workflowStatus = workflowStatus(dagExecutionResult, outputReviewResult);
+        String errorMessage = workflowErrorMessage(dagExecutionResult, outputReviewResult);
         MainWorkflowResponse response = new MainWorkflowResponse(
                 true,
                 WORKFLOW_CODE,
@@ -302,17 +400,25 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 workflowStatus,
                 finalAnswer,
                 dagExecutionResult,
+                summaryResult,
+                outputReviewResult,
                 agentResponse,
                 Duration.between(startedAt, endedAt).toMillis(),
                 startedAt,
                 endedAt,
                 errorMessage);
-        // 主工作流链路 12：收口未执行分支、成功终态和 Checkpoint 保留状态。
+        // 主工作流链路 13：收口已审核最终回答、未执行分支、工作流终态和 Checkpoint 保留状态。
         saveFinalConversation(response);
         workflowExecutionMapper.skipPendingSteps(workflowInstanceId, endedAt);
         workflowExecutionMapper.updateInstanceResult(
                 workflowInstanceId, workflowStatus, toJson(response), errorMessage, endedAt);
-        checkpointSaver.markCompleted(workflowInstanceId);
+        checkpointSaver.markWorkflowCompleted(workflowInstanceId);
+        publishEvent(workflowInstanceId, response.conversationId(), WorkflowSseEventType.COMPLETE, null,
+                Map.of(
+                        "status", workflowStatus,
+                        "finalAnswer", response.finalAnswer(),
+                        "durationMs", response.durationMs()));
+        workflowEventPublisher.completeSubscribers(workflowInstanceId);
         log.info("[Workflow] code={} action=complete status={} workflowInstanceId={} durationMs={}",
                 WORKFLOW_CODE, workflowStatus, workflowInstanceId, response.durationMs());
         return response;
@@ -361,8 +467,11 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 invocationRecord);
     }
 
-    /** 根据 DAG 成功数量计算工作流 SUCCESS、PARTIAL_SUCCESS 或 FAILED 终态。 */
-    private String workflowStatus(DagExecutionResult result) {
+    /** 根据输出审核决策和 DAG 成功数量计算工作流终态。 */
+    private String workflowStatus(DagExecutionResult result, OutputReviewResult reviewResult) {
+        if (reviewResult.decision() == OutputReviewDecision.BLOCK) {
+            return "REVIEW_BLOCKED";
+        }
         if (result.successCount() == result.taskResults().size()) {
             return "SUCCESS";
         }
@@ -370,6 +479,17 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             return "PARTIAL_SUCCESS";
         }
         return "FAILED";
+    }
+
+    /** 生成全任务失败或审核阻断时写入实例表的错误摘要。 */
+    private String workflowErrorMessage(DagExecutionResult result, OutputReviewResult reviewResult) {
+        if (reviewResult.decision() == OutputReviewDecision.BLOCK) {
+            return "Output review blocked: " + String.join("; ", reviewResult.reasons());
+        }
+        if (result.successCount() == 0) {
+            return "All planned agent tasks failed or were skipped";
+        }
+        return null;
     }
 
     /** 读取当前全局 ChatModel 名称，用于主工作流最终调用审计。 */
@@ -412,7 +532,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
     /** 校验确认请求与等待中的工作流实例、conversationId 和状态一致。 */
     private void validateConfirmationInstance(WorkflowInstanceExecutionView instance,
-                                              ProductConfirmationRequest request) {
+                                               ProductConfirmationRequest request) {
         if (instance == null) {
             throw new IllegalArgumentException("workflowInstanceId does not exist");
         }
@@ -424,10 +544,25 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         }
     }
 
+    /** 校验主动恢复只能作用于同会话且仍为 RUNNING 的实例。 */
+    private void validateResumeInstance(WorkflowInstanceExecutionView instance,
+                                        WorkflowResumeRequest request) {
+        if (instance == null) {
+            throw new IllegalArgumentException("workflow instance does not exist");
+        }
+        if (!instance.conversationId().equals(request.conversationId())) {
+            throw new IllegalArgumentException("conversationId does not match workflow instance");
+        }
+        if (!STATUS_RUNNING.equals(instance.status())) {
+            throw new IllegalArgumentException("only RUNNING workflow instance can be resumed");
+        }
+    }
+
     /** 创建 Graph 调用配置，以 workflowInstanceId 作为 Checkpoint threadId。 */
     private RunnableConfig runnableConfig(String workflowInstanceId, String conversationId) {
         return RunnableConfig.builder()
                 .threadId(workflowInstanceId)
+                .defaultParallelExecutor(workflowDagTaskExecutor)
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_WORKFLOW_INSTANCE_ID, workflowInstanceId)
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_CONVERSATION_ID, conversationId)
                 .build();
@@ -443,12 +578,27 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     private void fail(String workflowInstanceId, Exception exception) {
         Instant endedAt = Instant.now();
         String errorMessage = truncateErrorMessage(exception);
+        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
         workflowExecutionMapper.skipPendingSteps(workflowInstanceId, endedAt);
         workflowExecutionMapper.updateInstanceResult(
                 workflowInstanceId, "FAILED", null, errorMessage, endedAt);
-        checkpointSaver.markFailed(workflowInstanceId);
+        checkpointSaver.markWorkflowFailed(workflowInstanceId);
+        if (instance != null) {
+            publishEvent(workflowInstanceId, instance.conversationId(), WorkflowSseEventType.ERROR, null,
+                    Map.of("status", "FAILED", "message", "主工作流执行失败，请稍后重试或联系人工支持"));
+        }
+        workflowEventPublisher.completeSubscribers(workflowInstanceId);
         log.error("[Workflow] code={} action=execute status=failed workflowInstanceId={}",
                 WORKFLOW_CODE, workflowInstanceId, exception);
+    }
+
+    /** 将已脱敏的工作流生命周期数据交给 profile 对应的 SSE 发布器。 */
+    private void publishEvent(String workflowInstanceId,
+                              String conversationId,
+                              WorkflowSseEventType type,
+                              String node,
+                              Map<String, Object> data) {
+        workflowEventPublisher.publish(workflowInstanceId, conversationId, type, node, data);
     }
 
     /** 为当前 Graph 定义中的每个节点预分配数据库步骤编号。 */

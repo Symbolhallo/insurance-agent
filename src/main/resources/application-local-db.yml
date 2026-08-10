@@ -24,3 +24,6 @@ insurance:
         completed-retention: 30d
         state-schema-version: 1
         max-write-retries: 5
+      sse:
+        connection-timeout: 5m
+        event-retention: 7d

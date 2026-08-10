@@ -10,7 +10,7 @@
 - Spring Boot 3.5.8
 - Gradle
 - Spring AI 1.1.2
-- Spring AI Alibaba 1.1.2.3
+- Spring AI Alibaba 1.1.2.0
 - Lombok
 
 ## 当前阶段
@@ -46,6 +46,12 @@ Phase1 聚焦 `ProductAnalysisAgent` 单智能体闭环。
 - Phase2-Task14：上下文对齐召回判断、Mock 产品召回与召回审计
 - Phase2-Task15：产品实体前置解析、会话级产品确认与 Graph Checkpoint 暂停恢复
 - Phase2-Task16：保险业务知识问答 Agent 与双意图单任务路由
+- Phase2-Task17：动态 DAG 执行、任务依赖校验与失败传播
+- Phase2-Task18：行内输出审核网关与审核节点
+- Phase2-Task19：多子智能体结果总结 Agent
+- Phase2-Task20：SSE 持久化事件、断线重连与 Last-Event-ID
+- Phase2-Task21：Spring AI Alibaba 1.1.2.0 独立任务子图、并行调度与 Checkpoint 恢复
+- Phase2-Task22：主工作流主动恢复 API，以及保单/资产 Agent 的隔离 Skill/Tool 扩展骨架
 
 ## 架构边界
 
@@ -252,11 +258,13 @@ ai_long_term_memory
 
 会话摘要通过手动接口触发，读取 `ai_long_term_memory` 历史消息，调用全局 `ChatModel` 生成结构化摘要，并写入 `ai_conversation_summary`。
 
-当前 Workflow 已接入 Main Graph v1：通过 Spring AI Alibaba Graph 定义 `START -> resolve-product-reference -> (retrieve-product-candidates -> human-confirm-product) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> END`。
+当前 Workflow 已接入 Main Graph v1：通过 Spring AI Alibaba Graph 定义 `START -> resolve-product-reference -> (retrieve-product-candidates -> human-confirm-product) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> output-review -> END`。
 
-`resolve-product-reference` 只读取当前 `conversationId` 已确认产品并识别本轮产品线索。首次具体产品、模糊产品名和无法映射的产品追问进入 Mock 候选召回，并在 `human-confirm-product` 前持久化中断；确认接口把标准产品写入 State 后从 OceanBase Checkpoint 恢复。纯条件筛选或唯一映射到当前会话已确认产品的追问直接进入 `context-alignment`。上下文对齐随后读取历史记忆、判断话题延续/切换并完成五步问题改写。意图节点可拆分 `PRODUCT_ANALYSIS` 与 `KNOWLEDGE_QA`，`planner-agent` 生成一到两个受控任务，`dag-executor` 按依赖串行、并行或混合执行，并在部分失败时保留可用结果。
+`resolve-product-reference` 只读取当前 `conversationId` 已确认产品并识别本轮产品线索。首次具体产品、模糊产品名和无法映射的产品追问进入 Mock 候选召回，并在 `human-confirm-product` 前持久化中断；确认接口把标准产品写入 State 后从 OceanBase Checkpoint 恢复。纯条件筛选或唯一映射到当前会话已确认产品的追问直接进入 `context-alignment`。上下文对齐随后读取历史记忆、判断话题延续/切换并完成五步问题改写。意图节点可拆分产品分析、知识问答、保单查询和资产查询，Planner 生成带 `dependsOn` 的受控任务图。`dag-executor` 按单个任务完成事件立即释放后继，不等待无关并行任务；每个任务使用独立 Spring AI Alibaba 子图和 OceanBase Checkpoint thread，恢复时不会重复执行已成功任务。`summary` 对单任务结果直接透传，对多个成功、失败和跳过结果调用独立 ReactAgent 汇总；`output-review` 再通过 `OutputReviewGateway.review(...)` 审核唯一候选答案。保单和资产查询当前为明确 Mock 边界，待行内微应用接入。
 
 Workflow 调用子智能体时，模型使用 Planner 拆分后的任务指令；子智能体并行阶段只写 `ai_agent_invocation` 审计，Summary 完成后由 Main Workflow 向 `ai_chat_memory` 和 `ai_long_term_memory` 一次性写入用户原话与最终回答，调用流水同时关联 `workflow_instance_id` 与 `workflow_step_id`。
+
+`local-db` profile 还提供 Workflow SSE：`POST /api/v1/workflows/main/runs/stream` 在独立有界线程池中启动 Graph，发送 `start`、`stage`、`human_confirm`、`summary`、`review`、`agent_stream`、`complete`、`error` 事件；`GET /api/v1/workflows/main/runs/{workflowInstanceId}/events` 可携带 `Last-Event-ID: {workflowInstanceId}:{sequence}` 重放断线后遗漏事件。脱敏事件写入 `ai_workflow_sse_event` 并保留 7 天。SSE 模式下 Product、Knowledge 和多任务 Summary 使用 `ReactAgent.stream()` 执行，但原始模型 Token 不直接外发；只有输出审核返回的 PASS/REWRITE `publishableAnswer` 会分片成为 `agent_stream`，BLOCK 不发布正文。
 
 启用本地数据库：
 
@@ -279,6 +287,8 @@ src/main/resources/db/migration/V6__move_product_recall_decision_to_context_alig
 src/main/resources/db/migration/V7__create_conversation_confirmed_product_and_human_confirm_workflow.sql
 src/main/resources/db/migration/V8__add_knowledge_qa_agent_to_main_workflow.sql
 src/main/resources/db/migration/V9__add_dynamic_dag_executor.sql
+src/main/resources/db/migration/V10__add_output_review_node.sql
+src/main/resources/db/migration/V14__support_workflow_task_graph_threads.sql
 ```
 
 你只需要手动创建 `insurance_agent` 数据库，业务表由 Flyway 自动创建。

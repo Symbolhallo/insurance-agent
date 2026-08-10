@@ -2,7 +2,7 @@
 
 本文档定义 `insurance-agent` 在 ProductAnalysisAgent Phase1 完成后的 Memory 与 Workflow 前置设计。
 
-本文档最初用于设计定界；当前 Memory、Main Graph v1、Human Confirm、双意图 Planner v2 和动态 DAG Executor 已按分阶段路线落地，向量数据库仍未实现。
+本文档最初用于设计定界；当前 Memory、Main Graph v1、Human Confirm、双意图 Planner v2、动态 DAG Executor 和输出审核节点已按分阶段路线落地，向量数据库仍未实现。
 
 ## 目标
 
@@ -349,15 +349,19 @@ AgentInvocation
 
 - 实现 `main-workflow-v1` 主工作流骨架。
 - API 入口创建 `ai_workflow_instance`，并为每个 Graph 节点创建 `ai_workflow_step`。
-- 通过 Spring AI Alibaba Graph 执行 `START -> product-reference-resolution -> (product-recall -> human-confirm) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> END`。
+- 通过 Spring AI Alibaba Graph 执行 `START -> product-reference-resolution -> (product-recall -> human-confirm) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> output-review -> END`。
 - `context-alignment` 合并请求归一、记忆加载和 Query Understanding，在内部保留清晰职责分层，并输出原始问题、改写问题和实体列表。
 - `intent-recognition` 可拆分产品分析与知识问答两个意图，并通过本地白名单映射目标 Agent。
 - `planner-agent` 使用独立 Spring AI Alibaba ReactAgent 生成结构化计划。Planner v2 允许一到两个任务，依赖只能指向更早任务，并由本地校验器做确定性约束。
 - `dag-executor` 在受控线程池中并行执行无依赖任务，依赖失败时跳过后继任务，结果写回 Graph state。
-- `summary` 按计划顺序汇总成功结果并披露未完成任务；后续可升级为独立 Summary Agent。
+- `summary` 使用独立、无 Tool/Skill/Memory 的 ReactAgent：单个成功任务直接透传，多个或混合任务结果调用模型汇总，并披露未完成任务。
+- `output-review` 只调用行内审核 Gateway 的一个方法，审核 Summary 产生的唯一候选答案；审核异常时 fail-closed。
 - 工作流终态支持 `SUCCESS`、`PARTIAL_SUCCESS` 和 `FAILED`。
-- 当前不实现向量数据库、PolicyAgent、AssetAgent、独立 Summary Agent 或输出审核 Agent。
+- 当前不实现向量数据库、PolicyAgent 或 AssetAgent；真实行内输出审核协议仍待接入。
 - 默认 profile 下使用 no-op Workflow 服务，不写本地数据库；`local-db` profile 下才落库执行。
+- 阶段级 SSE 已接入：独立线程池后台执行同步 Main Graph，节点记录器发布脱敏事件，V12 使用 `ai_workflow_sse_event` 保存 7 天重放数据，并通过 `Last-Event-ID` 恢复遗漏事件。
+- SSE 工作流中的 Product、Knowledge 和多任务 Summary 已改用 `ReactAgent.stream()`，最终 AssistantMessage 从流的 END State 提取。
+- 金融合规边界要求原始模型 Token 只在服务端消费；`output-review` 完成后才把 PASS/REWRITE 的 `publishableAnswer` 分片为 `agent_stream`，BLOCK 不发送正文。
 
 ### WorkflowDefinition
 

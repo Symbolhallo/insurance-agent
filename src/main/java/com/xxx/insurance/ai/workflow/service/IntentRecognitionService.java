@@ -7,7 +7,9 @@ import com.xxx.insurance.ai.workflow.model.IntentRoute;
 import com.xxx.insurance.ai.workflow.model.RecognizedIntent;
 import com.xxx.insurance.ai.workflow.node.IntentRecognitionNode;
 import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
+import com.xxx.insurance.policy.agent.PolicyQueryAgent;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
+import com.xxx.insurance.asset.agent.AssetQueryAgent;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
@@ -31,12 +33,14 @@ public class IntentRecognitionService {
 
             PRODUCT_ANALYSIS：分析、比较、筛选或评价一个或多个具体保险产品，或根据客户条件筛选产品；
             KNOWLEDGE_QA：解释保险合同、保险责任、保险主体和业务流程等通用概念，不涉及具体产品评价。
+            POLICY_QUERY：查询当前客户持有的保单、保额、保费、保单状态或缴费信息；
+            ASSET_QUERY：查询当前客户的资产余额、资产结构或账户资产信息。
 
             识别规则：
             - 问题包含已标准化的具体产品名称或编码时，优先 PRODUCT_ANALYSIS；
             - 仅询问“犹豫期、等待期、现金价值、退保金、受益人”等一般概念时，选择 KNOWLEDGE_QA；
-            - 同一问题同时包含产品分析和通用知识问答时，输出两个 intentions；
-            - 相同意图的多个要求合并为一个 intentionQuery，最多输出两个 intentions；
+            - 同一问题包含多个业务目标时，按上述四类拆分 intentions；
+            - 相同意图的多个要求合并为一个 intentionQuery，最多输出四个 intentions；
             - intentionQuery 必须自包含、可独立交给对应智能体执行，不得遗漏产品编码或关键条件；
             - 不得输出目标智能体名称；目标智能体由应用白名单映射；
             - 每个意图和整体 reason 只简述分类依据，不输出内部思维过程；
@@ -47,7 +51,9 @@ public class IntentRecognitionService {
 
     private static final Map<String, String> TARGET_AGENTS = Map.of(
             IntentRecognitionNode.PRODUCT_ANALYSIS_INTENT, ProductAnalysisAgent.AGENT_NAME,
-            IntentRecognitionNode.KNOWLEDGE_QA_INTENT, KnowledgeQaAgent.AGENT_NAME);
+            IntentRecognitionNode.KNOWLEDGE_QA_INTENT, KnowledgeQaAgent.AGENT_NAME,
+            IntentRecognitionNode.POLICY_QUERY_INTENT, PolicyQueryAgent.AGENT_NAME,
+            IntentRecognitionNode.ASSET_QUERY_INTENT, AssetQueryAgent.AGENT_NAME);
 
     private final ChatModel chatModel;
 
@@ -59,10 +65,10 @@ public class IntentRecognitionService {
     }
 
     /**
-     * 将对齐后的问题拆分为一到两个可独立执行的意图，并映射到应用内 Agent 白名单。
+     * 将对齐后的问题拆分为一到四个可独立执行的意图，并映射到应用内 Agent 白名单。
      *
-     * <p>模型无权指定 Java Bean 或任意 Agent 名称；应用只接受 PRODUCT_ANALYSIS 和
-     * KNOWLEDGE_QA，并在本地完成目标映射。返回的 routes 将作为 Planner 允许任务集合。</p>
+     * <p>模型无权指定 Java Bean 或任意 Agent 名称；应用只接受四类冻结业务意图，
+     * 并在本地完成目标映射。返回的 routes 将作为 Planner 允许任务集合。</p>
      */
     public IntentRoutingResult recognize(AlignedWorkflowContext context) {
         String modelOutput = chatModel.call(
@@ -70,7 +76,7 @@ public class IntentRecognitionService {
                 new UserMessage("<user_request>\n" + context.rewrittenQuestion() + "\n</user_request>"));
         IntentRecognitionModelOutput output = outputConverter.convert(modelOutput);
         if (output == null || output.intentions() == null || output.intentions().isEmpty()
-                || output.intentions().size() > 2 || !StringUtils.hasText(output.reason())) {
+                || output.intentions().size() > 4 || !StringUtils.hasText(output.reason())) {
             throw new IllegalStateException("Intent recognition model returned unsupported output");
         }
         Set<String> uniqueIntents = new HashSet<>();

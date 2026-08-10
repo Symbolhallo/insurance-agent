@@ -12,7 +12,7 @@ public record WorkflowPlan(
         @Schema(description = "本次计划要完成的业务目标")
         String objective,
 
-        @Schema(description = "按顺序编号的执行任务；Planner v2 允许一到两个任务")
+        @Schema(description = "按稳定序号展示的动态 DAG 任务，执行关系只由 dependsOn 决定")
         List<WorkflowPlanTask> tasks,
 
         @Schema(description = "规划理由，不包含模型内部思维过程")

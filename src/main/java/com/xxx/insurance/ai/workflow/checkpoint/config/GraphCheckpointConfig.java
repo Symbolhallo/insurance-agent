@@ -22,7 +22,12 @@ import com.xxx.insurance.ai.workflow.model.WorkflowPlanTask;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
 import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
+import com.xxx.insurance.ai.workflow.model.OutputReviewDecision;
+import com.xxx.insurance.ai.workflow.model.OutputReviewResult;
 import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
+import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
+import com.xxx.insurance.ai.workflow.model.IntentRoute;
+import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.product.model.ProductCandidate;
 import com.xxx.insurance.product.model.ConfirmedProduct;
 import com.xxx.insurance.product.model.ProductRecallResult;
@@ -37,6 +42,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Main Graph Checkpoint 基础设施配置。
@@ -66,7 +72,7 @@ public class GraphCheckpointConfig {
         ObjectMapper checkpointObjectMapper = objectMapper.copy();
 
         /*
-         * Spring AI Alibaba 1.1.2.3 的 GenericListDeserializer 只能依靠元素上的
+         * Spring AI Alibaba 1.1.2.0 的 GenericListDeserializer 只能依靠元素上的
          * 类型标记恢复 List 中的具体 DTO。Record 是 final 类型，框架默认的 NON_FINAL
          * 类型策略不会为 WorkflowEntity、WorkflowPlanTask 写入标记，恢复后会退化为 Map。
          * 专用 Module 写入框架能够识别的 @typeHint，并且只注册到 Checkpoint ObjectMapper，
@@ -75,14 +81,131 @@ public class GraphCheckpointConfig {
         SimpleModule workflowStateModule = new SimpleModule("main-workflow-checkpoint-types");
         workflowStateModule.addSerializer(WorkflowEntity.class, new WorkflowEntityCheckpointSerializer());
         workflowStateModule.addSerializer(WorkflowPlanTask.class, new WorkflowPlanTaskCheckpointSerializer());
+        workflowStateModule.addSerializer(IntentRoutingResult.class,
+                new IntentRoutingResultCheckpointSerializer());
+        workflowStateModule.addDeserializer(IntentRoutingResult.class,
+                new IntentRoutingResultCheckpointDeserializer());
+        workflowStateModule.addSerializer(AgentTaskExecutionResult.class,
+                new AgentTaskExecutionResultCheckpointSerializer());
+        workflowStateModule.addDeserializer(AgentTaskExecutionResult.class,
+                new AgentTaskExecutionResultCheckpointDeserializer());
         workflowStateModule.addSerializer(ProductCandidate.class, new ProductCandidateCheckpointSerializer());
         workflowStateModule.addSerializer(ConfirmedProduct.class, new ConfirmedProductCheckpointSerializer());
         workflowStateModule.addSerializer(ProductRecallResult.class, new ProductRecallResultCheckpointSerializer());
         workflowStateModule.addDeserializer(ProductRecallResult.class, new ProductRecallResultCheckpointDeserializer());
         workflowStateModule.addSerializer(DagExecutionResult.class, new DagExecutionResultCheckpointSerializer());
         workflowStateModule.addDeserializer(DagExecutionResult.class, new DagExecutionResultCheckpointDeserializer());
+        workflowStateModule.addSerializer(WorkflowSummaryResult.class, new WorkflowSummaryResultCheckpointSerializer());
+        workflowStateModule.addDeserializer(WorkflowSummaryResult.class, new WorkflowSummaryResultCheckpointDeserializer());
+        workflowStateModule.addSerializer(OutputReviewResult.class, new OutputReviewResultCheckpointSerializer());
+        workflowStateModule.addDeserializer(OutputReviewResult.class, new OutputReviewResultCheckpointDeserializer());
         checkpointObjectMapper.registerModule(workflowStateModule);
         return new SpringAIJacksonStateSerializer(OverAllState::new, checkpointObjectMapper);
+    }
+
+    private static final class IntentRoutingResultCheckpointSerializer
+            extends StdSerializer<IntentRoutingResult> {
+
+        /** 注册意图路由结果，避免 1.1.2.0 将嵌套 routes 元素退化为 Map 后无法再次持久化。 */
+        private IntentRoutingResultCheckpointSerializer() {
+            super(IntentRoutingResult.class);
+        }
+
+        /** 写入受控路由及显式类型标记，并兼容框架运行时产生的 Map 元素。 */
+        @Override
+        public void serialize(IntentRoutingResult value,
+                              JsonGenerator generator,
+                              SerializerProvider provider) throws IOException {
+            generator.writeStartObject();
+            generator.writeStringField("@typeHint", IntentRoutingResult.class.getName());
+            writeNullableString(generator, "intent", value.intent());
+            writeNullableString(generator, "targetAgent", value.targetAgent());
+            writeNullableString(generator, "reason", value.reason());
+            generator.writeArrayFieldStart("routes");
+            for (Object routeValue : value.routes()) {
+                IntentRoute route = normalizeRoute(routeValue);
+                generator.writeStartObject();
+                generator.writeStringField("@typeHint", IntentRoute.class.getName());
+                writeNullableString(generator, "intent", route.intent());
+                writeNullableString(generator, "targetAgent", route.targetAgent());
+                writeNullableString(generator, "intentionQuery", route.intentionQuery());
+                writeNullableString(generator, "reason", route.reason());
+                generator.writeEndObject();
+            }
+            generator.writeEndArray();
+            generator.writeEndObject();
+        }
+
+        /** 在框架类型序列化路径中复用相同载荷。 */
+        @Override
+        public void serializeWithType(IntentRoutingResult value,
+                                      JsonGenerator generator,
+                                      SerializerProvider provider,
+                                      TypeSerializer typeSerializer) throws IOException {
+            serialize(value, generator, provider);
+        }
+
+        private IntentRoute normalizeRoute(Object value) throws IOException {
+            if (value instanceof IntentRoute route) {
+                return route;
+            }
+            if (value instanceof Map<?, ?> route) {
+                return new IntentRoute(
+                        nullableMapText(route, "intent"),
+                        nullableMapText(route, "targetAgent"),
+                        nullableMapText(route, "intentionQuery"),
+                        nullableMapText(route, "reason"));
+            }
+            throw new IOException("Unsupported intent route checkpoint value: "
+                    + (value == null ? "null" : value.getClass().getName()));
+        }
+
+        private String nullableMapText(Map<?, ?> value, String key) {
+            Object field = value.get(key);
+            return field == null ? null : field.toString();
+        }
+
+        private void writeNullableString(JsonGenerator generator, String field, String value) throws IOException {
+            if (value == null) {
+                generator.writeNullField(field);
+            }
+            else {
+                generator.writeStringField(field, value);
+            }
+        }
+    }
+
+    private static final class IntentRoutingResultCheckpointDeserializer
+            extends StdDeserializer<IntentRoutingResult> {
+
+        /** 注册意图路由结果反序列化类型。 */
+        private IntentRoutingResultCheckpointDeserializer() {
+            super(IntentRoutingResult.class);
+        }
+
+        /** 恢复外层结果和强类型 IntentRoute 列表。 */
+        @Override
+        public IntentRoutingResult deserialize(JsonParser parser,
+                                               DeserializationContext context) throws IOException {
+            JsonNode root = parser.getCodec().readTree(parser);
+            List<IntentRoute> routes = new ArrayList<>();
+            for (JsonNode route : root.path("routes")) {
+                routes.add(new IntentRoute(
+                        nullableText(route.path("intent")),
+                        nullableText(route.path("targetAgent")),
+                        nullableText(route.path("intentionQuery")),
+                        nullableText(route.path("reason"))));
+            }
+            return new IntentRoutingResult(
+                    nullableText(root.path("intent")),
+                    nullableText(root.path("targetAgent")),
+                    nullableText(root.path("reason")),
+                    List.copyOf(routes));
+        }
+
+        private String nullableText(JsonNode node) {
+            return node.isMissingNode() || node.isNull() ? null : node.asText();
+        }
     }
 
     /**
@@ -151,10 +274,106 @@ public class GraphCheckpointConfig {
             generator.writeStringField("@typeHint", WorkflowPlanTask.class.getName());
             generator.writeStringField("taskId", value.taskId());
             generator.writeNumberField("sequence", value.sequence());
-            generator.writeStringField("agentName", value.agentName());
-            generator.writeStringField("instruction", value.instruction());
+            generator.writeStringField("agentType", value.agentType());
+            generator.writeStringField("query", value.query());
             generator.writeObjectField("dependsOn", value.dependsOn());
+            generator.writeNumberField("maxRetries", value.maxRetries());
+            generator.writeBooleanField("required", value.required());
             generator.writeEndObject();
+        }
+    }
+
+    private static final class AgentTaskExecutionResultCheckpointSerializer
+            extends StdSerializer<AgentTaskExecutionResult> {
+
+        /** 注册单任务子图直接持久化的任务结果类型。 */
+        private AgentTaskExecutionResultCheckpointSerializer() {
+            super(AgentTaskExecutionResult.class);
+        }
+
+        /** 写入任务状态、响应、重试次数和可为空的中间态时间。 */
+        @Override
+        public void serialize(AgentTaskExecutionResult value,
+                              JsonGenerator generator,
+                              SerializerProvider provider) throws IOException {
+            generator.writeStartObject();
+            generator.writeStringField("@typeHint", AgentTaskExecutionResult.class.getName());
+            generator.writeStringField("taskId", value.taskId());
+            generator.writeNumberField("sequence", value.sequence());
+            generator.writeStringField("agentName", value.agentName());
+            generator.writeStringField("status", value.status().name());
+            generator.writeObjectField("response", value.response());
+            generator.writeStringField("errorCode", value.errorCode());
+            generator.writeStringField("errorMessage", value.errorMessage());
+            writeInstant(generator, "startedAt", value.startedAt());
+            writeInstant(generator, "endedAt", value.endedAt());
+            generator.writeNumberField("durationMs", value.durationMs());
+            generator.writeNumberField("attempts", value.attempts());
+            generator.writeEndObject();
+        }
+
+        /** 允许框架类型序列化路径复用相同 JSON 结构。 */
+        @Override
+        public void serializeWithType(AgentTaskExecutionResult value,
+                                      JsonGenerator generator,
+                                      SerializerProvider provider,
+                                      TypeSerializer typeSerializer) throws IOException {
+            serialize(value, generator, provider);
+        }
+
+        /** 写入可为空的执行时间。 */
+        private void writeInstant(JsonGenerator generator, String field, Instant value) throws IOException {
+            if (value == null) {
+                generator.writeNullField(field);
+            }
+            else {
+                generator.writeStringField(field, value.toString());
+            }
+        }
+    }
+
+    private static final class AgentTaskExecutionResultCheckpointDeserializer
+            extends StdDeserializer<AgentTaskExecutionResult> {
+
+        /** 注册单任务结果反序列化类型。 */
+        private AgentTaskExecutionResultCheckpointDeserializer() {
+            super(AgentTaskExecutionResult.class);
+        }
+
+        /** 恢复任务中间态或终态，并兼容旧 Checkpoint 缺少 attempts 字段。 */
+        @Override
+        public AgentTaskExecutionResult deserialize(JsonParser parser,
+                                                    DeserializationContext context) throws IOException {
+            JsonNode task = parser.getCodec().readTree(parser);
+            ObjectMapper mapper = (ObjectMapper) parser.getCodec();
+            JsonNode responseNode = task.path("response");
+            SubAgentExecutionResult response = responseNode.isMissingNode() || responseNode.isNull()
+                    ? null
+                    : mapper.treeToValue(responseNode, SubAgentExecutionResult.class);
+            AgentTaskStatus status = AgentTaskStatus.valueOf(task.path("status").asText());
+            return new AgentTaskExecutionResult(
+                    task.path("taskId").asText(),
+                    task.path("sequence").asInt(),
+                    task.path("agentName").asText(),
+                    status,
+                    response,
+                    nullableText(task.path("errorCode")),
+                    nullableText(task.path("errorMessage")),
+                    nullableInstant(task.path("startedAt")),
+                    nullableInstant(task.path("endedAt")),
+                    task.path("durationMs").asLong(),
+                    task.has("attempts") ? task.path("attempts").asInt()
+                            : (status == AgentTaskStatus.SKIPPED_DEPENDENCY_FAILED ? 0 : 1));
+        }
+
+        /** 将 JSON null 转换为 Java null。 */
+        private String nullableText(JsonNode node) {
+            return node.isMissingNode() || node.isNull() ? null : node.asText();
+        }
+
+        /** 将可为空时间字段恢复为 Instant。 */
+        private Instant nullableInstant(JsonNode node) {
+            return node.isMissingNode() || node.isNull() ? null : Instant.parse(node.asText());
         }
     }
 
@@ -308,18 +527,7 @@ public class GraphCheckpointConfig {
             generator.writeStringField("@typeHint", DagExecutionResult.class.getName());
             generator.writeArrayFieldStart("taskResults");
             for (AgentTaskExecutionResult task : value.taskResults()) {
-                generator.writeStartObject();
-                generator.writeStringField("taskId", task.taskId());
-                generator.writeNumberField("sequence", task.sequence());
-                generator.writeStringField("agentName", task.agentName());
-                generator.writeStringField("status", task.status().name());
-                generator.writeObjectField("response", task.response());
-                generator.writeStringField("errorCode", task.errorCode());
-                generator.writeStringField("errorMessage", task.errorMessage());
-                generator.writeStringField("startedAt", task.startedAt().toString());
-                generator.writeStringField("endedAt", task.endedAt().toString());
-                generator.writeNumberField("durationMs", task.durationMs());
-                generator.writeEndObject();
+                new AgentTaskExecutionResultCheckpointSerializer().serialize(task, generator, provider);
             }
             generator.writeEndArray();
             generator.writeNumberField("successCount", value.successCount());
@@ -354,21 +562,10 @@ public class GraphCheckpointConfig {
             List<AgentTaskExecutionResult> taskResults = new ArrayList<>();
             ObjectMapper mapper = (ObjectMapper) parser.getCodec();
             for (JsonNode task : root.path("taskResults")) {
-                JsonNode responseNode = task.path("response");
-                SubAgentExecutionResult response = responseNode.isMissingNode() || responseNode.isNull()
-                        ? null
-                        : mapper.treeToValue(responseNode, SubAgentExecutionResult.class);
-                taskResults.add(new AgentTaskExecutionResult(
-                        task.path("taskId").asText(),
-                        task.path("sequence").asInt(),
-                        task.path("agentName").asText(),
-                        AgentTaskStatus.valueOf(task.path("status").asText()),
-                        response,
-                        nullableText(task.path("errorCode")),
-                        nullableText(task.path("errorMessage")),
-                        Instant.parse(task.path("startedAt").asText()),
-                        Instant.parse(task.path("endedAt").asText()),
-                        task.path("durationMs").asLong()));
+                JsonParser taskParser = task.traverse(mapper);
+                taskParser.nextToken();
+                taskResults.add(new AgentTaskExecutionResultCheckpointDeserializer()
+                        .deserialize(taskParser, context));
             }
             return new DagExecutionResult(
                     taskResults,
@@ -381,6 +578,123 @@ public class GraphCheckpointConfig {
         /** 将 JSON null 或缺失字段转换为 Java null。 */
         private String nullableText(JsonNode node) {
             return node.isMissingNode() || node.isNull() ? null : node.asText();
+        }
+    }
+
+    private static final class WorkflowSummaryResultCheckpointSerializer extends StdSerializer<WorkflowSummaryResult> {
+
+        /** 注册 WorkflowSummaryResult 的 Checkpoint 序列化目标类型。 */
+        private WorkflowSummaryResultCheckpointSerializer() {
+            super(WorkflowSummaryResult.class);
+        }
+
+        /** 写入 Summary 策略、任务统计、候选答案和调用元数据。 */
+        @Override
+        public void serialize(WorkflowSummaryResult value,
+                              JsonGenerator generator,
+                              SerializerProvider provider) throws IOException {
+            generator.writeStartObject();
+            generator.writeStringField("@typeHint", WorkflowSummaryResult.class.getName());
+            generator.writeStringField("summaryId", value.summaryId());
+            generator.writeBooleanField("modelInvoked", value.modelInvoked());
+            generator.writeNumberField("sourceTaskCount", value.sourceTaskCount());
+            generator.writeNumberField("successfulTaskCount", value.successfulTaskCount());
+            generator.writeStringField("answer", value.answer());
+            generator.writeNumberField("durationMs", value.durationMs());
+            generator.writeStringField("summarizedAt", value.summarizedAt().toString());
+            generator.writeEndObject();
+        }
+
+        /** 在框架请求带类型序列化时复用自定义类型标记格式。 */
+        @Override
+        public void serializeWithType(WorkflowSummaryResult value,
+                                      JsonGenerator generator,
+                                      SerializerProvider provider,
+                                      TypeSerializer typeSerializer) throws IOException {
+            serialize(value, generator, provider);
+        }
+    }
+
+    private static final class WorkflowSummaryResultCheckpointDeserializer
+            extends StdDeserializer<WorkflowSummaryResult> {
+
+        /** 注册 WorkflowSummaryResult 的 Checkpoint 反序列化目标类型。 */
+        private WorkflowSummaryResultCheckpointDeserializer() {
+            super(WorkflowSummaryResult.class);
+        }
+
+        /** 将 Checkpoint JSON 恢复为具体 Summary 结果。 */
+        @Override
+        public WorkflowSummaryResult deserialize(JsonParser parser,
+                                                 DeserializationContext context) throws IOException {
+            JsonNode root = parser.getCodec().readTree(parser);
+            return new WorkflowSummaryResult(
+                    root.path("summaryId").asText(),
+                    root.path("modelInvoked").asBoolean(),
+                    root.path("sourceTaskCount").asInt(),
+                    root.path("successfulTaskCount").asInt(),
+                    root.path("answer").asText(),
+                    root.path("durationMs").asLong(),
+                    Instant.parse(root.path("summarizedAt").asText()));
+        }
+    }
+
+    private static final class OutputReviewResultCheckpointSerializer extends StdSerializer<OutputReviewResult> {
+
+        /** 注册 OutputReviewResult 的 Checkpoint 序列化目标类型。 */
+        private OutputReviewResultCheckpointSerializer() {
+            super(OutputReviewResult.class);
+        }
+
+        /** 写入审核决策、唯一可发布答案、原因和调用元数据。 */
+        @Override
+        public void serialize(OutputReviewResult value,
+                              JsonGenerator generator,
+                              SerializerProvider provider) throws IOException {
+            generator.writeStartObject();
+            generator.writeStringField("@typeHint", OutputReviewResult.class.getName());
+            generator.writeStringField("reviewRequestId", value.reviewRequestId());
+            generator.writeStringField("decision", value.decision().name());
+            generator.writeStringField("publishableAnswer", value.publishableAnswer());
+            generator.writeObjectField("reasons", value.reasons());
+            generator.writeBooleanField("mockData", value.mockData());
+            generator.writeNumberField("durationMs", value.durationMs());
+            generator.writeStringField("reviewedAt", value.reviewedAt().toString());
+            generator.writeEndObject();
+        }
+
+        /** 在框架请求带类型序列化时复用自定义类型标记格式。 */
+        @Override
+        public void serializeWithType(OutputReviewResult value,
+                                      JsonGenerator generator,
+                                      SerializerProvider provider,
+                                      TypeSerializer typeSerializer) throws IOException {
+            serialize(value, generator, provider);
+        }
+    }
+
+    private static final class OutputReviewResultCheckpointDeserializer extends StdDeserializer<OutputReviewResult> {
+
+        /** 注册 OutputReviewResult 的 Checkpoint 反序列化目标类型。 */
+        private OutputReviewResultCheckpointDeserializer() {
+            super(OutputReviewResult.class);
+        }
+
+        /** 将 Checkpoint JSON 恢复为具体输出审核结果。 */
+        @Override
+        public OutputReviewResult deserialize(JsonParser parser,
+                                              DeserializationContext context) throws IOException {
+            JsonNode root = parser.getCodec().readTree(parser);
+            List<String> reasons = new ArrayList<>();
+            root.path("reasons").forEach(reason -> reasons.add(reason.asText()));
+            return new OutputReviewResult(
+                    root.path("reviewRequestId").asText(),
+                    OutputReviewDecision.valueOf(root.path("decision").asText()),
+                    root.path("publishableAnswer").asText(),
+                    reasons,
+                    root.path("mockData").asBoolean(),
+                    root.path("durationMs").asLong(),
+                    Instant.parse(root.path("reviewedAt").asText()));
         }
     }
 }

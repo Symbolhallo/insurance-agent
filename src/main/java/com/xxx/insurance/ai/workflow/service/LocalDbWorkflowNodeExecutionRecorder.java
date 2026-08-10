@@ -6,6 +6,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.config.MainWorkflowGraphConfig;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
 import com.xxx.insurance.ai.workflow.model.WorkflowNodeDefinition;
+import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
+import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
+import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
+import com.xxx.insurance.ai.workflow.model.WorkflowSseEventType;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -24,10 +28,14 @@ public class LocalDbWorkflowNodeExecutionRecorder implements WorkflowNodeExecuti
 
     private final ObjectMapper objectMapper;
 
+    private final WorkflowEventPublisher workflowEventPublisher;
+
     public LocalDbWorkflowNodeExecutionRecorder(WorkflowExecutionMapper workflowExecutionMapper,
-                                                ObjectMapper objectMapper) {
+                                                ObjectMapper objectMapper,
+                                                WorkflowEventPublisher workflowEventPublisher) {
         this.workflowExecutionMapper = workflowExecutionMapper;
         this.objectMapper = objectMapper;
+        this.workflowEventPublisher = workflowEventPublisher;
     }
 
     /**
@@ -45,11 +53,13 @@ public class LocalDbWorkflowNodeExecutionRecorder implements WorkflowNodeExecuti
         if (workflowStepId != null) {
             workflowExecutionMapper.updateStepStarted(workflowStepId, startedAt);
         }
+        publishStage(nodeDefinition, state, "RUNNING", null);
         try {
             Map<String, Object> result = nodeExecution.call();
             if (workflowStepId != null) {
                 workflowExecutionMapper.updateStepResult(workflowStepId, "SUCCESS", toJson(result), null, Instant.now());
             }
+            publishStage(nodeDefinition, state, "SUCCESS", null);
             return result;
         }
         catch (Exception ex) {
@@ -61,8 +71,43 @@ public class LocalDbWorkflowNodeExecutionRecorder implements WorkflowNodeExecuti
                         truncateErrorMessage(ex),
                         Instant.now());
             }
+            publishStage(nodeDefinition, state, "FAILED", frontendErrorMessage(nodeDefinition));
             throw ex;
         }
+    }
+
+    /** 发布不包含完整 State 的节点阶段事件，Summary 和 Review 使用各自协议事件名。 */
+    private void publishStage(WorkflowNodeDefinition nodeDefinition,
+                              OverAllState state,
+                              String status,
+                              String errorMessage) {
+        String workflowInstanceId = state.value(MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, String.class).orElse(null);
+        String conversationId = conversationId(state, workflowInstanceId);
+        if (workflowInstanceId == null || conversationId == null) {
+            return;
+        }
+        WorkflowSseEventType eventType = switch (nodeDefinition) {
+            case SUMMARY -> WorkflowSseEventType.SUMMARY;
+            case OUTPUT_REVIEW -> WorkflowSseEventType.REVIEW;
+            default -> WorkflowSseEventType.STAGE;
+        };
+        Map<String, Object> data = errorMessage == null
+                ? Map.of("status", status, "nodeName", nodeDefinition.nodeName())
+                : Map.of("status", status, "nodeName", nodeDefinition.nodeName(), "message", errorMessage);
+        workflowEventPublisher.publish(
+                workflowInstanceId, conversationId, eventType, nodeDefinition.code(), data);
+    }
+
+    /** 从初始请求或已对齐上下文读取当前会话编号。 */
+    private String conversationId(OverAllState state, String workflowInstanceId) {
+        return state.value(MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class)
+                .map(MainWorkflowRequest::conversationId)
+                .or(() -> state.value(MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class)
+                        .map(AlignedWorkflowContext::conversationId))
+                .or(() -> java.util.Optional.ofNullable(workflowInstanceId)
+                        .map(workflowExecutionMapper::findInstance)
+                        .map(instance -> instance.conversationId()))
+                .orElse(null);
     }
 
     private String toJson(Object value) {
@@ -83,5 +128,10 @@ public class LocalDbWorkflowNodeExecutionRecorder implements WorkflowNodeExecuti
             return message;
         }
         return message.substring(0, 1024);
+    }
+
+    /** 返回不包含上游响应、请求编号、凭证或堆栈的前端错误描述。 */
+    private String frontendErrorMessage(WorkflowNodeDefinition nodeDefinition) {
+        return "节点执行失败，请稍后重试或联系人工支持：" + nodeDefinition.nodeName();
     }
 }

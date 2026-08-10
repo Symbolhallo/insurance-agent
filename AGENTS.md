@@ -38,7 +38,7 @@ Current phase:
 - `ai_chat_memory` and `ai_long_term_memory` must be written through `AgentMemoryService.saveSuccessfulExchange(...)` in one transaction.
 - Phase2-Task11 Spring AI Alibaba Main Graph v1 skeleton is complete.
 - Phase2-Task12 merges request loading, memory loading, and query understanding into `ContextAlignmentNode`.
-- Main Graph v1 currently runs `ProductReferenceResolution -> (Mock ProductRecall -> HumanConfirm) -> ContextAlignment -> IntentRecognition -> PlannerAgent -> DagExecutor -> Summary`.
+- Main Graph v1 currently runs `ProductReferenceResolution -> (Mock ProductRecall -> HumanConfirm) -> ContextAlignment -> IntentRecognition -> PlannerAgent -> DagExecutor -> SummaryAgent -> OutputReview`.
 - `ProductReferenceResolutionNode` is the single source of truth for product clues and candidate recall routing. It may only load confirmed products from the current `conversationId`.
 - A first, fuzzy, or unresolved product reference enters candidate recall and persistent Human Confirm. A pure condition filter or a reference uniquely mapped to a product confirmed in the same conversation goes directly to context alignment.
 - `ContextAlignmentNode` runs only after product resolution and uses standardized product data to align history and rewrite the question.
@@ -49,6 +49,17 @@ Current phase:
 - Phase2 KnowledgeQAAgent, isolated knowledge Skill/Tool, two-intent routing, dynamic single-agent invocation, and V8 workflow definition are complete.
 - Phase2 dynamic DAG execution is complete: independent tasks run on a bounded executor, dependency failures skip successors, partial results are summarized, and V9 records the workflow definition.
 - DAG child agents write invocation audit only; Main Workflow writes one final user/assistant exchange to ChatMemory and long-term memory after aggregation.
+- Phase2 output review is complete: the node calls one `OutputReviewGateway.review(...)` method and uses a Mock gateway until the line-of-business microservice contract is supplied.
+- Phase2 Summary Agent is complete: one successful task is passed through without a model call; multiple or mixed task results are synthesized by a dedicated tool-less ReactAgent. Main Graph runs `dag-executor -> summary -> output-review`, and V11 records the workflow definition.
+- Only `OutputReviewResult.publishableAnswer` may become `finalAnswer`; invalid or failed review calls fail closed, and a BLOCK decision produces workflow status `REVIEW_BLOCKED`.
+- Phase2 stage-level Workflow SSE is complete: `POST /runs/stream` starts a background Graph, `GET /runs/{workflowInstanceId}/events` replays by `Last-Event-ID`, and V12 stores sanitized events for seven days.
+- Phase2 reviewed Agent streaming is complete: SSE runs use `ReactAgent.stream()` internally, but raw model chunks never bypass output review; V13 publishes only PASS/REWRITE `publishableAnswer` as persisted `agent_stream` chunks and emits no answer chunks for BLOCK.
+- Phase2 dynamic DAG v2 is complete: Planner tasks use `agentType`, `query`, `dependsOn`, `maxRetries`, and `required`; execution depends only on `dependsOn` and consumes individual completion events instead of waiting for whole waves.
+- Every child task runs in an independent Spring AI Alibaba task subgraph and OceanBase Checkpoint thread. Successful task checkpoints are reused after recovery; V14 allows multiple graph threads per workflow instance.
+- Main Workflow active recovery is available for orphaned `RUNNING` instances. The API atomically changes the database status to `RESUMING` before loading the latest OceanBase Checkpoint, so concurrent recovery requests cannot fork the same execution.
+- Spring AI Alibaba 1.1.2.0 may materialize nested final Record elements in generic lists as `LinkedHashMap` between Graph checkpoints. The Main Workflow checkpoint serializer explicitly normalizes and restores `IntentRoutingResult.routes` as `IntentRoute` objects; new nested State DTO lists require the same consecutive-checkpoint regression test.
+- ProductAnalysisAgent and KnowledgeQAAgent remain the implemented model agents. PolicyQueryAgent and AssetQueryAgent are explicit Mock boundaries until line-of-business microservices are integrated.
+- PolicyQueryAgent and AssetQueryAgent already have isolated classpath Skill registries, SkillsAgentHook beans, named empty ToolCallback arrays, and ReactAgent scaffolds. Their current `query` methods must not call the model or fabricate customer data.
 
 ## Technology Baseline
 
@@ -56,7 +67,7 @@ Current phase:
 - Spring Boot 3.5.8
 - Gradle
 - Spring AI 1.1.2
-- Spring AI Alibaba 1.1.2.3
+- Spring AI Alibaba 1.1.2.0
 - Lombok
 
 Current model strategy:
@@ -146,7 +157,7 @@ sources differ, the local dependency sources control compile-time decisions and 
 difference must be documented. Do not rely on memory or unverified rolling website
 examples for Spring AI Alibaba code.
 
-Do not guess imports for Spring AI Alibaba Agent or Skill classes. The following classes were verified from local Gradle cache for version `1.1.2.3`.
+Do not guess imports for Spring AI Alibaba Agent or Skill classes. The following classes were verified from local Gradle cache for version `1.1.2.0`.
 
 ```java
 com.alibaba.cloud.ai.graph.agent.ReactAgent
@@ -159,8 +170,8 @@ com.alibaba.cloud.ai.graph.skills.registry.filesystem.FileSystemSkillRegistry
 Verified artifacts:
 
 ```text
-com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:1.1.2.3
-com.alibaba.cloud.ai:spring-ai-alibaba-graph-core:1.1.2.3
+com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:1.1.2.0
+com.alibaba.cloud.ai:spring-ai-alibaba-graph-core:1.1.2.0
 ```
 
 `spring-ai-alibaba-graph-core` is pulled transitively by `spring-ai-alibaba-agent-framework`.

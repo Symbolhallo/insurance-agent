@@ -1,6 +1,6 @@
 # Agent Framework 开发参考
 
-> 官方架构与功能基线：Spring AI Alibaba `v1.1.2.0`。项目编译适配版本：`1.1.2.3`。除明确标为“官网当前版/待验证”的内容外，类名和方法均已用本地 `1.1.2.3` sources JAR 核对。
+> 官方架构与功能基线：Spring AI Alibaba `v1.1.2.0`。项目编译适配版本：`1.1.2.0`。除明确标为“官网当前版/待验证”的内容外，类名和方法均已用本地 `1.1.2.0` sources JAR 核对。
 
 ## 1. 定位与运行原理
 
@@ -67,7 +67,7 @@ AssistantMessage answer = agent.call("比较 P001 和 P002", config);
 
 Builder 支持 `.model(ChatModel)` 或 `.chatClient(ChatClient)`。当前项目使用全局 OpenAI-compatible `ChatModel`，适合单模型阶段；未来 Model Router 应在 Agent 配置边界选择模型，不应让 Tool 自行选择模型。
 
-`instruction` 是任务指令，框架通过内置 `InstructionAgentHook` 注入执行上下文；`systemPrompt` 直接配置系统提示。`1.1.2.3` 两个 Builder 方法均存在。动态数据优先通过输入 Map 传递，由模板读取；客户数据不得拼进全局 Bean 的静态 Prompt。
+`instruction` 是任务指令，框架通过内置 `InstructionAgentHook` 注入执行上下文；`systemPrompt` 直接配置系统提示。`1.1.2.0` 两个 Builder 方法均存在。动态数据优先通过输入 Map 传递，由模板读取；客户数据不得拼进全局 Bean 的静态 Prompt。
 
 ```java
 Map<String, Object> input = Map.of(
@@ -118,7 +118,7 @@ public final class PolicyTools {
 - 参数对象使用 Bean Validation，并在 Service 层二次验证业务权限。
 - `.toolExecutionExceptionProcessor(...)` 可统一转换工具异常；不要把数据库栈或客户隐私返回模型。
 - `ToolRetryInterceptor` 只重试幂等、可恢复错误；写操作必须有幂等键。
-- `1.1.2.3` Builder 支持 `parallelToolExecution`、`maxParallelTools`、`toolExecutionTimeout` 和 `wrapSyncToolsAsAsync`。
+- `1.1.2.0` Builder 支持 `parallelToolExecution`、`maxParallelTools`、`toolExecutionTimeout` 和 `wrapSyncToolsAsAsync`。
 - 同步 Tool 被包装异步后仍会占 Executor 线程；数据库连接与线程池容量必须联合配置。
 
 ### returnDirect
@@ -160,7 +160,7 @@ skills/product-analysis/
     └── SKILL.md
 ```
 
-加载过程：Registry 启动时扫描 `SKILL.md` 元数据 -> `SkillsInterceptor` 将名称/描述注入系统上下文 -> 模型匹配任务 -> 调用 `read_skill` 加载全文 -> `groupedTools` 或 Skill 声明的工具按需加入模型请求。`1.1.2.3` 的 `SkillsAgentHook` 还提供 `search_skills`、`disable_skill`。
+加载过程：Registry 启动时扫描 `SKILL.md` 元数据 -> `SkillsInterceptor` 将名称/描述注入系统上下文 -> 模型匹配任务 -> 调用 `read_skill` 加载全文 -> `groupedTools` 或 Skill 声明的工具按需加入模型请求。`1.1.2.0` 的 `SkillsAgentHook` 还提供 `search_skills`、`disable_skill`。
 
 ```java
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
@@ -185,7 +185,7 @@ SkillsAgentHook hook = SkillsAgentHook.builder()
 
 Builder 提供 `.outputType(Class<?>)` 和 `.outputSchema(String)`。框架基于 Spring AI `BeanOutputConverter`/JSON Schema 约束模型输出。结构化输出仍是“模型生成 + 解析”，不是数据库级保证。
 
-**当前项目 1.1.2.3 兼容性说明（根据本地依赖源码与回归测试）**：`AgentLlmNode` 会在模型调用前
+**当前项目 1.1.2.0 兼容性说明（根据本地依赖源码与回归测试）**：`AgentLlmNode` 会在模型调用前
 使用 `PromptTemplate` 渲染消息。若把 `BeanOutputConverter.getFormat()` 直接拼入 `instruction`，默认
 `StTemplateRenderer` 会把 JSON Schema 的 `{}` 识别为模板表达式并抛出
 `The template string is not valid`。固定 Java 输出合同应使用 `.outputType(...)`；对于不需要运行时模板
@@ -204,7 +204,7 @@ ReactAgent reviewer = ReactAgent.builder()
 OverAllState state = reviewer.invoke(answer).orElseThrow();
 ```
 
-解析前应设最大输出长度；解析失败可做一次带原错误的修复重试，仍失败则进入确定性降级，不把原始 JSON 直接发布。官网不同页面对结果位于 AssistantMessage 还是 State 的描述存在演进差异，`1.1.2.3` 项目中应通过 `invoke` 检查实际 State，并为输出解析添加集成测试。
+解析前应设最大输出长度；解析失败可做一次带原错误的修复重试，仍失败则进入确定性降级，不把原始 JSON 直接发布。官网不同页面对结果位于 AssistantMessage 还是 State 的描述存在演进差异，`1.1.2.0` 项目中应通过 `invoke` 检查实际 State，并为输出解析添加集成测试。
 
 ## 7. 流式输出与 SSE
 
@@ -215,7 +215,7 @@ OverAllState state = reviewer.invoke(answer).orElseThrow();
 - `AGENT_HOOK_STREAMING` / `AGENT_HOOK_FINISHED`
 - `GRAPH_NODE_STREAMING` / `GRAPH_NODE_FINISHED`
 
-文本从 `streaming.message()` 读取；`chunk()` 在 `1.1.2.3` 已标记 deprecated。ToolCall 类型的 AssistantMessage 可能没有文本，应过滤空内容，不能把每个 NodeOutput 都当 Token。
+文本从 `streaming.message()` 读取；`chunk()` 在 `1.1.2.0` 已标记 deprecated。ToolCall 类型的 AssistantMessage 可能没有文本，应过滤空内容，不能把每个 NodeOutput 都当 Token。
 
 ```java
 Flux<NodeOutput> flux = agent.stream(input, config);
@@ -252,7 +252,7 @@ LlmRoutingAgent router = LlmRoutingAgent.builder()
 
 ### Supervisor
 
-中心 Agent 按需调用专家并综合结果，适合任务不确定的开放式协作；缺点是成本、循环和上下文污染风险高。官网当前文档有 Supervisor 模式，但本地 `1.1.2.3` sources JAR 未发现独立 `SupervisorAgent` 类。可用 `AgentTool` 把子 Agent 暴露为工具，或主 Graph 显式实现；具体官网示例 Builder 标记为**待验证**。
+中心 Agent 按需调用专家并综合结果，适合任务不确定的开放式协作；缺点是成本、循环和上下文污染风险高。官网当前文档有 Supervisor 模式，但本地 `1.1.2.0` sources JAR 未发现独立 `SupervisorAgent` 类。可用 `AgentTool` 把子 Agent 暴露为工具，或主 Graph 显式实现；具体官网示例 Builder 标记为**待验证**。
 
 ### Agent As Tool
 
@@ -271,7 +271,7 @@ ReactAgent supervisor = ReactAgent.builder()
 
 ### Handoffs
 
-当前 Agent 主动把控制权转给另一个 Agent，并保留 `active_agent` 等状态。优点是对话自然；缺点是控制权漂移、循环和审计复杂。`1.1.2.3` 没有独立 Handoff Builder，推荐用 handoff Tool 更新 State，再由 StateGraph 条件边路由。
+当前 Agent 主动把控制权转给另一个 Agent，并保留 `active_agent` 等状态。优点是对话自然；缺点是控制权漂移、循环和审计复杂。`1.1.2.0` 没有独立 Handoff Builder，推荐用 handoff Tool 更新 State，再由 StateGraph 条件边路由。
 
 ### Sequential
 
@@ -322,4 +322,4 @@ LoopAgent loop = LoopAgent.builder()
 6. 在单例 Agent 保存请求状态：并发串话；请求数据只放 State/Config/ToolContext。
 7. 官网类无法导入：先检查本地 sources JAR；Supervisor 等滚动文档能力可能没有对应独立类。
 
-主要来源：[Agents](https://java2ai.com/en/docs/frameworks/agent-framework/tutorials/agents/)、[Tools](https://java2ai.com/en/docs/frameworks/agent-framework/tutorials/tools/)、[Hooks](https://java2ai.com/docs/frameworks/agent-framework/tutorials/hooks/)、[Skills](https://java2ai.com/docs/frameworks/agent-framework/tutorials/skills/)、[Multi-agent](https://java2ai.com/docs/frameworks/agent-framework/advanced/multi-agent/) 和本地 `1.1.2.3` 源码。
+主要来源：[Agents](https://java2ai.com/en/docs/frameworks/agent-framework/tutorials/agents/)、[Tools](https://java2ai.com/en/docs/frameworks/agent-framework/tutorials/tools/)、[Hooks](https://java2ai.com/docs/frameworks/agent-framework/tutorials/hooks/)、[Skills](https://java2ai.com/docs/frameworks/agent-framework/tutorials/skills/)、[Multi-agent](https://java2ai.com/docs/frameworks/agent-framework/advanced/multi-agent/) 和本地 `1.1.2.0` 源码。

@@ -17,6 +17,7 @@ import java.time.Instant;
  * @param startedAt 开始时间
  * @param endedAt 结束时间
  * @param durationMs 执行耗时，单位毫秒
+ * @param attempts 实际调用子智能体的次数
  */
 @Schema(description = "DAG 单任务执行结果")
 public record AgentTaskExecutionResult(
@@ -48,5 +49,31 @@ public record AgentTaskExecutionResult(
         Instant endedAt,
 
         @Schema(description = "执行耗时，单位毫秒")
-        long durationMs) {
+        long durationMs,
+
+        @Schema(description = "实际调用子智能体的次数")
+        int attempts) {
+
+    /** 兼容已有终态构造代码；成功和失败默认视为执行过一次，跳过任务为零次。 */
+    public AgentTaskExecutionResult(String taskId,
+                                    int sequence,
+                                    String agentName,
+                                    AgentTaskStatus status,
+                                    SubAgentExecutionResult response,
+                                    String errorCode,
+                                    String errorMessage,
+                                    Instant startedAt,
+                                    Instant endedAt,
+                                    long durationMs) {
+        this(taskId, sequence, agentName, status, response, errorCode, errorMessage,
+                startedAt, endedAt, durationMs,
+                status == AgentTaskStatus.SKIPPED_DEPENDENCY_FAILED ? 0 : 1);
+    }
+
+    /** 判断当前状态是否已经不可再调度。 */
+    public boolean terminal() {
+        return status == AgentTaskStatus.SUCCESS
+                || status == AgentTaskStatus.FAILED
+                || status == AgentTaskStatus.SKIPPED_DEPENDENCY_FAILED;
+    }
 }

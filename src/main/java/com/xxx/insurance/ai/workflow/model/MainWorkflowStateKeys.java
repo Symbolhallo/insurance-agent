@@ -27,11 +27,17 @@ public final class MainWorkflowStateKeys {
 
     public static final String DAG_EXECUTION_RESULT = "dagExecutionResult";
 
+    public static final String SUMMARY_RESULT = "summaryResult";
+
+    public static final String OUTPUT_REVIEW_RESULT = "outputReviewResult";
+
     public static final String FINAL_ANSWER = "finalAnswer";
 
     public static final String WORKFLOW_INSTANCE_ID = "workflowInstanceId";
 
     public static final String WORKFLOW_STEP_IDS = "workflowStepIds";
+
+    public static final String TOKEN_STREAMING_ENABLED = "tokenStreamingEnabled";
 
     private static final Set<String> ALL_KEYS = Set.of(
             REQUEST,
@@ -44,9 +50,12 @@ public final class MainWorkflowStateKeys {
             HUMAN_CONFIRM_REQUIRED,
             WORKFLOW_PLAN,
             DAG_EXECUTION_RESULT,
+            SUMMARY_RESULT,
+            OUTPUT_REVIEW_RESULT,
             FINAL_ANSWER,
             WORKFLOW_INSTANCE_ID,
-            WORKFLOW_STEP_IDS);
+            WORKFLOW_STEP_IDS,
+            TOKEN_STREAMING_ENABLED);
 
     private MainWorkflowStateKeys() {
     }

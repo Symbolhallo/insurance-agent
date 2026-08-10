@@ -1,6 +1,6 @@
 # Graph Core 开发参考
 
-> 官方架构与功能基线：Spring AI Alibaba `v1.1.2.0`。项目编译适配版本：Graph Core `1.1.2.3`。本文将官网概念与本地源码 API 分开陈述。
+> 官方架构与功能基线：Spring AI Alibaba `v1.1.2.0`。项目编译适配版本：Graph Core `1.1.2.0`。本文将官网概念与本地源码 API 分开陈述。
 
 ## 1. 核心概念
 
@@ -79,7 +79,7 @@ KeyStrategyFactory strategies = () -> {
 };
 ```
 
-注意：节点写入未注册 Key 时会使用默认替换语义，但 1.1.2.3 从 Checkpoint 恢复时只会把
+注意：节点写入未注册 Key 时会使用默认替换语义，但 1.1.2.0 从 Checkpoint 恢复时只会把
 `KeyStrategyFactory` 中已注册的 Key 合并回 `OverAllState`。因此需要暂停恢复的 Graph 必须显式注册
 所有持久化状态字段；当前项目的 Main Graph 已为全部状态键注册 `ReplaceStrategy`。引入并行前还需
 为并行聚合字段单独调整为 `AppendStrategy` 或 `MergeStrategy`。
@@ -184,7 +184,7 @@ CompiledGraph graph = stateGraph.compile(compileConfig);
 | PostgreSQL | `...checkpoint.savers.postgresql.PostgresSaver` | 注意类名是 `PostgresSaver` |
 | MongoDB | `...checkpoint.savers.mongo.MongoSaver` | 文档型状态 |
 
-这些类在 `graph-core:1.1.2.3` 源码存在，但项目尚未声明对应客户端依赖，也未对 OceanBase 做适配。具体构造参数和建表脚本在接入阶段必须做独立 PoC，本文不声称当前工程可直接启用。
+这些类在 `graph-core:1.1.2.0` 源码存在，但项目尚未声明对应客户端依赖，也未对 OceanBase 做适配。具体构造参数和建表脚本在接入阶段必须做独立 PoC，本文不声称当前工程可直接启用。
 
 ### 当前项目：OceanBase 自定义 Saver
 
@@ -232,7 +232,7 @@ Optional<OverAllState> resumed = graph.invoke(Map.of(), branch.withResume());
 
 StateGraph 默认支持 Spring AI Jackson StateSerializer。自定义业务 DTO 要有稳定字段和可反序列化构造；版本升级时采用兼容字段演进。不要将 JPA/MyBatis 代理、异常对象、Flux、ThreadLocal 或 Bean 放进 State。
 
-**当前项目 1.1.2.3 兼容性说明（根据本地依赖源码与回归测试）**：
+**当前项目 1.1.2.0 兼容性说明（根据本地依赖源码与回归测试）**：
 `SpringAIJacksonStateSerializer` 使用 `DefaultTyping.NON_FINAL`，而 Record 是 final 类型；当 State DTO
 包含 `List<自定义Record>` 时，集合元素可能在 Checkpoint 恢复后退化为 `LinkedHashMap`，并在后续节点
 再次保存 Checkpoint 时触发 Jackson `object is not an instance of declaring class`。当前项目通过仅注册到
@@ -307,4 +307,4 @@ Graph 流转 SSE 时：
 7. 把 `CompletableFuture.allOf` 误认为公开 `AllOf` API。
 8. SSE 断开后 Graph 仍继续生成 Token。
 
-主要来源：[Core Library](https://java2ai.com/docs/frameworks/graph-core/core/core-library/)、[Persistence](https://java2ai.com/en/docs/frameworks/graph-core/core/persistence/)、[Streaming](https://java2ai.com/docs/frameworks/graph-core/core/streaming/)、[Human In The Loop](https://java2ai.com/docs/frameworks/graph-core/examples/human-in-the-loop/) 与本地 `1.1.2.3` Graph Core 源码。
+主要来源：[Core Library](https://java2ai.com/docs/frameworks/graph-core/core/core-library/)、[Persistence](https://java2ai.com/en/docs/frameworks/graph-core/core/persistence/)、[Streaming](https://java2ai.com/docs/frameworks/graph-core/core/streaming/)、[Human In The Loop](https://java2ai.com/docs/frameworks/graph-core/examples/human-in-the-loop/) 与本地 `1.1.2.0` Graph Core 源码。

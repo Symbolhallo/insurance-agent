@@ -9,12 +9,16 @@ import org.springframework.util.StringUtils;
  * @param workflowStepId 所属工作流步骤编号，独立调用时为空
  * @param originalUserMessage 进入工作流时的原始用户问题，用于审计记录
  * @param conversationMemoryEnabled 是否允许本次子智能体调用直接读写会话记忆
+ * @param taskId Planner 任务编号，独立调用时为空
+ * @param tokenStreamingEnabled 是否使用 ReactAgent.stream 执行模型
  */
 public record AgentExecutionContext(
         String workflowInstanceId,
         String workflowStepId,
         String originalUserMessage,
-        boolean conversationMemoryEnabled) {
+        boolean conversationMemoryEnabled,
+        String taskId,
+        boolean tokenStreamingEnabled) {
 
     /**
      * 兼容单 Agent 调用的构造方式，默认允许该 Agent 直接读写会话记忆。
@@ -22,14 +26,29 @@ public record AgentExecutionContext(
     public AgentExecutionContext(String workflowInstanceId,
                                  String workflowStepId,
                                  String originalUserMessage) {
-        this(workflowInstanceId, workflowStepId, originalUserMessage, true);
+        this(workflowInstanceId, workflowStepId, originalUserMessage, true, null, false);
+    }
+
+    /** 创建 Workflow 子任务上下文，显式控制会话记忆和内部模型流式执行。 */
+    public AgentExecutionContext(String workflowInstanceId,
+                                 String workflowStepId,
+                                 String originalUserMessage,
+                                 boolean conversationMemoryEnabled,
+                                 String taskId,
+                                 boolean tokenStreamingEnabled) {
+        this.workflowInstanceId = workflowInstanceId;
+        this.workflowStepId = workflowStepId;
+        this.originalUserMessage = originalUserMessage;
+        this.conversationMemoryEnabled = conversationMemoryEnabled;
+        this.taskId = taskId;
+        this.tokenStreamingEnabled = tokenStreamingEnabled;
     }
 
     /**
      * 创建不属于 Workflow 的独立 Agent 调用上下文。
      */
     public static AgentExecutionContext standalone(String userMessage) {
-        return new AgentExecutionContext(null, null, userMessage, true);
+        return new AgentExecutionContext(null, null, userMessage, true, null, false);
     }
 
     /**

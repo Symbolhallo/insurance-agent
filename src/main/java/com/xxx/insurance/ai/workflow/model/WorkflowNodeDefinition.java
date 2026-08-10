@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.workflow.model;
 
 import com.xxx.insurance.ai.workflow.agent.WorkflowPlannerAgent;
+import com.xxx.insurance.ai.workflow.agent.WorkflowSummaryAgent;
 
 /**
  * Main Graph v1 节点定义。
@@ -24,7 +25,9 @@ public enum WorkflowNodeDefinition {
 
     DAG_EXECUTOR("dag-executor", "DAG任务执行", "EXECUTOR", "workflow-dag-executor"),
 
-    SUMMARY("summary", "结果汇总", "SYSTEM", "summary");
+    SUMMARY("summary", "结果汇总", "AGENT", WorkflowSummaryAgent.AGENT_NAME),
+
+    OUTPUT_REVIEW("output-review", "输出审核", "EXTERNAL_SERVICE", "line-output-review");
 
     private final String code;
 

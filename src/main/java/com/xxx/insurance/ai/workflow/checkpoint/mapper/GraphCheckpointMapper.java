@@ -166,6 +166,19 @@ public interface GraphCheckpointMapper {
 
     @Update("""
             update ai_graph_thread
+            set status = #{status},
+                expires_at = #{expiresAt},
+                updated_at = #{now}
+            where workflow_instance_id = #{workflowInstanceId}
+              and status <> 'RELEASED'
+            """)
+    int updateWorkflowThreadStatuses(@Param("workflowInstanceId") String workflowInstanceId,
+                                     @Param("status") String status,
+                                     @Param("expiresAt") Instant expiresAt,
+                                     @Param("now") Instant now);
+
+    @Update("""
+            update ai_graph_thread
             set status = 'RELEASED',
                 released_at = #{now},
                 expires_at = #{expiresAt},

@@ -21,6 +21,7 @@ import com.xxx.insurance.ai.workflow.node.ContextAlignmentNode;
 import com.xxx.insurance.ai.workflow.node.IntentRecognitionNode;
 import com.xxx.insurance.ai.workflow.node.HumanConfirmProductNode;
 import com.xxx.insurance.ai.workflow.node.PlannerNode;
+import com.xxx.insurance.ai.workflow.node.OutputReviewNode;
 import com.xxx.insurance.ai.workflow.node.ProductCandidateRetrievalNode;
 import com.xxx.insurance.ai.workflow.node.ProductReferenceResolutionNode;
 import com.xxx.insurance.ai.workflow.node.SummaryNode;
@@ -46,10 +47,10 @@ import static com.alibaba.cloud.ai.graph.action.AsyncEdgeAction.edge_async;
  *
  * <p>Main Graph v1 的目标是验证未来多智能体平台的主编排入口：
  * START -> ProductReferenceResolution -> (ProductRecall -> HumanConfirm) -> ContextAlignment ->
- * IntentRecognition -> PlannerAgent -> DagExecutor -> Summary -> END。
+ * IntentRecognition -> PlannerAgent -> DagExecutor -> Summary -> OutputReview -> END。
  * ProductReferenceResolution 只加载当前会话确认产品并决定候选确认分支；ContextAlignment
- * 在产品实体确定后完成记忆加载、话题对齐和问题改写；Planner v2 生成一到两个受控任务，
- * DagExecutor 根据依赖关系串行、并行或混合执行。当前产品召回使用 Mock 服务，Human Confirm
+ * 在产品实体确定后完成记忆加载、话题对齐和问题改写；Planner 生成受控动态任务图，
+ * DagExecutor 依据 dependsOn 和单任务完成事件串行、并行或混合执行。当前产品召回使用 Mock 服务，Human Confirm
  * 已通过 OceanBase Checkpoint 暂停和恢复。</p>
  */
 @Configuration
@@ -76,6 +77,7 @@ public class MainWorkflowGraphConfig {
                                            IntentRecognitionNode intentRecognitionNode,
                                            PlannerNode plannerNode,
                                            DagExecutorNode dagExecutorNode,
+                                           OutputReviewNode outputReviewNode,
                                            SummaryNode summaryNode,
                                            WorkflowNodeExecutionRecorder workflowNodeExecutionRecorder,
                                            @Qualifier(GraphCheckpointConfig.MAIN_WORKFLOW_STATE_SERIALIZER)
@@ -105,6 +107,9 @@ public class MainWorkflowGraphConfig {
                 .addNode(WorkflowNodeDefinition.DAG_EXECUTOR.code(),
                         node_async(tracked(WorkflowNodeDefinition.DAG_EXECUTOR, dagExecutorNode,
                                 workflowNodeExecutionRecorder)))
+                .addNode(WorkflowNodeDefinition.OUTPUT_REVIEW.code(),
+                        node_async(tracked(WorkflowNodeDefinition.OUTPUT_REVIEW, outputReviewNode,
+                                workflowNodeExecutionRecorder)))
                 .addNode(WorkflowNodeDefinition.SUMMARY.code(),
                         node_async(tracked(WorkflowNodeDefinition.SUMMARY, summaryNode,
                                 workflowNodeExecutionRecorder)))
@@ -128,7 +133,8 @@ public class MainWorkflowGraphConfig {
                 .addEdge(WorkflowNodeDefinition.INTENT_RECOGNITION.code(), WorkflowNodeDefinition.PLANNER.code())
                 .addEdge(WorkflowNodeDefinition.PLANNER.code(), WorkflowNodeDefinition.DAG_EXECUTOR.code())
                 .addEdge(WorkflowNodeDefinition.DAG_EXECUTOR.code(), WorkflowNodeDefinition.SUMMARY.code())
-                .addEdge(WorkflowNodeDefinition.SUMMARY.code(), END);
+                .addEdge(WorkflowNodeDefinition.SUMMARY.code(), WorkflowNodeDefinition.OUTPUT_REVIEW.code())
+                .addEdge(WorkflowNodeDefinition.OUTPUT_REVIEW.code(), END);
 
         BaseCheckpointSaver checkpointSaver = checkpointSaverProvider.getIfAvailable();
         CompileConfig.Builder compileConfigBuilder = CompileConfig.builder()

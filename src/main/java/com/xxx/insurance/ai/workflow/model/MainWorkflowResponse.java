@@ -70,6 +70,12 @@ public record MainWorkflowResponse(
         @Schema(description = "DAG 全部任务的执行结果")
         DagExecutionResult dagExecutionResult,
 
+        @Schema(description = "单任务透传或多任务模型汇总的结果")
+        WorkflowSummaryResult summaryResult,
+
+        @Schema(description = "行内节点返回的输出审核结果")
+        OutputReviewResult outputReviewResult,
+
         @Schema(description = "实际执行的子智能体统一响应")
         SubAgentExecutionResult agentResponse,
 

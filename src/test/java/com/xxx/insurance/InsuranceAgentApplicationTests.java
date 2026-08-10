@@ -4,8 +4,10 @@ import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import com.xxx.insurance.ai.workflow.agent.WorkflowPlannerAgent;
+import com.xxx.insurance.ai.workflow.agent.WorkflowSummaryAgent;
 import com.xxx.insurance.ai.workflow.config.MainWorkflowGraphConfig;
 import com.xxx.insurance.ai.workflow.config.WorkflowPlannerAgentConfig;
+import com.xxx.insurance.ai.workflow.config.WorkflowSummaryAgentConfig;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.config.ProductAnalysisAgentConfig;
@@ -19,6 +21,9 @@ import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
 import com.xxx.insurance.knowledge.config.KnowledgeQaAgentConfig;
 import com.xxx.insurance.knowledge.model.KnowledgeQueryResult;
 import com.xxx.insurance.knowledge.tool.InsuranceKnowledgeTool;
+import com.xxx.insurance.ai.workflow.config.CustomerQueryAgentConfig;
+import com.xxx.insurance.asset.agent.AssetQueryAgent;
+import com.xxx.insurance.policy.agent.PolicyQueryAgent;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -89,6 +94,36 @@ class InsuranceAgentApplicationTests {
     private ToolCallback[] knowledgeQaToolCallbacks;
 
     @Autowired
+    @Qualifier(SkillConfig.POLICY_QUERY_SKILL_REGISTRY)
+    private SkillRegistry policyQuerySkillRegistry;
+
+    @Autowired
+    @Qualifier(SkillConfig.POLICY_QUERY_SKILLS_AGENT_HOOK)
+    private SkillsAgentHook policyQuerySkillsAgentHook;
+
+    @Autowired
+    private PolicyQueryAgent policyQueryAgent;
+
+    @Autowired
+    @Qualifier(CustomerQueryAgentConfig.POLICY_QUERY_TOOL_CALLBACKS)
+    private ToolCallback[] policyQueryToolCallbacks;
+
+    @Autowired
+    @Qualifier(SkillConfig.ASSET_QUERY_SKILL_REGISTRY)
+    private SkillRegistry assetQuerySkillRegistry;
+
+    @Autowired
+    @Qualifier(SkillConfig.ASSET_QUERY_SKILLS_AGENT_HOOK)
+    private SkillsAgentHook assetQuerySkillsAgentHook;
+
+    @Autowired
+    private AssetQueryAgent assetQueryAgent;
+
+    @Autowired
+    @Qualifier(CustomerQueryAgentConfig.ASSET_QUERY_TOOL_CALLBACKS)
+    private ToolCallback[] assetQueryToolCallbacks;
+
+    @Autowired
     private MockMvc mockMvc;
 
     @Autowired
@@ -99,12 +134,16 @@ class InsuranceAgentApplicationTests {
     @Qualifier(WorkflowPlannerAgentConfig.WORKFLOW_PLANNER_AGENT)
     private WorkflowPlannerAgent workflowPlannerAgent;
 
+    @Autowired
+    @Qualifier(WorkflowSummaryAgentConfig.WORKFLOW_SUMMARY_AGENT)
+    private WorkflowSummaryAgent workflowSummaryAgent;
+
     @Test
     void contextLoads() {
     }
 
     @Test
-    void productAnalysisSkillRegistryLoadsOnlyProductAnalysisSkills() {
+    void productAnalysisSkillRegistryLoadsOnlyProductAnalysisSkills() throws Exception {
         assertThat(productAnalysisSkillRegistry.size()).isEqualTo(2);
         assertThat(productAnalysisSkillRegistry.contains("limited-product-analysis")).isTrue();
         assertThat(productAnalysisSkillRegistry.contains("batch-product-analysis")).isTrue();
@@ -113,8 +152,11 @@ class InsuranceAgentApplicationTests {
                 .allMatch(skillPath -> skillPath.contains("skills/product-analysis"));
         assertThat(productAnalysisSkillRegistry.get("limited-product-analysis")).isPresent()
                 .get()
-                .extracting(skill -> skill.getAllowedTools())
-                .isEqualTo(List.of(ProductAnalysisTool.TOOL_NAME));
+                .extracting(skill -> skill.getDescription())
+                .asString()
+                .contains("保险产品");
+        assertThat(productAnalysisSkillRegistry.readSkillContent("limited-product-analysis"))
+                .contains(ProductAnalysisTool.TOOL_NAME);
     }
 
     @Test
@@ -149,6 +191,43 @@ class InsuranceAgentApplicationTests {
     }
 
     @Test
+    void customerQueryAgentsExposeIsolatedSkillAndToolExtensionPoints() {
+        assertThat(policyQuerySkillRegistry).isNotSameAs(assetQuerySkillRegistry);
+        assertThat(policyQuerySkillRegistry.contains("policy-query-scaffold")).isTrue();
+        assertThat(policyQuerySkillRegistry.listAll())
+                .extracting(skill -> skill.getSkillPath().replace('\\', '/'))
+                .allMatch(path -> path.contains("skills/policy-query"));
+        assertThat(assetQuerySkillRegistry.contains("asset-query-scaffold")).isTrue();
+        assertThat(assetQuerySkillRegistry.listAll())
+                .extracting(skill -> skill.getSkillPath().replace('\\', '/'))
+                .allMatch(path -> path.contains("skills/asset-query"));
+
+        assertThat(policyQueryAgent.reactAgent().name()).isEqualTo(PolicyQueryAgent.AGENT_NAME);
+        assertThat(policyQueryAgent.skillsAgentHook()).isSameAs(policyQuerySkillsAgentHook);
+        assertThat(policyQueryAgent.toolCallbacks()).isEmpty();
+        assertThat(policyQueryToolCallbacks).isEmpty();
+
+        assertThat(assetQueryAgent.reactAgent().name()).isEqualTo(AssetQueryAgent.AGENT_NAME);
+        assertThat(assetQueryAgent.skillsAgentHook()).isSameAs(assetQuerySkillsAgentHook);
+        assertThat(assetQueryAgent.toolCallbacks()).isEmpty();
+        assertThat(assetQueryToolCallbacks).isEmpty();
+    }
+
+    @Test
+    void customerQueryAgentsReturnExplicitMockResultsWithoutInvokingModel() {
+        assertThat(policyQueryAgent.query("查询我的有效保单", "customer-query-test-001"))
+                .satisfies(result -> {
+                    assertThat(result.modelInvoked()).isFalse();
+                    assertThat(result.answer()).contains("保单查询 Mock").contains("尚未接入");
+                });
+        assertThat(assetQueryAgent.query("查询我的资产余额", "customer-query-test-001"))
+                .satisfies(result -> {
+                    assertThat(result.modelInvoked()).isFalse();
+                    assertThat(result.answer()).contains("资产查询 Mock").contains("尚未接入");
+                });
+    }
+
+    @Test
     void insuranceKnowledgeToolReturnsMockKnowledgeWithSource() {
         KnowledgeQueryResult result = insuranceKnowledgeTool.search("犹豫期是什么", null, 3);
 
@@ -164,6 +243,7 @@ class InsuranceAgentApplicationTests {
         assertThat(mainWorkflowGraph).isNotNull();
         assertThat(mainWorkflowGraph.stateGraph.getName()).isEqualTo("main-workflow-v1");
         assertThat(workflowPlannerAgent.reactAgent().name()).isEqualTo(WorkflowPlannerAgent.AGENT_NAME);
+        assertThat(workflowSummaryAgent.reactAgent().name()).isEqualTo(WorkflowSummaryAgent.AGENT_NAME);
     }
 
     @Test
@@ -387,6 +467,38 @@ class InsuranceAgentApplicationTests {
     }
 
     @Test
+    void mainWorkflowResumeApiKeepsContractWhenPersistenceIsDisabled() throws Exception {
+        mockMvc.perform(post("/api/v1/workflows/main/runs/wfi-resume-test-001/resume")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "conversationId": "workflow-resume-test-001"
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.workflowInstanceId").value("wfi-resume-test-001"))
+                .andExpect(jsonPath("$.data.conversationId").value("workflow-resume-test-001"))
+                .andExpect(jsonPath("$.data.status").value("DISABLED"));
+    }
+
+    @Test
+    void mainWorkflowResumeApiRejectsBlankConversationId() throws Exception {
+        mockMvc.perform(post("/api/v1/workflows/main/runs/wfi-resume-test-002/resume")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "conversationId": " "
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("COMMON-400"))
+                .andExpect(jsonPath("$.message")
+                        .value("conversationId: conversationId must not be blank"));
+    }
+
+    @Test
     void productRecallApiReturnsMockCandidates() throws Exception {
         mockMvc.perform(post("/api/v1/products/recall")
                         .header("X-Trace-Id", "test-trace-recall-001")
@@ -541,6 +653,10 @@ class InsuranceAgentApplicationTests {
                 .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.alignedQuestion").exists())
                 .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.intent").exists())
                 .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.plan").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.summaryResult").exists())
+                .andExpect(jsonPath("$.components.schemas.MainWorkflowResponse.properties.outputReviewResult").exists())
+                .andExpect(jsonPath("$.components.schemas.WorkflowSummaryResult").exists())
+                .andExpect(jsonPath("$.components.schemas.OutputReviewResult").exists())
                 .andExpect(jsonPath("$.components.schemas.WorkflowPlan").exists())
                 .andExpect(jsonPath("$.components.schemas.WorkflowPlanTask").exists());
     }
@@ -574,6 +690,28 @@ class InsuranceAgentApplicationTests {
                 .contains("planner-agent")
                 .doesNotContain("context-loader")
                 .doesNotContain("memory-loader");
+    }
+
+    @Test
+    void workflowSseMigrationDefinesReplaySequenceAndRetentionFields() throws Exception {
+        String migration = readClasspathResource("db/migration/V12__add_workflow_sse_events.sql");
+
+        assertThat(migration)
+                .contains("event_sequence bigint not null default 0")
+                .contains("create table if not exists ai_workflow_sse_event")
+                .contains("unique key uk_ai_workflow_sse_event_instance_sequence")
+                .contains("expire_at timestamp not null comment")
+                .contains("version = 9");
+    }
+
+    @Test
+    void reviewedAgentStreamMigrationDocumentsAuditBeforeDelivery() throws Exception {
+        String migration = readClasspathResource("db/migration/V13__add_reviewed_agent_stream.sql");
+
+        assertThat(migration)
+                .contains("review、agent_stream、complete")
+                .contains("未经审核的模型 Token 不外发")
+                .contains("version = 10");
     }
 
     private String readClasspathResource(String location) throws Exception {

@@ -3,100 +3,142 @@ package com.xxx.insurance.ai.workflow.service;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlanTask;
-import com.xxx.insurance.ai.workflow.node.IntentRecognitionNode;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.util.List;
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.Set;
 
-/**
- * Planner 输出的确定性安全边界。
- */
+/** Planner 输出进入执行层前的确定性安全边界。 */
 @Component
 public class WorkflowPlanValidator {
 
+    private static final int MAX_TASK_COUNT = 12;
+
+    private static final int MAX_QUERY_LENGTH = 2000;
+
+    private static final int MAX_RETRIES = 3;
+
     /**
-     * 校验 Planner 计划的任务数量、编号、Agent 白名单、指令长度和依赖方向。
+     * 校验任务字段、Agent 白名单、依赖引用和 DAG 无环性。
      *
-     * @param plan 模型生成的结构化计划
-     * @param routingResult 意图识别阶段给出的唯一允许路由集合
-     * @return 校验通过的原计划
-     * @throws IllegalArgumentException 计划违反 Planner v2 确定性约束时抛出
+     * <p>executionMode 不参与任何校验或执行；真正的串并行关系只由 dependsOn 决定。</p>
      */
     public WorkflowPlan validate(WorkflowPlan plan, IntentRoutingResult routingResult) {
         Objects.requireNonNull(plan, "Workflow plan must not be null");
         Objects.requireNonNull(routingResult, "Intent routing result must not be null");
-        if (!IntentRecognitionNode.PRODUCT_ANALYSIS_INTENT.equals(routingResult.intent())
-                && !IntentRecognitionNode.KNOWLEDGE_QA_INTENT.equals(routingResult.intent())
-                && !IntentRecognitionNode.MULTI_INTENT.equals(routingResult.intent())) {
-            throw new IllegalArgumentException("Planner v2 does not support intent: " + routingResult.intent());
-        }
         if (!StringUtils.hasText(plan.objective())) {
             throw new IllegalArgumentException("Workflow plan objective must not be blank");
         }
         if (routingResult.routes() == null || routingResult.routes().isEmpty()
-                || routingResult.routes().size() > 2) {
-            throw new IllegalArgumentException("Planner v2 requires one or two intent routes");
+                || routingResult.routes().size() > 4) {
+            throw new IllegalArgumentException("Workflow requires one to four intent routes");
         }
-        if (plan.tasks() == null || plan.tasks().size() != routingResult.routes().size()) {
-            throw new IllegalArgumentException("Planner task count must match intent route count");
+        if (plan.tasks() == null || plan.tasks().isEmpty() || plan.tasks().size() > MAX_TASK_COUNT) {
+            throw new IllegalArgumentException("Workflow plan requires one to twelve tasks");
         }
 
         Set<String> allowedAgents = routingResult.routes().stream()
                 .map(route -> route.targetAgent())
+                .filter(StringUtils::hasText)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         Set<String> taskIds = new HashSet<>();
-        Set<String> usedAgents = new HashSet<>();
-        Map<String, Integer> sequenceByTaskId = new HashMap<>();
-
-        for (int index = 0; index < plan.tasks().size(); index++) {
-            WorkflowPlanTask task = plan.tasks().get(index);
-            int expectedSequence = index + 1;
-            String expectedTaskId = "task-" + expectedSequence;
-            String expectedAgent = routingResult.routes().get(index).targetAgent();
-            if (task == null || !expectedTaskId.equals(task.taskId()) || task.sequence() != expectedSequence) {
-                throw new IllegalArgumentException(
-                        "Planner tasks must use consecutive taskId and sequence starting at 1");
-            }
-            if (!taskIds.add(task.taskId())) {
-                throw new IllegalArgumentException("Planner taskId must be unique: " + task.taskId());
-            }
-            if (!Objects.equals(expectedAgent, task.agentName())
-                    || !allowedAgents.contains(task.agentName())
-                    || !usedAgents.add(task.agentName())) {
-                throw new IllegalArgumentException("Planner target agent is not allowed or duplicated: "
-                        + task.agentName());
-            }
-            if (!StringUtils.hasText(task.instruction())) {
-                throw new IllegalArgumentException("Workflow plan task instruction must not be blank");
-            }
-            if (task.instruction().length() > 2000) {
-                throw new IllegalArgumentException("Workflow plan task instruction is too long");
-            }
-            sequenceByTaskId.put(task.taskId(), task.sequence());
-        }
-        if (!usedAgents.equals(allowedAgents)) {
-            throw new IllegalArgumentException("Planner must use every allowed target agent exactly once");
-        }
+        Map<String, WorkflowPlanTask> tasksById = new HashMap<>();
+        Set<Integer> sequences = new HashSet<>();
 
         for (WorkflowPlanTask task : plan.tasks()) {
-            List<String> dependencies = task.dependsOn() == null ? List.of() : task.dependsOn();
+            validateTask(task, allowedAgents, taskIds, sequences);
+            tasksById.put(task.taskId(), task);
+        }
+        for (int sequence = 1; sequence <= plan.tasks().size(); sequence++) {
+            if (!sequences.contains(sequence)) {
+                throw new IllegalArgumentException("Workflow task sequence must be consecutive from 1");
+            }
+        }
+        validateDependencies(tasksById);
+        validateAcyclic(tasksById);
+        return plan;
+    }
+
+    /** 校验一个任务的稳定标识、白名单、查询、重试和展示序号。 */
+    private void validateTask(WorkflowPlanTask task,
+                              Set<String> allowedAgents,
+                              Set<String> taskIds,
+                              Set<Integer> sequences) {
+        if (task == null || !StringUtils.hasText(task.taskId()) || !taskIds.add(task.taskId())) {
+            throw new IllegalArgumentException("Workflow taskId must be non-blank and unique");
+        }
+        if (task.sequence() <= 0 || !sequences.add(task.sequence())) {
+            throw new IllegalArgumentException("Workflow task sequence must be positive and unique");
+        }
+        if (!StringUtils.hasText(task.agentType()) || !allowedAgents.contains(task.agentType())) {
+            throw new IllegalArgumentException("Workflow task agentType is outside intent whitelist: "
+                    + task.agentType());
+        }
+        if (!StringUtils.hasText(task.query()) || task.query().length() > MAX_QUERY_LENGTH) {
+            throw new IllegalArgumentException("Workflow task query must be non-blank and at most 2000 characters");
+        }
+        if (task.maxRetries() < 0 || task.maxRetries() > MAX_RETRIES) {
+            throw new IllegalArgumentException("Workflow task maxRetries must be between 0 and 3");
+        }
+    }
+
+    /** 校验依赖存在、无重复且任务不依赖自身。 */
+    private void validateDependencies(Map<String, WorkflowPlanTask> tasksById) {
+        for (WorkflowPlanTask task : tasksById.values()) {
+            List<String> dependencies = task.dependsOn();
             if (new HashSet<>(dependencies).size() != dependencies.size()) {
-                throw new IllegalArgumentException("Planner task dependencies must not contain duplicates");
+                throw new IllegalArgumentException("Workflow task dependencies must not contain duplicates");
             }
             for (String dependency : dependencies) {
-                Integer dependencySequence = sequenceByTaskId.get(dependency);
-                if (dependencySequence == null || dependencySequence >= task.sequence()) {
-                    throw new IllegalArgumentException(
-                            "Planner dependency must reference an earlier task: " + dependency);
+                if (!tasksById.containsKey(dependency)) {
+                    throw new IllegalArgumentException("Workflow dependency does not exist: " + dependency);
+                }
+                if (task.taskId().equals(dependency)) {
+                    throw new IllegalArgumentException("Workflow task cannot depend on itself: " + task.taskId());
                 }
             }
         }
-        return plan;
+    }
+
+    /** 使用 Kahn 算法拒绝环及因此无法满足的依赖集合。 */
+    private void validateAcyclic(Map<String, WorkflowPlanTask> tasksById) {
+        Map<String, Integer> indegree = new HashMap<>();
+        Map<String, Set<String>> successors = new HashMap<>();
+        tasksById.keySet().forEach(taskId -> {
+            indegree.put(taskId, 0);
+            successors.put(taskId, new HashSet<>());
+        });
+        tasksById.values().forEach(task -> task.dependsOn().forEach(dependency -> {
+            indegree.compute(task.taskId(), (ignored, value) -> value + 1);
+            successors.get(dependency).add(task.taskId());
+        }));
+
+        Queue<String> ready = new ArrayDeque<>();
+        indegree.forEach((taskId, degree) -> {
+            if (degree == 0) {
+                ready.add(taskId);
+            }
+        });
+        int visited = 0;
+        while (!ready.isEmpty()) {
+            String taskId = ready.remove();
+            visited++;
+            for (String successor : successors.get(taskId)) {
+                int degree = indegree.compute(successor, (ignored, value) -> value - 1);
+                if (degree == 0) {
+                    ready.add(successor);
+                }
+            }
+        }
+        if (visited != tasksById.size()) {
+            throw new IllegalArgumentException("Workflow dependency graph contains a cycle");
+        }
     }
 }

@@ -40,9 +40,11 @@ class WorkflowPlannerAgentTests {
                                     {
                                       "taskId": "task-1",
                                       "sequence": 1,
-                                      "agentName": "product-analysis-agent",
-                                      "instruction": "分析 PA-001 风险",
-                                      "dependsOn": []
+                                      "agentType": "product-analysis-agent",
+                                      "query": "分析 PA-001 风险",
+                                      "dependsOn": [],
+                                      "maxRetries": 1,
+                                      "required": true
                                     }
                                   ],
                                   "rationale": "根据产品分析意图生成单任务计划"
