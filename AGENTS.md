@@ -143,6 +143,16 @@ common
 
 ## Spring AI Alibaba Verified Classes
 
+Before changing package ownership, workflow orchestration, database persistence, Memory,
+Checkpoint, SSE, or domain Agent assembly, read the project map first:
+
+```text
+docs/project-understanding-guide.md
+```
+
+It is the maintained index of directory responsibilities, important functions and Beans,
+database tables and relationships, runtime call chains, profiles, and file placement rules.
+
 For every task involving Spring AI Alibaba architecture, Agent Framework, Graph Core,
 ReactAgent, Tool, Skill, Hook, Interceptor, Memory, Checkpoint, streaming, or multi-agent
 APIs, first consult the project reference documents under:

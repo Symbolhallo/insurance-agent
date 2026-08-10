@@ -347,7 +347,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `controller` | `ProductAnalysisAgentController.chat()`；`ProductRecallController.recall()`。 |
 | `formatter` | `ProductAnalysisFormatter.format()` 将原始产品数据转结果；`ProductAnalysisAnswerInspector.inspect()` 校验 Skill 要求的输出章节。 |
 | `mapper` | `ConversationConfirmedProductMapper.findActiveByConversationId()`、`upsert()`。 |
-| `service` | `ProductAnalysisService.queryProductAnalysisData()`；`MockProductAnalysisService`；`MockProductCatalog.products()`；`ProductRecallService.recall()`；`MockProductRecallService.recall()` 和匹配/审计辅助函数；会话确认产品 Service 的 MyBatis/NoOp 实现。 |
+| `service` | `ProductAnalysisService.queryProductAnalysisData()`；`MockProductAnalysisService`；`MockProductCatalog.products()`；`ProductRecallService.recall()`；`MockProductRecallService.recall()` 和匹配/审计辅助函数；`ConversationConfirmedProductService` 及其 `MyBatisConversationConfirmedProductService`、`NoOpConversationConfirmedProductService` 实现。 |
 | `tool` | `ProductAnalysisTool.analyzeProducts()`，模型 Tool 名 `product_analysis`，先规范产品编码再调 Service/Formatter。 |
 
 Model 文件：
@@ -676,4 +676,3 @@ API Key 不能写入代码、YAML、数据库事件或日志。
 - SSE 数据库轮询当前适合技术验证；大规模连接需要增加分页、查询批次、耗时指标和容量压测。
 - 数据库没有物理外键；后续必须持续通过事务、条件更新、幂等键和定时审计保证软关联一致性。
 - Workflow 定义表主要用于版本和审计，真实运行拓扑当前由 Java `MainWorkflowGraphConfig` 决定。
-

@@ -1,5 +1,28 @@
 # 工程变更记录
 
+## 2026-08-10：新增项目理解与开发地图
+
+### 文档目标
+
+- 为当前单模块保险智能体建立从目录、文件、函数/Bean 到数据库关系的统一导航。
+- 帮助开发者按层次理解 Agent、Skill、Tool、Memory、Graph、Checkpoint、SSE 和领域代码。
+- 为后续 Codex 开发提供稳定入口，减少重复扫描和错误归类。
+
+### 新增内容
+
+- 新增 `docs/project-understanding-guide.md`。
+- 按根目录、AI 公共层、Memory、Retrieval、Workflow、Product、Knowledge、Policy、Asset、Common 逐层说明文件职责。
+- 对行为类列出主要函数和 Bean；对 DTO、Enum、Mapper 分别说明数据合同、状态和数据库操作。
+- 通过本地 OceanBase `show tables` 核对当前共 14 张表：13 张项目表和 1 张 Flyway 管理表。
+- 补充会话记忆、Workflow、Graph Checkpoint、SSE、召回审计之间的软关联 ER 图。
+- 补充主工作流、动态 DAG、人工确认、跨实例 SSE、Profile、API 和后续文件放置规则。
+- `AGENTS.md` 增加本文入口，要求后续结构、Workflow 和持久化任务优先阅读。
+
+### 说明
+
+- 本次只新增和更新文档，没有修改业务代码、数据库结构或 API。
+- 未执行 Git 提交或推送。
+
 ## 2026-08-10：新增工作流实时流式测试页面
 
 ### 页面入口
