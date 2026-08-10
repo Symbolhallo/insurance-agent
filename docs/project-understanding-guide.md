@@ -416,7 +416,7 @@ Model 文件：
 | --- | --- |
 | `application.yml` | 默认 profile：端口、模型环境变量、Actuator、Swagger 和日志；禁用数据库/Flyway自动配置。 |
 | `application-local-db.yml` | 恢复 DataSource/Flyway/MyBatis；配置 Checkpoint、SSE 轮询和清理周期。 |
-| `db/migration/V1...V16` | 13 张项目表、Graph/SSE 扩展以及工作流定义演进。已执行脚本不能回写修改。 |
+| `db/migration/V1...V17` | 14 张项目表、Graph/SSE、幂等与租约扩展以及工作流定义演进。已执行脚本不能回写修改。 |
 | `skills/product-analysis/...` | 少量/批量产品分析 Skill。 |
 | `skills/knowledge-qa/...` | 保险业务知识问答 Skill。 |
 | `skills/policy-query/...` | 客户保单查询 Skill。 |
@@ -447,9 +447,9 @@ Model 文件：
 
 ---
 
-## 7. 数据库：当前 14 张表
+## 7. 数据库：当前 15 张表
 
-2026-08-10 已通过本地 OceanBase `show tables` 核对：**13 张项目表 + 1 张 Flyway 管理表**。
+2026-08-10 已通过本地 OceanBase `show tables` 核对：**14 张项目表 + 1 张 Flyway 管理表**。
 
 ## 7.1 会话、记忆与审计（5 张）
 
@@ -461,14 +461,15 @@ Model 文件：
 | `ai_agent_invocation` | `invocation_id` | 每次 Agent/子 Agent 调用输入、输出、模型、耗时、格式和错误审计。 | conversationId；workflowInstanceId；workflowStepId。 |
 | `ai_conversation_summary` | `summary_id` | 模型生成的会话摘要及覆盖消息范围。 | conversationId → 会话。 |
 
-一致性规则：主工作流最终回答通过 `JdbcAgentMemoryService.saveSuccessfulExchange()` 在一个事务中更新会话、ChatMemory、两条长期记忆和调用流水。DAG 子 Agent 只写调用审计，不并发改 ChatMemory。
+一致性规则：主工作流最终回答由 `WorkflowFinalizationService` 将实例终态、ChatMemory、两条长期记忆、调用流水、Checkpoint 和终态 SSE Outbox 放在同一个事务中提交。DAG 子 Agent 只写调用审计，不并发改 ChatMemory。
 
-## 7.2 Workflow 执行与事件（5 张）
+## 7.2 Workflow 执行与事件（6 张）
 
 | 表 | 主键 | 作用 | 主要关联 |
 | --- | --- | --- | --- |
 | `ai_workflow_definition` | `workflow_code` | 工作流模板描述和 definition_json；当前主要为 `main-workflow-v1`。 | workflowCode → 实例。 |
-| `ai_workflow_instance` | `workflow_instance_id` | 一次工作流运行、输入输出、trace、状态和 SSE 最大序号。 | conversationId、workflowCode。 |
+| `ai_workflow_instance` | `workflow_instance_id` | 一次工作流运行、请求幂等号、输入输出、执行租约、状态版本和 SSE 最大序号。 | conversationId、workflowCode。 |
+| `ai_conversation_workflow_lock` | `conversation_id` | 同一会话只允许一个顶层工作流执行，终态事务提交时释放。 | workflowInstanceId、requestId。 |
 | `ai_workflow_step` | `workflow_step_id` | 主图各业务节点开始、结束、输入输出和错误。 | workflowInstanceId → 实例。 |
 | `ai_workflow_sse_event` | `event_id` | SSE 事实源、顺序重放和跨实例同步；workflow 内 sequenceNo 唯一。 | workflowInstanceId、conversationId、nodeCode。 |
 | `ai_conversation_confirmed_product` | `confirmation_id` | conversationId 内有效的标准产品确认结果。 | conversationId、workflowInstanceId、retrievalCallId。 |
@@ -476,8 +477,8 @@ Model 文件：
 `ai_workflow_instance.status` 当前包括：
 
 ```text
-RUNNING → WAITING_CONFIRM → CONFIRMING → RUNNING
-RUNNING → RESUMING
+RUNNING → WAITING_CONFIRM → CONFIRMING(lease) → RUNNING
+RUNNING → RESUMING(lease) → RUNNING
 最终：SUCCESS / PARTIAL_SUCCESS / FAILED / REVIEW_BLOCKED
 ```
 
@@ -513,10 +514,12 @@ erDiagram
     AI_CONVERSATION ||--o{ AI_AGENT_INVOCATION : conversation_id
     AI_CONVERSATION ||--o{ AI_CONVERSATION_SUMMARY : conversation_id
     AI_CONVERSATION ||--o{ AI_WORKFLOW_INSTANCE : conversation_id
+    AI_CONVERSATION ||--o| AI_CONVERSATION_WORKFLOW_LOCK : conversation_id
     AI_CONVERSATION ||--o{ AI_CONFIRMED_PRODUCT : conversation_id
 
     AI_WORKFLOW_DEFINITION ||--o{ AI_WORKFLOW_INSTANCE : workflow_code
     AI_WORKFLOW_INSTANCE ||--o{ AI_WORKFLOW_STEP : workflow_instance_id
+    AI_WORKFLOW_INSTANCE ||--o| AI_CONVERSATION_WORKFLOW_LOCK : workflow_instance_id
     AI_WORKFLOW_INSTANCE ||--o{ AI_AGENT_INVOCATION : workflow_instance_id
     AI_WORKFLOW_INSTANCE ||--o{ AI_RETRIEVAL_CALL : workflow_instance_id
     AI_WORKFLOW_INSTANCE ||--o{ AI_CONFIRMED_PRODUCT : workflow_instance_id

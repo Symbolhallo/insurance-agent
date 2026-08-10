@@ -77,7 +77,8 @@ elements.queryForm.addEventListener("submit", async (event) => {
 
     await openSse(`${API_BASE}/runs/stream`, {
         message,
-        conversationId
+        conversationId,
+        requestId: createRequestId()
     });
 });
 
@@ -390,6 +391,10 @@ function createConversationId() {
     const timestamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
     const suffix = Math.random().toString(36).slice(2, 7);
     return `web-${timestamp}-${suffix}`;
+}
+
+function createRequestId() {
+    return `req-${Date.now()}-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
 }
 
 function formatTime(value) {

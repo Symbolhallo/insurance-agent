@@ -481,7 +481,8 @@ class InsuranceAgentApplicationTests {
                         .content("""
                                 {
                                   "message": "请分析 PA-001",
-                                  "conversationId": "workflow-test-001"
+                                  "conversationId": "workflow-test-001",
+                                  "requestId": "request-workflow-test-001"
                                 }
                                 """))
                 .andExpect(status().isOk())
@@ -502,7 +503,8 @@ class InsuranceAgentApplicationTests {
                         .content("""
                                 {
                                   "message": "请分析 PA-001",
-                                  "conversationId": " "
+                                  "conversationId": " ",
+                                  "requestId": "request-workflow-test-002"
                                 }
                                 """))
                 .andExpect(status().isBadRequest())

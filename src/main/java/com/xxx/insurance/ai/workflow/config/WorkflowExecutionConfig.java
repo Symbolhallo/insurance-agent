@@ -14,7 +14,7 @@ import java.util.Map;
  */
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties(WorkflowSseProperties.class)
+@EnableConfigurationProperties({WorkflowSseProperties.class, WorkflowLifecycleProperties.class})
 public class WorkflowExecutionConfig {
 
     public static final String WORKFLOW_DAG_TASK_EXECUTOR = "workflowDagTaskExecutor";

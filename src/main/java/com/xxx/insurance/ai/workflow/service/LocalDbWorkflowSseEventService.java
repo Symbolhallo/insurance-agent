@@ -18,6 +18,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -231,6 +232,30 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                 event.type(), node, toJson(event.data()), occurredAt,
                 occurredAt.plus(properties.eventRetention())));
         return event;
+    }
+
+    /**
+     * 在调用方已有事务中持久化终态事件，不即时访问网络。事务提交后定时 Poller 会将该
+     * Outbox 事实事件投递给任意 JVM 上的 SSE 连接。
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void persistTransactionalEvent(String workflowInstanceId,
+                                          String conversationId,
+                                          WorkflowSseEventType type,
+                                          String node,
+                                          Map<String, Object> data) {
+        persistEvent(workflowInstanceId, conversationId, type, node, data);
+    }
+
+    /** 在事务提交后立即尝试投递事实表事件；失败时保留连接游标，交给下一轮数据库扫描补偿。 */
+    public void flushPersistedEvents(String workflowInstanceId) {
+        try {
+            deliverPersistedEvents(workflowInstanceId);
+        }
+        catch (Exception ex) {
+            log.warn("[Workflow] action=sse-outbox-flush status=deferred workflowInstanceId={}",
+                    workflowInstanceId, ex);
+        }
     }
 
     /** 清理已超过 Last-Event-ID 重放保留期的 OceanBase SSE 事件。 */

@@ -31,3 +31,8 @@ insurance:
       maintenance:
         cleanup-initial-delay: 1m
         cleanup-interval: 1h
+        recovery-interval: 30s
+      lifecycle:
+        execution-lease: 15m
+        claim-lease: 2m
+        waiting-confirm-lease: 24h

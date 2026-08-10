@@ -7,6 +7,7 @@
 - 为当前单模块保险智能体建立从目录、文件、函数/Bean 到数据库关系的统一导航。
 - 帮助开发者按层次理解 Agent、Skill、Tool、Memory、Graph、Checkpoint、SSE 和领域代码。
 - 为后续 Codex 开发提供稳定入口，减少重复扫描和错误归类。
+- 后续架构、工作流、持久化、API、目录或业务能力优化必须在同一次变更中同步更新本文档。
 
 ### 新增内容
 
@@ -21,6 +22,50 @@
 ### 说明
 
 - 本次只新增和更新文档，没有修改业务代码、数据库结构或 API。
+- 未执行 Git 提交或推送。
+
+## 2026-08-10：工作流最终收口、执行租约与会话并发加固
+
+### 问题确认
+
+- 原 `complete()` 的 Memory、步骤、实例终态、Checkpoint 和 COMPLETE 事件分散提交，进程异常后存在最终问答重复写入及“Memory 成功但实例 FAILED”的窗口。
+- 原 `fail()` 无终态条件，迟到异常可以覆盖 `SUCCESS`、`PARTIAL_SUCCESS` 或 `REVIEW_BLOCKED`。
+- `CONFIRMING`、`RESUMING` 只有 CAS 抢占，没有 owner、lease 和宕机回收。
+- 顶层请求没有 requestId，同一 conversationId 可同时启动多个工作流并覆盖 ChatMemory 完整窗口。
+
+### 最终收口
+
+- 新增 `WorkflowFinalizationService`，在一个 OceanBase 事务内完成实例终态条件更新、最终 Memory、待执行步骤关闭、Checkpoint 收口、终态 SSE Outbox 落库和 conversation 锁释放。
+- 最终调用编号固定为 `wfa-{workflowInstanceId}`，不再使用随机 invocationId。
+- 正常终态和 FAILED 都使用条件更新；任何既有终态都不能被重复收口或迟到异常覆盖。
+- COMPLETE/ERROR 先写 `ai_workflow_sse_event`，事务提交后即时尝试投递，失败时继续由 500ms Poller 补偿。
+
+### 租约与恢复
+
+- Flyway V17 为 `ai_workflow_instance` 增加 `execution_owner`、`lease_until`、`state_version`。
+- CONFIRMING/RESUMING 抢占同时写入应用实例 owner 和短租约；进入实际 Graph 前回到带执行租约的 RUNNING。
+- 终态更新和人工中断更新校验 `execution_owner`，旧 JVM 在租约换手后不能再以迟到 complete/fail 覆盖新执行者；主动恢复也不能抢占尚未过期的 RUNNING 租约。
+- 新增 `WorkflowLeaseRecoveryJob`，默认每 30 秒将过期 CONFIRMING 释放为 WAITING_CONFIRM、过期 RESUMING 释放为 RUNNING，不在定时线程中擅自重跑模型。
+
+### 请求幂等与会话互斥
+
+- `MainWorkflowRequest` 新增必填 `requestId`，数据库增加 `(conversation_id, request_id)` 唯一索引。
+- 新增 `ai_conversation_workflow_lock` 和 `WorkflowStartService`，在同一事务内占用 conversation、创建实例及步骤；同会话并发请求或重复 requestId 返回 HTTP 409。
+- 会话锁只在最终收口事务中释放；等待人工确认时保留独占，避免下一轮消息覆盖尚未完成的上下文。
+- 流式测试页面会为每次新运行自动生成 requestId。
+
+### 配置与验证
+
+```yaml
+insurance.ai.workflow.lifecycle.execution-lease: 15m
+insurance.ai.workflow.lifecycle.claim-lease: 2m
+insurance.ai.workflow.lifecycle.waiting-confirm-lease: 24h
+insurance.ai.workflow.maintenance.recovery-interval: 30s
+```
+
+- `./gradlew test` 全量 126 项测试通过。
+- 使用 `local-db` profile 在 18082 端口启动成功，Flyway 将本地 OceanBase 从 V16 升级到 V17。
+- 只读核对确认当前为 14 张项目表 + 1 张 Flyway 表，新增生命周期字段和会话锁表均已生效。
 - 未执行 Git 提交或推送。
 
 ## 2026-08-10：新增工作流实时流式测试页面
