@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>保险智能体工作流测试台</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<header class="topbar">
+    <div>
+        <h1>保险智能体工作流测试台</h1>
+        <p id="connectionStatus" class="connection-status" data-state="idle">未连接</p>
+    </div>
+    <button id="clearButton" class="secondary-button" type="button">清空</button>
+</header>
+
+<main>
+    <section class="query-band" aria-labelledby="queryTitle">
+        <div class="query-inner">
+            <div class="query-heading">
+                <h2 id="queryTitle">发起分析</h2>
+                <label for="conversationId">会话编号</label>
+                <input id="conversationId" maxlength="64" autocomplete="off">
+            </div>
+            <form id="queryForm" class="query-form">
+                <label class="sr-only" for="question">问题</label>
+                <textarea id="question" maxlength="4000" rows="3"
+                          placeholder="输入保险产品、保单、资产或业务知识问题" required></textarea>
+                <div class="query-actions">
+                    <span id="requestMeta" class="request-meta">等待请求</span>
+                    <button id="submitButton" class="primary-button" type="submit">开始运行</button>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <section class="workspace" aria-label="工作流运行结果">
+        <aside class="stage-panel">
+            <div class="panel-title">
+                <h2>执行阶段</h2>
+                <span id="eventCount" class="counter">0</span>
+            </div>
+            <ol id="stageList" class="stage-list"></ol>
+            <div id="stageEmpty" class="empty-state">暂无工作流事件</div>
+        </aside>
+
+        <section class="stream-panel">
+            <div class="panel-title">
+                <h2>模型实时输出</h2>
+                <span id="streamCount" class="counter">0</span>
+            </div>
+            <div id="streamList" class="stream-list"></div>
+            <div id="streamEmpty" class="empty-state">模型输出将在这里逐步出现</div>
+
+            <section id="finalSection" class="final-section" hidden>
+                <div class="panel-title">
+                    <h2>最终回答</h2>
+                    <span id="finalStatus" class="status-label"></span>
+                </div>
+                <div id="finalAnswer" class="final-answer"></div>
+            </section>
+        </section>
+
+        <aside class="confirm-panel">
+            <div class="panel-title">
+                <h2>产品确认</h2>
+                <span id="candidateCount" class="counter">0</span>
+            </div>
+            <form id="confirmForm">
+                <div id="candidateList" class="candidate-list"></div>
+                <div id="confirmEmpty" class="empty-state">当前无需人工确认</div>
+                <button id="confirmButton" class="primary-button full-width" type="submit" hidden>
+                    确认并继续
+                </button>
+            </form>
+        </aside>
+    </section>
+</main>
+
+<template id="stageTemplate">
+    <li class="stage-item">
+        <span class="stage-marker"></span>
+        <div class="stage-content">
+            <div class="stage-row">
+                <strong class="stage-name"></strong>
+                <time class="stage-time"></time>
+            </div>
+            <span class="stage-detail"></span>
+        </div>
+    </li>
+</template>
+
+<template id="streamTemplate">
+    <article class="stream-item">
+        <header class="stream-header">
+            <div>
+                <strong class="stream-phase"></strong>
+                <span class="stream-agent"></span>
+            </div>
+            <span class="stream-state">生成中</span>
+        </header>
+        <pre class="stream-content"></pre>
+    </article>
+</template>
+
+<template id="candidateTemplate">
+    <label class="candidate-item">
+        <input class="candidate-checkbox" type="checkbox" name="productCode">
+        <span class="candidate-body">
+            <span class="candidate-heading">
+                <strong class="candidate-name"></strong>
+                <span class="candidate-code"></span>
+            </span>
+            <span class="candidate-meta"></span>
+            <span class="candidate-reason"></span>
+        </span>
+    </label>
+</template>
+
+<script src="./app.js" defer></script>
+</body>
+</html>
