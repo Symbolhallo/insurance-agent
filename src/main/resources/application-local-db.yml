@@ -20,17 +20,19 @@ insurance:
   ai:
     workflow:
       checkpoint:
-        active-retention: 90d
-        completed-retention: 30d
+        active-retention: 7d
+        completed-retention: 24h
         state-schema-version: 1
         max-write-retries: 5
       sse:
         connection-timeout: 5m
-        event-retention: 7d
+        event-retention: 10m
         database-poll-interval: 500ms
       maintenance:
         cleanup-initial-delay: 1m
         cleanup-interval: 1h
+        sse-cleanup-initial-delay: 30s
+        sse-cleanup-interval: 30s
         recovery-interval: 30s
       lifecycle:
         execution-lease: 15m

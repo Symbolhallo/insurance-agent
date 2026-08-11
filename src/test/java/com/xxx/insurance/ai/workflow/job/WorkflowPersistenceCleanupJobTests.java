@@ -14,24 +14,28 @@ import static org.mockito.Mockito.verify;
 class WorkflowPersistenceCleanupJobTests {
 
     @Test
-    void cleansCheckpointAndSseEvents() {
+    void cleansCheckpointAndSseEventsOnIndependentSchedules() {
         OceanBaseCheckpointSaver checkpointSaver = mock(OceanBaseCheckpointSaver.class);
         LocalDbWorkflowSseEventService sseEventService = mock(LocalDbWorkflowSseEventService.class);
+        WorkflowPersistenceCleanupJob job = new WorkflowPersistenceCleanupJob(checkpointSaver, sseEventService);
 
-        new WorkflowPersistenceCleanupJob(checkpointSaver, sseEventService).cleanExpiredData();
+        job.cleanExpiredCheckpoints();
+        job.cleanExpiredSseEvents();
 
         verify(checkpointSaver).purgeExpired(any(Instant.class));
         verify(sseEventService).purgeExpiredEvents(any(Instant.class));
     }
 
     @Test
-    void stillCleansSseEventsWhenCheckpointCleanupFails() {
+    void checkpointCleanupFailureDoesNotAffectIndependentSseCleanup() {
         OceanBaseCheckpointSaver checkpointSaver = mock(OceanBaseCheckpointSaver.class);
         LocalDbWorkflowSseEventService sseEventService = mock(LocalDbWorkflowSseEventService.class);
         doThrow(new IllegalStateException("checkpoint unavailable"))
                 .when(checkpointSaver).purgeExpired(any(Instant.class));
 
-        new WorkflowPersistenceCleanupJob(checkpointSaver, sseEventService).cleanExpiredData();
+        WorkflowPersistenceCleanupJob job = new WorkflowPersistenceCleanupJob(checkpointSaver, sseEventService);
+        job.cleanExpiredCheckpoints();
+        job.cleanExpiredSseEvents();
 
         verify(sseEventService).purgeExpiredEvents(any(Instant.class));
     }

@@ -11,10 +11,11 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 
 /**
- * 定期清理超过保留期的 Graph Checkpoint 和 SSE 重放事件。
+ * 按不同周期清理超过保留期的 Graph Checkpoint 和 SSE 重放事件。
  *
- * <p>两类数据分别清理并独立捕获异常，避免某一张表临时不可用时阻塞另一类过期数据回收。
- * 聊天长期记忆和业务审计不属于本任务清理范围。</p>
+ * <p>Checkpoint 数据量较大，保持小时级清理；SSE 事件默认10分钟过期并按30秒扫描，确保
+ * 到期数据及时从 OceanBase 物理删除。两类数据独立调度，聊天长期记忆和业务审计不在
+ * 本任务清理范围内。</p>
  */
 @Component
 @Profile("local-db")
@@ -33,20 +34,28 @@ public class WorkflowPersistenceCleanupJob {
         this.sseEventService = sseEventService;
     }
 
-    /** 按配置周期执行过期数据清理，首次启动延迟一分钟以避开应用初始化高峰。 */
+    /** 按小时级配置清理过期 Checkpoint，避免高频扫描体量较大的状态快照。 */
     @Scheduled(
             initialDelayString = "${insurance.ai.workflow.maintenance.cleanup-initial-delay:1m}",
             fixedDelayString = "${insurance.ai.workflow.maintenance.cleanup-interval:1h}")
-    public void cleanExpiredData() {
-        Instant now = Instant.now();
+    public void cleanExpiredCheckpoints() {
         try {
-            checkpointSaver.purgeExpired(now);
+            checkpointSaver.purgeExpired(Instant.now());
         }
         catch (Exception ex) {
             log.error("[Memory] type=checkpoint action=scheduled-purge status=failed", ex);
         }
+    }
+
+    /**
+     * 高频删除已达到 expire_at 的 SSE 事件；默认每30秒执行，因此10分钟到期后最多约30秒物理删除。
+     */
+    @Scheduled(
+            initialDelayString = "${insurance.ai.workflow.maintenance.sse-cleanup-initial-delay:30s}",
+            fixedDelayString = "${insurance.ai.workflow.maintenance.sse-cleanup-interval:30s}")
+    public void cleanExpiredSseEvents() {
         try {
-            sseEventService.purgeExpiredEvents(now);
+            sseEventService.purgeExpiredEvents(Instant.now());
         }
         catch (Exception ex) {
             log.error("[Workflow] action=scheduled-sse-event-purge status=failed", ex);

@@ -213,7 +213,7 @@ com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver
 - `release` 采用逻辑释放，定时任务根据保留策略物理清理。
 - 禁止通过继承 `MemorySaver` 实现生产 Saver，避免全量 Checkpoint 常驻 JVM 内存。
 
-保留策略：运行中、人工中断、失败的 Checkpoint 自最后更新时间保留 90 天；成功完成后的完整 Checkpoint 在线保留 30 天。到期后删除敏感 State，但工作流节点结果摘要和审计元数据独立保留 5 年。
+保留策略：运行中、人工中断、失败的 Checkpoint 自最后更新时间保留 7 天；成功完成后的完整 Checkpoint 在线保留 24 小时。到期后物理删除敏感 State 及已经没有有效 Checkpoint 的过期 Thread；工作流节点结果摘要和审计元数据按独立策略保留。
 
 ### 状态查询、历史和 Replay
 

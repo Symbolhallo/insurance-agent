@@ -217,7 +217,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `GraphCheckpointStateCodec` | `encode()`、`decode()`、`EncodedState` | 对项目 StateSerializer 做二进制编解码包装。 |
 | `OceanBaseCheckpointSaver` | `list()`、`get()`、`put()`、`release()`、`markCompleted()`、`markFailed()`、`markWorkflowCompleted()`、`markWorkflowFailed()`、`purgeExpired()` | 自定义 `BaseCheckpointSaver`；通过线程版本乐观锁保存不可变 Checkpoint，支持恢复、分支和清理。 |
 | `GraphCheckpointConfig` | `mainWorkflowStateSerializer()`、`graphCheckpointStateCodec()`、`mainWorkflowCheckpointSaver()` Bean | 注册工作流 Record 的自定义 Jackson serializer/deserializer，解决 1.1.2.0 嵌套 Record 恢复为 Map 的兼容问题。内部类统一实现 `serialize()`、`serializeWithType()`、`deserialize()` 和类型规范化。 |
-| `GraphCheckpointProperties` | Getter/Setter、`validate()` | active 90 天、completed 30 天、State Schema 版本、写冲突重试次数。 |
+| `GraphCheckpointProperties` | Getter/Setter、`validate()` | ACTIVE/FAILED 7 天、COMPLETED 24 小时、State Schema 版本、写冲突重试次数。 |
 | `GraphCheckpointMapper` | 线程插入/查询、`advanceThreadVersion()`、Checkpoint 插入/查询、状态更新、过期删除 | 操作 `ai_graph_thread` 和 `ai_graph_checkpoint`。 |
 | `GraphCheckpointRecord` / `GraphCheckpointThreadRecord` | Record 字段 | Checkpoint 快照与线程元数据。 |
 
@@ -251,7 +251,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 
 | 文件 | 函数 | 作用 |
 | --- | --- | --- |
-| `WorkflowPersistenceCleanupJob` | `cleanExpiredData()` | 启动后延迟执行并按小时清理过期 Checkpoint/线程和 SSE 事件；两类清理失败隔离。 |
+| `WorkflowPersistenceCleanupJob` | `cleanExpiredCheckpoints()`、`cleanExpiredSseEvents()` | Checkpoint 按小时物理清理7天/24小时到期数据；SSE 事件每30秒物理删除10分钟到期数据。 |
 
 ### `workflow.mapper`
 
@@ -416,7 +416,7 @@ Model 文件：
 | --- | --- |
 | `application.yml` | 默认 profile：端口、模型环境变量、Actuator、Swagger 和日志；禁用数据库/Flyway自动配置。 |
 | `application-local-db.yml` | 恢复 DataSource/Flyway/MyBatis；配置 Checkpoint、SSE 轮询和清理周期。 |
-| `db/migration/V1...V17` | 14 张项目表、Graph/SSE、幂等与租约扩展以及工作流定义演进。已执行脚本不能回写修改。 |
+| `db/migration/V1...V18` | 14 张项目表、Graph/SSE、幂等与租约扩展以及工作流定义演进；V18 同步 SSE 10 分钟保留期字段说明。已执行脚本不能回写修改。 |
 | `skills/product-analysis/...` | 少量/批量产品分析 Skill。 |
 | `skills/knowledge-qa/...` | 保险业务知识问答 Skill。 |
 | `skills/policy-query/...` | 客户保单查询 Skill。 |
@@ -539,9 +539,9 @@ erDiagram
 | ChatMemory | 窗口数据，由 Spring AI Repository 重写当前窗口。 |
 | Long-term Memory | 当前永久保存；归档不等于删除。 |
 | 调用、召回、步骤审计 | 当前未配置自动删除。 |
-| 活动/失败 Checkpoint | 默认 90 天。 |
-| 完成 Checkpoint | 默认 30 天。 |
-| SSE Event | 默认 7 天。 |
+| 活动/运行中/失败 Checkpoint | 默认 7 天；到期前可恢复和排障。 |
+| 完成 Checkpoint | 默认 24 小时。 |
+| SSE Event | 默认 10 分钟；`expire_at` 之后不再参与 Last-Event-ID 重放，并由30秒周期清理任务物理删除，最大清理延迟约30秒。 |
 | 清理周期 | 启动 1 分钟后首次执行，之后每小时。 |
 
 ---

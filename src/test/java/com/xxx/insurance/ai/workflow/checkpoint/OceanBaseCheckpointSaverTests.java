@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -45,8 +46,8 @@ class OceanBaseCheckpointSaverTests {
                 OverAllState::new,
                 new ObjectMapper()));
         properties = new GraphCheckpointProperties();
-        properties.setActiveRetention(Duration.ofDays(90));
-        properties.setCompletedRetention(Duration.ofDays(30));
+        properties.setActiveRetention(Duration.ofDays(7));
+        properties.setCompletedRetention(Duration.ofHours(24));
         properties.setStateSchemaVersion(1);
         properties.setMaxWriteRetries(3);
         saver = new OceanBaseCheckpointSaver(mapper, codec, properties);
@@ -76,6 +77,43 @@ class OceanBaseCheckpointSaverTests {
         assertThat(record.checkpointVersion()).isEqualTo(5);
         assertThat(codec.decode(record.statePayload(), record.stateContentType()))
                 .containsEntry("answer", "ok");
+    }
+
+    @Test
+    void defaultsActiveAndFailedToSevenDaysAndCompletedToTwentyFourHours() {
+        GraphCheckpointProperties defaults = new GraphCheckpointProperties();
+
+        assertThat(defaults.getActiveRetention()).isEqualTo(Duration.ofDays(7));
+        assertThat(defaults.getCompletedRetention()).isEqualTo(Duration.ofHours(24));
+    }
+
+    @Test
+    void appliesStatusSpecificExpiryWhenWorkflowReachesTerminalState() {
+        when(mapper.updateWorkflowThreadStatuses(anyString(), anyString(), any(), any())).thenReturn(1);
+        ArgumentCaptor<Instant> completedExpiry = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> completedAt = ArgumentCaptor.forClass(Instant.class);
+
+        saver.markWorkflowCompleted("wfi-completed");
+
+        verify(mapper).updateWorkflowThreadStatuses(
+                org.mockito.ArgumentMatchers.eq("wfi-completed"),
+                org.mockito.ArgumentMatchers.eq("COMPLETED"),
+                completedExpiry.capture(),
+                completedAt.capture());
+        assertThat(Duration.between(completedAt.getValue(), completedExpiry.getValue()))
+                .isEqualTo(Duration.ofHours(24));
+
+        ArgumentCaptor<Instant> failedExpiry = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> failedAt = ArgumentCaptor.forClass(Instant.class);
+        saver.markWorkflowFailed("wfi-failed");
+
+        verify(mapper).updateWorkflowThreadStatuses(
+                org.mockito.ArgumentMatchers.eq("wfi-failed"),
+                org.mockito.ArgumentMatchers.eq("FAILED"),
+                failedExpiry.capture(),
+                failedAt.capture());
+        assertThat(Duration.between(failedAt.getValue(), failedExpiry.getValue()))
+                .isEqualTo(Duration.ofDays(7));
     }
 
     @Test
@@ -153,6 +191,9 @@ class OceanBaseCheckpointSaverTests {
 
         assertThat(purgeResult.checkpointCount()).isEqualTo(4);
         assertThat(purgeResult.threadCount()).isEqualTo(2);
+        org.mockito.InOrder deletionOrder = inOrder(mapper);
+        deletionOrder.verify(mapper).deleteExpiredCheckpoints(any(Instant.class));
+        deletionOrder.verify(mapper).deleteExpiredThreads(any(Instant.class));
     }
 
     @Test
@@ -194,7 +235,7 @@ class OceanBaseCheckpointSaverTests {
                 status,
                 latestCheckpointId,
                 version,
-                now.plus(Duration.ofDays(90)),
+                now.plus(Duration.ofDays(7)),
                 null,
                 now,
                 now);

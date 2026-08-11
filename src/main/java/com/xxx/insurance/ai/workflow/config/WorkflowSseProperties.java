@@ -16,7 +16,7 @@ public record WorkflowSseProperties(
     /** 为未配置属性提供生产验证阶段的保守默认值。 */
     public WorkflowSseProperties {
         connectionTimeout = connectionTimeout == null ? Duration.ofMinutes(5) : connectionTimeout;
-        eventRetention = eventRetention == null ? Duration.ofDays(7) : eventRetention;
+        eventRetention = eventRetention == null ? Duration.ofMinutes(10) : eventRetention;
         databasePollInterval = databasePollInterval == null ? Duration.ofMillis(500) : databasePollInterval;
         if (databasePollInterval.isNegative() || databasePollInterval.isZero()) {
             throw new IllegalArgumentException("databasePollInterval must be positive");

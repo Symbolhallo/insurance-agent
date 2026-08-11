@@ -149,11 +149,11 @@ ChatMemory 与长期历史保持当前事务一致性；Checkpoint 不替代长�
 
 | 数据 | 保存期限 | 到期动作 |
 |---|---|---|
-| 运行中/人工中断/失败 Checkpoint | 最后更新时间起 90 天 | 删除完整 State，保留执行摘要 |
-| 成功完成 Checkpoint | 完成后 30 天 | 删除完整 State，保留执行摘要 |
+| 运行中/人工中断/失败 Checkpoint | 最后更新时间起 7 天 | 删除完整 State，保留执行摘要 |
+| 成功完成 Checkpoint | 完成后 24 小时 | 删除完整 State，保留执行摘要 |
 | 人工确认记录 | 5 年 | 按审计归档策略清理 |
 | 工作流实例和节点执行历史 | 5 年 | 归档后清理；不长期复制敏感 State |
-| SSE 重放事件 | 工作流完成后 7 天 | 删除事件明细，保留 finalAnswer 与审计摘要 |
+| SSE 重放事件 | 事件发生后 10 分钟 | 每30秒扫描并物理删除到期事件明细，保留 finalAnswer 与审计摘要 |
 | 完整聊天历史 | 当前项目决策为永久 | 后续按客户授权、隐私删除和监管要求补充治理 |
 
 期限是当前技术验证项目的生产化默认值，不作为法律结论；上线前由法务、数据治理和业务合规复核。
@@ -214,7 +214,7 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 -> 收到 complete 后关闭连接
 ```
 
-为避免“查询历史”和“订阅实时流”之间丢事件，服务端先取得当前 highWatermark，重放到该序号，再订阅实时流并补查大于 highWatermark 的间隙。Token 事件按 100-250ms 或约 1KB 合并后持久化，避免每个 Token 一行。事件保留 7 天；超过期限的 Last-Event-ID 返回“重放已过期”，客户端改查工作流最终结果，不从头重新执行模型。
+为避免“查询历史”和“订阅实时流”之间丢事件，服务端先取得当前 highWatermark，重放到该序号，再订阅实时流并补查大于 highWatermark 的间隙。Token 事件按 100-250ms 或约 1KB 合并后持久化，避免每个 Token 一行。当前项目事件默认保留 10 分钟；超过期限的 Last-Event-ID 返回“重放已过期”，客户端改查工作流最终结果，不从头重新执行模型。
 
 ## 9. 分阶段实施顺序
 
@@ -225,7 +225,7 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 - Main StateGraph v1：上下文对齐、意图、Planner、产品 Agent、总结。
 - OceanBase `BaseCheckpointSaver`、V4 数据表、状态序列化、版本链和保留策略。
 - 同步 Swagger API 验证。
-- 阶段级 SSE 协议、OceanBase 七天事件重放和 `Last-Event-ID` 断线重连。
+- 阶段级 SSE 协议、OceanBase 10 分钟事件重放和 `Last-Event-ID` 断线重连。
 - ReactAgent 逐块流式执行；子智能体和 Summary 无需前置审核，最终 Summary 生成完成后调用输出审核节点，`complete.finalAnswer` 是审核后的权威答案。
 - 产品实体前置解析、Mock 产品召回和召回审计记录。
 - `interruptBefore` Human Confirm、会话级确认产品表、Checkpoint 更新和恢复 API。

@@ -24,6 +24,45 @@
 - 本次只新增和更新文档，没有修改业务代码、数据库结构或 API。
 - 未执行 Git 提交或推送。
 
+## 2026-08-11：Graph Checkpoint 生命周期调整
+
+### 保留策略
+
+- `GraphCheckpointProperties.activeRetention` 和 `application-local-db.yml` 默认改为7天，适用于 ACTIVE/RUNNING 对应的活动线程及 FAILED 排障现场。
+- `completedRetention` 默认改为24小时，适用于 COMPLETED 和 Graph release 后的线程。
+- SSE Event 继续保持10分钟保留、30秒清理，不与 Checkpoint 生命周期混用。
+
+### 物理清理与测试
+
+- 保留现有 `expires_at` 和 `OceanBaseCheckpointSaver.purgeExpired()` 架构，不新增表或清理执行器。
+- 清理事务继续先删除过期 Thread 关联的 `ai_graph_checkpoint`，再删除 `expires_at <= now` 的 `ai_graph_thread`；任一步失败均整体回滚。
+- 测试补充默认保留期、COMPLETED/FAILED 状态写入的 expiresAt、子记录优先删除顺序和 SQL 未过期保护条件。
+- 项目理解文档和 Spring AI Alibaba 项目参考文档已同步更新。
+- Checkpoint 定向测试与 `./gradlew test` 全量测试均通过。
+- `local-db` profile 使用新配置启动成功，Flyway V18 校验通过，未新增数据库结构迁移。
+- 未执行 Git 提交或推送。
+
+## 2026-08-11：SSE 重放事件默认保留期调整为10分钟
+
+### 修改范围
+
+- `WorkflowSseProperties.eventRetention` 未配置时默认使用 `Duration.ofMinutes(10)`。
+- `application-local-db.yml` 的 `insurance.ai.workflow.sse.event-retention` 从 `7d` 调整为 `10m`。
+- 事件仍按 `occurredAt + eventRetention` 写入 `expire_at`；重放仍过滤 `expire_at > now`，清理仍删除 `expire_at <= now`。
+- SSE 清理从 Checkpoint 小时级任务中拆为独立30秒调度；到期记录最多约30秒后从 `ai_workflow_sse_event` 物理删除，Checkpoint 继续按小时清理。
+- 保留现有 Last-Event-ID、多实例数据库扫描、SSE 事件表和清理任务逻辑。
+- V12 是已执行历史迁移，未修改其内容；新增 V18 只把数据库 `expire_at` 字段说明同步为当前默认10分钟，不改变字段类型和业务语义。
+
+### 文档与测试
+
+- 同步更新 README、AGENTS、项目理解文档、Memory/Workflow 设计文档和 Spring AI Alibaba 项目落地文档中的现行保留策略。
+- 测试覆盖默认10分钟、事件落库过期时间、10分钟内重放、过期区间返回410以及现有清理 Mapper 删除路径。
+- 未调整 Workflow、SSE 扫描、Checkpoint 或其他业务逻辑。
+- SSE 定向测试与 `./gradlew test` 全量测试均通过。
+- `local-db` profile 启动成功，Flyway 已将本地 OceanBase 从 V17 升级到 V18，应用随后正常停止。
+- 实际运行观察到 SSE 清理任务在启动后第30秒和第60秒触发，日志为 `action=sse-event-purge status=success`；Checkpoint 清理仍按原小时级周期配置。
+- 未执行 Git 提交或推送。
+
 ## 2026-08-10：工作流最终收口、执行租约与会话并发加固
 
 ### 问题确认

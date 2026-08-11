@@ -742,6 +742,8 @@ class InsuranceAgentApplicationTests {
     @Test
     void workflowSseMigrationDefinesReplaySequenceAndRetentionFields() throws Exception {
         String migration = readClasspathResource("db/migration/V12__add_workflow_sse_events.sql");
+        String retentionCommentMigration = readClasspathResource(
+                "db/migration/V18__update_sse_event_retention_comment.sql");
 
         assertThat(migration)
                 .contains("event_sequence bigint not null default 0")
@@ -749,6 +751,9 @@ class InsuranceAgentApplicationTests {
                 .contains("unique key uk_ai_workflow_sse_event_instance_sequence")
                 .contains("expire_at timestamp not null comment")
                 .contains("version = 9");
+        assertThat(retentionCommentMigration)
+                .contains("modify column expire_at timestamp not null")
+                .contains("当前默认保留十分钟");
     }
 
     @Test

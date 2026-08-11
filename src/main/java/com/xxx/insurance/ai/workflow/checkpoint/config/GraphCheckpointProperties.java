@@ -12,9 +12,11 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "insurance.ai.workflow.checkpoint")
 public class GraphCheckpointProperties {
 
-    private Duration activeRetention = Duration.ofDays(90);
+    /** ACTIVE/RUNNING 及 FAILED 线程用于恢复和排障的默认保留时间。 */
+    private Duration activeRetention = Duration.ofDays(7);
 
-    private Duration completedRetention = Duration.ofDays(30);
+    /** COMPLETED/RELEASED 线程完成后的默认保留时间。 */
+    private Duration completedRetention = Duration.ofHours(24);
 
     private int stateSchemaVersion = 1;
 

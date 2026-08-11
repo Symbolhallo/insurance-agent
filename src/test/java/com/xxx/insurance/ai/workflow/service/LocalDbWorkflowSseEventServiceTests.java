@@ -30,7 +30,14 @@ import static org.mockito.Mockito.when;
 class LocalDbWorkflowSseEventServiceTests {
 
     @Test
-    void persistsEventWithWorkflowScopedIdAndSevenDayExpiry() {
+    void defaultsReplayRetentionToTenMinutes() {
+        WorkflowSseProperties properties = new WorkflowSseProperties(null, null, null);
+
+        assertThat(properties.eventRetention()).isEqualTo(Duration.ofMinutes(10));
+    }
+
+    @Test
+    void persistsEventWithWorkflowScopedIdAndTenMinuteExpiry() {
         WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
         when(eventMapper.allocateSequence("wfi-001")).thenReturn(1);
         when(eventMapper.lastAllocatedSequence()).thenReturn(3L);
@@ -46,7 +53,7 @@ class LocalDbWorkflowSseEventServiceTests {
         assertThat(record.eventId()).isEqualTo("wfi-001:3");
         assertThat(record.sequenceNo()).isEqualTo(3);
         assertThat(record.payloadJson()).contains("SUCCESS");
-        assertThat(Duration.between(record.createdAt(), record.expireAt())).isEqualTo(Duration.ofDays(7));
+        assertThat(Duration.between(record.createdAt(), record.expireAt())).isEqualTo(Duration.ofMinutes(10));
     }
 
     @Test
@@ -60,7 +67,29 @@ class LocalDbWorkflowSseEventServiceTests {
     }
 
     @Test
-    void returnsGoneWhenRequestedReplayRangeHasExpired() {
+    void replaysEventThatHasNotReachedTenMinuteExpiry() {
+        WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
+        WorkflowExecutionMapper executionMapper = mock(WorkflowExecutionMapper.class);
+        Instant createdAt = Instant.now().minus(Duration.ofMinutes(9));
+        WorkflowSseEventRecord event = new WorkflowSseEventRecord(
+                "wfi-001:5", "wfi-001", "conversation-001", 5L, "stage", "summary",
+                "{\"status\":\"SUCCESS\"}", createdAt, createdAt.plus(Duration.ofMinutes(10)));
+        when(executionMapper.findInstance("wfi-001")).thenReturn(new WorkflowInstanceExecutionView(
+                "wfi-001", "conversation-001", "SUCCESS", createdAt));
+        when(eventMapper.findHighWatermark("wfi-001")).thenReturn(5L);
+        when(eventMapper.findReplayEvents(any(), any(Long.class), any(Instant.class)))
+                .thenReturn(List.of(event));
+
+        assertThat(service(eventMapper, executionMapper).reconnect("wfi-001", "wfi-001:4"))
+                .isNotNull();
+        verify(eventMapper).findReplayEvents(
+                org.mockito.ArgumentMatchers.eq("wfi-001"),
+                org.mockito.ArgumentMatchers.eq(4L),
+                any(Instant.class));
+    }
+
+    @Test
+    void returnsGoneWhenTenMinuteReplayRangeHasExpired() {
         WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
         WorkflowExecutionMapper executionMapper = mock(WorkflowExecutionMapper.class);
         when(executionMapper.findInstance("wfi-001")).thenReturn(new WorkflowInstanceExecutionView(
@@ -72,6 +101,17 @@ class LocalDbWorkflowSseEventServiceTests {
         assertThatThrownBy(() -> service.reconnect("wfi-001", "wfi-001:4"))
                 .isInstanceOfSatisfying(ResponseStatusException.class,
                         ex -> assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.GONE));
+    }
+
+    @Test
+    void delegatesExpiredEventDeletionToExistingMapperSql() {
+        WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
+        when(eventMapper.deleteExpiredEvents(any(Instant.class))).thenReturn(3);
+        LocalDbWorkflowSseEventService service = service(eventMapper, mock(WorkflowExecutionMapper.class));
+        Instant now = Instant.now();
+
+        assertThat(service.purgeExpiredEvents(now)).isEqualTo(3);
+        verify(eventMapper).deleteExpiredEvents(now);
     }
 
     @Test
@@ -105,7 +145,7 @@ class LocalDbWorkflowSseEventServiceTests {
         LocalDbWorkflowSseEventService service = service(eventMapper, mock(WorkflowExecutionMapper.class));
         WorkflowSseEventRecord event = new WorkflowSseEventRecord(
                 "wfi-001:3", "wfi-001", "conversation-001", 3L, "stage", "planner",
-                "{\"status\":\"SUCCESS\"}", Instant.now(), Instant.now().plus(Duration.ofDays(7)));
+                "{\"status\":\"SUCCESS\"}", Instant.now(), Instant.now().plus(Duration.ofMinutes(10)));
         when(eventMapper.findReplayEvents(any(), any(Long.class), any(Instant.class)))
                 .thenReturn(List.of(event), List.of());
         service.subscribeNewRun("wfi-001");
@@ -128,7 +168,7 @@ class LocalDbWorkflowSseEventServiceTests {
                 eventMapper,
                 executionMapper,
                 new ObjectMapper().findAndRegisterModules(),
-                new WorkflowSseProperties(Duration.ofMinutes(5), Duration.ofDays(7), Duration.ofMillis(500)),
+                new WorkflowSseProperties(Duration.ofMinutes(5), Duration.ofMinutes(10), Duration.ofMillis(500)),
                 transactionManager);
     }
 }
