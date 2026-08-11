@@ -6,19 +6,14 @@
 
 ```mermaid
 flowchart TD
-    S["START"] --> CA["context_alignment<br/>load + align + rewrite + recall decision"] --> RI["recognize_intent"]
-    RI -->|需要候选召回| RPC["retrieve_product_candidates"] --> H["human_confirm_product"]
-    RI -->|无需候选召回| RA["route_agents"]
-    H --> RA
-    RA --> PA["product_analysis_agent"]
-    RA --> KQ["knowledge_qa_agent"]
-    RA --> PQ["policy_query_agent"]
-    RA --> AQ["asset_query_agent"]
-    PA --> J["join_results"]
-    KQ --> J
-    PQ --> J
-    AQ --> J
-    J --> SU["summary"] --> OR["output_review"] --> F["finish"] --> E["END"]
+    API["POST /runs/stream"] --> SSE["subscribe before background execution"]
+    SSE --> S["START"] --> PR["resolve-product-reference"]
+    PR -->|需要确认| RPC["retrieve-product-candidates"] --> I["interruptBefore human-confirm-product"]
+    I --> HCAPI["product-confirmations/stream"] --> H["human-confirm-product"]
+    PR -->|无需确认| CA["context-alignment"]
+    H --> CA
+    CA --> RI["intent-recognition"] --> P["planner-agent"] --> D["dag-executor"]
+    D --> SU["summary"] --> OR["output-review"] --> E["END / transactional finalization"]
 ```
 
 ## 2. Agent 划分
@@ -39,23 +34,19 @@ flowchart TD
 
 | 节点 | 职责 | 主要输入 | 主要输出 |
 |---|---|---|---|
-| `context_alignment` | 加载记忆，判断话题延续/切换，提取已确认信息，完成五步问题改写并给出候选召回判断 | conversationId、userQuery、历史消息、上一轮执行上下文 | topicRelation、rewriteQuery、confirmedInformation、productRecallDecision |
-| `recognize_intent` | 输出结构化意图，可多选 | rewriteQuery、requestContext | intentions、intentionQueries、dependOn |
-| `retrieve_product_candidates` | 调行内召回微服务 Mock/真实接口 | rewriteQuery、过滤条件 | productCandidates |
-| `human_confirm_product` | 提供中断点，等待候选选择 | productCandidates | confirmedProducts、humanConfirmRequired |
-| `route_agents` | 校验计划、构建可执行任务 | intentions、dependOn | executionPlan |
-| `product_analysis_agent` | 调产品分析 ReactAgent | intentionQuery、confirmedProducts | product AgentResult |
-| `knowledge_qa_agent` | 调知识 Agent | intentionQuery、retrievedKnowledge | knowledge AgentResult |
-| `policy_query_agent` | 查询授权保单 | customerId、intentionQuery | policy AgentResult |
-| `asset_query_agent` | 查询授权资产 | customerId、intentionQuery | asset AgentResult |
-| `join_results` | 聚合成功、失败、跳过结果 | 各独立 outputKey | agentResults、failedAgents |
-| `summary` | 单结果透传；多个或混合结果调用模型生成统一候选答案并声明缺失 | agentResults、failedAgents | summaryResult、candidateAnswer |
-| `output_review` | 调用行内审核服务，只有审核返回文本可发布 | candidateAnswer、agentResults、来源、权限标签 | reviewResult、finalAnswer |
-| `finish` | 写审计/长期历史，发 complete | finalAnswer、执行元数据 | completedAt、auditId |
+| `resolve-product-reference` | 加载当前 conversation 已确认产品，识别本轮具体/模糊产品线索并决定是否进入候选确认 | request、confirmedProducts | productReferenceResolution、productRecallDecision、resolvedProducts |
+| `retrieve-product-candidates` | 调产品召回 Service，并写召回审计 | 原始问题、产品线索 | productRecallResult、humanConfirmRequired |
+| `human-confirm-product` | `interruptBefore` 恢复后的校验节点；不在 JVM 内阻塞等待 | resolvedProducts | humanConfirmRequired=false |
+| `context-alignment` | 产品实体确定后加载记忆，判断话题延续/切换并完成五步问题改写 | request、productReferenceResolution、resolvedProducts | alignedContext |
+| `intent-recognition` | 基于 rewrittenQuestion 输出白名单意图和目标 Agent | alignedContext | intentRoutingResult |
+| `planner-agent` | ReactAgent 生成任务及 dependsOn，再由 Java 确定性校验 | alignedContext、intentRoutingResult | workflowPlan |
+| `dag-executor` | 动态调度四类领域 Agent 子图；并行、重试、失败传播和结果聚合都在该节点边界内完成 | workflowPlan、alignedContext、intentRoutingResult | dagExecutionResult |
+| `summary` | 单结果透传；多个或混合结果调用模型生成统一候选答案并声明缺失 | dagExecutionResult、alignedContext | summaryResult |
+| `output-review` | 调用行内审核服务，只有审核返回文本可发布 | summaryResult、dagExecutionResult、alignedContext | outputReviewResult、finalAnswer |
 
-当前工程的 `context-alignment` 已统一输出话题关系、精炼问题、已确认信息和候选召回判断；
-`intent-recognition` 始终基于改写后的本轮问题独立分类。Graph 不再设置第二套正则召回判断节点，条件边只读取
-`productRecallDecision.required`。后续扩展时应把 `AgentInvokeNode` 改成可并行领域节点，不必重写已跑通的 ProductAnalysisAgent。
+当前工程由 `resolve-product-reference` 负责唯一的产品候选召回判断；`context-alignment` 不再决定是否召回，
+只在产品实体已确定后完成记忆加载、话题关系和问题改写。`intent-recognition` 始终基于改写后的本轮问题独立分类。
+四个领域 Agent 通过 `dag-executor -> WorkflowTaskGraphRunner -> AgentInvokeNode` 调用，不是 Main Graph 上四个固定并行节点。
 
 候选召回与产品详情读取必须分开：首次具体产品、模糊产品名和未确认产品追问需要候选召回；历史已确认产品的
 延续追问不重复确认，但 ProductAnalysisAgent 仍通过 Tool 读取当前产品详情。仅按画像和缴费条件筛选也不进入
@@ -65,29 +56,22 @@ flowchart TD
 
 | 字段 | 类型 | 写入节点 | 读取节点 | Strategy | 持久化 | 审计 |
 |---|---|---|---|---|---|---|
-| `conversationId` | `String` | API/START | 全部 | Replace | 是 | 是 |
+| `request` | `MainWorkflowRequest` | API/START | 产品解析、上下文对齐 | Replace | 是 | 是 |
 | `workflowInstanceId` | `String` | API/START | 全部 | Replace | 是 | 是 |
-| `tenantId` | `String` | `load_context` | 客户数据节点 | Replace | 是 | 是，脱敏展示 |
-| `customerId` | `String` | `load_context` | 保单/资产 | Replace | 是 | 是，加密/脱敏 |
-| `userQuery` | `String` | API/START | load/rewrite/audit | Replace | 是 | 是 |
-| `rewriteQuery` | `String` | `context_alignment` | intent/recall/Agent | Replace | 是 | 是 |
-| `topicRelation` | `ConversationTopicRelation` | context_alignment | audit/intent | Replace | 是 | 是 |
-| `confirmedInformation` | `Map<String,List<String>>` | context_alignment | recall/Agent | Replace | 是 | 是 |
-| `productRecallDecision` | `ProductRecallDecision` | context_alignment | Graph 条件边/API | Replace | 是 | 是 |
-| `historyMessages` | `List<Message>` | `load_context` | rewrite/必要 Agent | Replace | Checkpoint 可裁剪 | 否，完整历史另表 |
-| `intentions` | `List<Intent>` | `recognize_intent` | recall/route | Replace | 是 | 是 |
-| `dependOn` | `Map<String,List<String>>` | intent/planner | route | Replace | 是 | 是 |
-| `intentionQueries` | `Map<String,String>` | intent/planner | 各 Agent | Merge/Replace | 是 | 是 |
-| `productCandidates` | `List<ProductCandidate>` | retrieve | confirm | Replace | 是 | 是 |
-| `confirmedProducts` | `List<ProductRef>` | confirm/load memory | 产品 Agent | Replace | 是 | 是 |
-| `humanConfirmRequired` | `boolean` | check/confirm | 条件边/API | Replace | 是 | 是 |
-| `executionPlan` | `List<AgentTask>` | route/planner | 并行执行 | Replace | 是 | 是 |
-| `agentResults` | `Map<String,AgentResult>` | join 或各 Agent 独立 key | summary/review | Merge | 是 | 是 |
-| `failedAgents` | `List<AgentFailure>` | Agent 包装器/join | summary | Append | 是 | 是 |
+| `workflowStepIds` | `Map<String,String>` | Workflow Service | 节点记录器、最终响应 | Replace | 是 | 是 |
+| `tokenStreamingEnabled` | `boolean` | SSE/同步入口 | 模型节点与 Agent | Replace | 是 | 否 |
+| `productReferenceResolution` | `ProductReferenceResolution` | resolve-product-reference | context-alignment/API | Replace | 是 | 是 |
+| `productRecallDecision` | `ProductRecallDecision` | resolve-product-reference | 条件边/API | Replace | 是 | 是 |
+| `productRecallResult` | `ProductRecallResult` | retrieve-product-candidates | 确认接口/API | Replace | 是 | 是 |
+| `resolvedProducts` | `List<ConfirmedProduct>` | 产品解析或确认恢复 | context/DAG | Replace | 是 | 是 |
+| `humanConfirmRequired` | `boolean` | retrieve/human-confirm | API | Replace | 是 | 是 |
+| `alignedContext` | `AlignedWorkflowContext` | context-alignment | intent/planner/DAG/summary | Replace | 是 | 是 |
+| `intentRoutingResult` | `IntentRoutingResult` | intent-recognition | planner/DAG/API | Replace | 是 | 是 |
+| `workflowPlan` | `WorkflowPlan` | planner-agent | dag-executor/API | Replace | 是 | 是 |
+| `dagExecutionResult` | `DagExecutionResult` | dag-executor | summary/review/API | Replace | 是 | 是 |
 | `summaryResult` | `WorkflowSummaryResult` | summary | output_review/API | Replace | 是 | 是 |
-| `reviewResult` | `ReviewResult` | output_review | finish/API | Replace | 是 | 是 |
-| `finalAnswer` | `String` | output_review | finish/API | Replace | 是 | 是 |
-| `streamEvents` | 不建议放完整事件；最多序号摘要 | publisher | 诊断 | Append/外部事件表 | 可选 | 是 |
+| `outputReviewResult` | `OutputReviewResult` | output-review | 最终响应 | Replace | 是 | 是 |
+| `finalAnswer` | `String` | output-review | 最终事务/API | Replace | 是 | 是 |
 
 State 中不要保存 `SseEmitter`、`Disposable`、Mapper、Service 或完整召回文档。敏感客户字段应使用业务 ID，展示值在授权节点临时获取。
 
@@ -95,10 +79,10 @@ State 中不要保存 `SseEmitter`、`Disposable`、Mapper、Service 或完整�
 
 1. 产品实体解析先基于当前输入和当前会话已确认产品完成召回判断；产品确定后，上下文对齐再结合标准产品、历史记忆完成改写，意图识别随后基于 rewrittenQuery 独立执行。
 2. 候选确认是持久化中断，不占线程。
-3. 无依赖的产品、知识、保单、资产任务并行，使用不同 outputKey。
+3. 无依赖的产品、知识、保单、资产任务并行，结果以带 taskId 的不可变任务结果聚合。
 4. 有 `dependOn` 的任务仅在前置成功后执行；前置失败标记 `SKIPPED_DEPENDENCY_FAILED`。
 5. 汇聚节点等待计划中的终态，不等待不存在的 Agent。
-6. 输出审核与总结串行；审核阻断时总结只输出安全降级说明。
+6. 顺序固定为 `summary -> output-review`；审核只处理完整候选答案，`complete.finalAnswer` 是唯一权威输出。
 
 建议 AgentResult：
 
@@ -123,10 +107,12 @@ retrieve_product_candidates
 -> 保存 candidates + Checkpoint
 -> interruptBefore(human_confirm_product)
 -> API/SSE 返回 human_confirm
--> 前端提交 threadId、checkpointId、candidateVersion、selectedIds
--> 校验候选归属和有效期
--> updateState(confirmedProducts)
--> resume
+-> 前端携带 Last-Event-ID，提交 conversationId、selectedProductCodes
+-> 数据库 CAS：WAITING_CONFIRM -> CONFIRMING
+-> 重放遗漏事件并建立第二段 SSE 订阅
+-> 服务端从 Checkpoint 读取候选并校验 selectedProductCodes
+-> 保存 ConfirmedProduct，updateState(resolvedProducts, humanConfirmRequired=false)
+-> withResume() 执行 human-confirm-product，再进入 context-alignment
 ```
 
 确认数据建议单独审计：确认人、认证主体、候选版本、选择结果、确认时间、原始问题。本阶段只实现暂停、状态更新和恢复链路；产品候选确认接口的权限校验、候选有效期和版本冲突规则已明确延期，不纳入当前实现范围。
@@ -160,7 +146,7 @@ ChatMemory 与长期历史保持当前事务一致性；Checkpoint 不替代长�
 
 ## 8. 统一 SSE 协议
 
-事件类型：`start`、`stage`、`agent_start`、`agent_stream`、`tool_start`、`tool_result`、`human_confirm`、`review`、`summary`、`complete`、`error`。当前保险项目的 `agent_stream` 采用 `LIVE_MODEL_STREAM`：产品线索解析、上下文对齐和意图识别通过 Spring AI `ChatModel.stream(Prompt)` 发布结构化 JSON 增量；Planner、子智能体和 Summary 通过 Spring AI Alibaba Agent 流发布模型增量。并行 Agent 使用 `streamId + taskId` 隔离。Summary 完成后再执行输出审核，因此流式正文属于临时展示，客户端必须以 `complete.finalAnswer` 覆盖为最终结果。
+事件类型：`start`、`stage`、`human_confirm`、`agent_start`、`agent_stream`、`agent_complete`、`summary`、`review`、`complete`、`error`。当前项目没有独立 `tool_start/tool_result` 前端协议事件；Tool 过程只通过 Agent 模型流和调用审计体现。`agent_stream` 采用 `LIVE_MODEL_STREAM`：产品线索解析、上下文对齐和意图识别通过 Spring AI `ChatModel.stream(Prompt)` 发布结构化 JSON 增量；Planner、子智能体和 Summary 通过 Spring AI Alibaba Agent 流发布模型增量。并行 Agent 使用 `streamId + taskId` 隔离。Summary 完成后再执行输出审核，因此流式正文属于临时展示，客户端必须以 `complete.finalAnswer` 覆盖为最终结果。
 
 人工确认是一次显式的流连接分段：初始 `/runs/stream` 在 `human_confirm` 后结束；前端提交候选时调用 `/runs/{workflowInstanceId}/product-confirmations/stream` 并携带最后处理的 `Last-Event-ID`。后端先完成重放和订阅，再恢复 OceanBase Checkpoint，避免恢复事件先于新连接建立。
 
@@ -174,7 +160,6 @@ public record WorkflowSseEvent(
         String workflowInstanceId,
         String conversationId,
         String node,
-        String agent,
         long sequence,
         Instant occurredAt,
         Map<String, Object> data) {
@@ -196,9 +181,9 @@ public final class WorkflowSseSender {
 }
 ```
 
-协议规则：sequence 在 workflow 内单调递增；Token 事件仅含文本增量，不含完整 State；Tool 参数和结果做字段级脱敏；`complete` 仅发送一次；`error` 区分可恢复/不可恢复；人工确认事件包含 checkpointId 和候选版本。IDEA 日志使用相同类型：`[Agent]`、`[Tool]`、`[Skill]`、`[Memory]`、`[Workflow]`，但不要逐 Token 以 INFO 打印生产日志。
+协议规则：sequence 在 workflow 内单调递增；Token 事件仅含文本增量，不含完整 State；Tool 参数和结果做字段级脱敏；`complete` 仅发送一次；`error` 区分可恢复/不可恢复；当前人工确认事件包含 checkpointId 和脱敏候选列表，不包含候选版本字段。IDEA 日志使用相同类型：`[Agent]`、`[Tool]`、`[Skill]`、`[Memory]`、`[Workflow]`，但不要逐 Token 以 INFO 打印生产日志。
 
-SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/client disconnect 释放；`SseEmitter.send` 异常后立即取消上游。主 Graph 执行线程池与 MVC 请求线程池隔离。
+当前实现通过 `SseEmitter` 回调和发送异常移除本机连接，Main Graph 使用独立有界线程池，不占 MVC 请求线程。客户端断开不会取消已经开始的 Graph/模型任务，后台仍继续执行并把事件写入 OceanBase；是否增加可取消执行句柄属于后续资源治理能力。
 
 ### Last-Event-ID 与断线重连
 
@@ -214,7 +199,7 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 -> 收到 complete 后关闭连接
 ```
 
-为避免“查询历史”和“订阅实时流”之间丢事件，服务端先取得当前 highWatermark，重放到该序号，再订阅实时流并补查大于 highWatermark 的间隙。Token 事件按 100-250ms 或约 1KB 合并后持久化，避免每个 Token 一行。当前项目事件默认保留 10 分钟；超过期限的 Last-Event-ID 返回“重放已过期”，客户端改查工作流最终结果，不从头重新执行模型。
+为避免“查询历史”和“订阅实时流”之间丢事件，当前实现按 workflowInstanceId 加本机临界区，在其中读取 highWatermark、重放有效事件并注册本机连接；其他 JVM 产生的新事件由500ms数据库轮询按客户端 sequence 游标补齐。当前模型增量事件按框架输出块落库，没有实现额外的100-250ms聚合器。事件默认保留10分钟；超过期限且出现序号缺口时返回410，客户端应查询工作流最终结果，不从头重新执行模型。
 
 ## 9. 分阶段实施顺序
 
@@ -222,7 +207,7 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 
 - 产品分析 ReactAgent + Tool + 隔离 Skill 闭环。
 - ChatMemory、长期历史、会话摘要、调用审计。
-- Main StateGraph v1：上下文对齐、意图、Planner、产品 Agent、总结。
+- Main StateGraph v1：产品实体解析、候选召回与持久化人工确认、上下文对齐、意图、Planner、动态 DAG、总结和输出审核。
 - OceanBase `BaseCheckpointSaver`、V4 数据表、状态序列化、版本链和保留策略。
 - 同步 Swagger API 验证。
 - 阶段级 SSE 协议、OceanBase 10 分钟事件重放和 `Last-Event-ID` 断线重连。
@@ -235,14 +220,14 @@ SSE 实现必须保存 Reactor `Disposable`，在 completion/timeout/error/clien
 ### 下一阶段
 
 1. 对接真实行内输出审核微应用协议，替换当前 Mock Gateway。
-2. 实现独立 Summary Agent 或保留确定性 Summary 的选型验证。
-3. 最后实现统一 SSE，避免同时调试多智能体编排和流式两个变量。
+2. 将产品、知识、保单和资产 Mock Service 替换为受鉴权的行内微应用接口。
+3. 增加 Checkpoint Replay 管理接口和多实例容量验证。
 
 ### 未完成
 
 - Checkpoint Replay 管理接口。
 - 产品召回微服务真实接入，以及确认权限、候选有效期和版本冲突校验。
-- 知识、保单、资产子能力。
+- 知识、保单、资产真实数据源；当前 Agent、Skill、Tool 和 Mock 闭环已经完成。
 - 行内输出审核真实接口、超时和服务降级策略。
-- SSE Streaming、客户端断连取消、事件持久化与 Last-Event-ID 重放。
+- 大规模 SSE 连接容量测试，以及客户端断开后是否取消仍在运行模型任务的策略评估。
 - 多租户鉴权、脱敏、限流和完整观测指标。

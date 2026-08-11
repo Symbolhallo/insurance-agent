@@ -51,7 +51,7 @@ public class DagExecutorNode implements NodeAction {
                 .value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class)
                 .orElse(false);
 
-        // 主工作流链路 10：执行 Planner DAG；任一任务完成即释放后继，失败只影响其依赖分支。
+        // 主工作流链路 14：执行 Planner DAG；任一任务完成即释放后继，失败只影响其依赖分支。
         DagExecutionResult result = workflowDagExecutor.execute(
                 workflowPlan,
                 routingResult,

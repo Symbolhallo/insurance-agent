@@ -24,6 +24,7 @@ public class HumanConfirmProductNode implements NodeAction {
 
     @Override
     public Map<String, Object> apply(OverAllState state) {
+        // 主工作流链路 10：恢复后校验标准产品已写入 State；该节点本身不阻塞等待用户。
         List<ConfirmedProduct> resolvedProducts = resolvedProducts(state);
         if (resolvedProducts.isEmpty()) {
             throw new IllegalStateException("Human confirmation resumed without resolved products");

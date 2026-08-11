@@ -39,7 +39,7 @@ public class PlannerNode implements NodeAction {
         log.info("[Workflow] node=planner action=plan conversationId={} intent={}",
                 context.conversationId(),
                 routingResult.intent());
-        // 主工作流链路 9：调用 Planner Agent 生成受白名单约束的结构化执行计划。
+        // 主工作流链路 13：调用 Planner Agent 生成受白名单约束的结构化执行计划。
         WorkflowPlan plan = workflowPlannerAgent.plan(context, routingResult, streamContext(state, context));
         return Map.of(MainWorkflowStateKeys.WORKFLOW_PLAN, plan);
     }

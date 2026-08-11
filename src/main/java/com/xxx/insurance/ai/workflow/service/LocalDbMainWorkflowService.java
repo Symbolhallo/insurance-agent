@@ -173,7 +173,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 lifecycleProperties.getInstanceId(),
                 leaseUntil,
                 startedAt);
-        // 主工作流链路 2：原子占用 conversation，并持久化实例和步骤；双击或并发消息在数据库层被拒绝。
+        // 主工作流链路 3：原子占用 conversation，并持久化实例和步骤；双击或并发消息在数据库层被拒绝。
         workflowStartService.start(
                 instanceRecord,
                 workflowStepRecords(workflowInstanceId, workflowStepIds, inputJson, startedAt));
@@ -181,7 +181,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 Map.of("status", STATUS_RUNNING, "workflowCode", WORKFLOW_CODE));
 
         try {
-            // 主工作流链路 3：以工作流实例 ID 作为 threadId 启动 Graph，候选召回后可持久化中断。
+            // 主工作流链路 4：发布 start 后，以实例 ID 作为 threadId 启动可持久化、可恢复的 Main Graph。
             RunnableConfig config = runnableConfig(workflowInstanceId, request.conversationId());
             NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(
                             Map.of(
@@ -229,7 +229,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     public void claimProductConfirmation(String workflowInstanceId, String conversationId) {
         WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
         validateConfirmationInstance(instance, conversationId, STATUS_WAITING_CONFIRM);
-        // 主工作流链路 6：用数据库条件更新抢占确认权，只有一个请求能恢复当前 Checkpoint。
+        // 确认续流 CAS：用数据库条件更新抢占确认权，只有一个请求能恢复当前 Checkpoint。
         Instant now = Instant.now();
         if (workflowExecutionMapper.claimProductConfirmation(
                 workflowInstanceId,
@@ -262,7 +262,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             List<ConfirmedProduct> selectedProducts = selectedProducts(
                     workflowInstanceId, request, recallResult, resolution);
 
-            // 主工作流链路 7：抢占成功后持久化当前会话确认产品，再恢复 Graph。
+            // 主工作流链路 9：保存标准产品，更新 Checkpoint State，并通过 withResume 继续执行人工确认节点。
             confirmedProductService.saveConfirmedProducts(selectedProducts);
             Instant now = Instant.now();
             if (workflowExecutionMapper.markRunningAfterConfirmation(
@@ -366,6 +366,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                                                         MainWorkflowRequest request,
                                                         String workflowInstanceId,
                                                         Instant startedAt) {
+        // 主工作流链路 7：将 interruptBefore 快照转为 WAITING_CONFIRM，发布 human_confirm 后结束本段 SSE。
         OverAllState state = snapshot.state();
         ProductRecallDecision decision = state
                 .value(MainWorkflowStateKeys.PRODUCT_RECALL_DECISION, ProductRecallDecision.class)
@@ -513,7 +514,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 startedAt,
                 endedAt,
                 errorMessage);
-        // 主工作流链路 13：终态、最终 Memory、Checkpoint、SSE Outbox 和会话锁在同一事务收口。
+        // 主工作流链路 17：终态、最终 Memory、Checkpoint、SSE Outbox 和会话锁在同一事务收口。
         boolean finalized = workflowFinalizationService.complete(response, toJson(response), modelName());
         if (!finalized) {
             log.info("[Workflow] code={} action=complete status=idempotent-ignore workflowInstanceId={}",

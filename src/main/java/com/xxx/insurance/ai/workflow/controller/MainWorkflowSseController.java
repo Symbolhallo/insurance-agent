@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Main Workflow 阶段级 SSE 启动与断线重连接口。
+ * Main Workflow 实时 SSE 启动、人工确认续流与断线重连接口。
  */
 @Tag(name = "MainWorkflowSse", description = "主工作流 SSE 运行、持久化重放和断线重连")
 @RestController
@@ -36,9 +36,12 @@ public class MainWorkflowSseController {
     /** 启动新的后台 Main Graph，并持续返回带 id 和 event 名称的阶段事件。 */
     @Operation(
             summary = "以 SSE 启动 Main Graph",
-            description = "返回 start、stage、human_confirm、agent_stream、summary、review、complete 或 error 事件；事件会写入 OceanBase。")
+            description = "先建立SSE订阅，再异步执行产品实体解析、可选候选确认、上下文对齐、意图识别、"
+                    + "Planner、动态DAG、Summary和输出审核；返回start、stage、human_confirm、agent_start、"
+                    + "agent_stream、agent_complete、summary、review、complete或error事件，全部写入OceanBase。")
     @PostMapping(value = "/runs/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamRun(@Valid @RequestBody MainWorkflowRequest request) {
+        // 主工作流链路 1：校验请求后进入 SSE 应用服务；本 HTTP 线程不直接执行模型或 Graph。
         return workflowSseService.start(request);
     }
 

@@ -41,7 +41,7 @@ public class ContextAlignmentNode implements NodeAction {
                 productResolution.detectedProductClues(),
                 productResolution.productRecallDecision(),
                 resolvedProducts);
-        // 主工作流链路 7：结合已解析或人工确认的标准产品与会话历史，完成话题对齐和问题改写。
+        // 主工作流链路 11：结合已解析或人工确认的标准产品与会话历史，完成话题对齐和问题改写。
         AlignedWorkflowContext context = contextAlignmentService.align(
                 request,
                 effectiveResolution,

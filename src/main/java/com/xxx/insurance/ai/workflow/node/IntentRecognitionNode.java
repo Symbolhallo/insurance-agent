@@ -42,7 +42,7 @@ public class IntentRecognitionNode implements NodeAction {
         AlignedWorkflowContext context = state
                 .value(MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class)
                 .orElseThrow(() -> new IllegalStateException("Missing aligned context in graph state"));
-        // 主工作流链路 8：基于对齐后的问题识别业务意图，并确定目标子智能体。
+        // 主工作流链路 12：基于对齐后的问题识别业务意图，并确定目标子智能体。
         IntentRoutingResult result = intentRecognitionService.recognize(context, streamContext(state, context));
         log.info("[Workflow] node=intent-recognition action=recognize conversationId={} intent={} targetAgent={}",
                 context.conversationId(),

@@ -63,7 +63,7 @@ public class OutputReviewNode implements NodeAction {
                 summaryResult.answer(),
                 dagResult.taskResults());
 
-        // 主工作流链路 12：审核 Summary 的唯一候选答案；只有 publishableAnswer 能写入最终输出。
+        // 主工作流链路 16：审核 Summary 的唯一候选答案；只有 publishableAnswer 能写入最终输出。
         OutputReviewResult result = outputReviewGateway.review(request);
         validateResult(reviewRequestId, result);
         log.info("[Workflow] node=output-review action=complete workflowInstanceId={} reviewRequestId={} decision={}",

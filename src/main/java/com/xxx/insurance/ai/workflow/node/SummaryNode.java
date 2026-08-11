@@ -46,7 +46,7 @@ public class SummaryNode implements NodeAction {
         AlignedWorkflowContext alignedContext = state
                 .value(MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class)
                 .orElseThrow(() -> new IllegalStateException("Missing aligned context in graph state"));
-        // 主工作流链路 11：单任务直接透传，多任务调用 Summary Agent 汇总为唯一待审核答案。
+        // 主工作流链路 15：单任务直接透传，多任务调用 Summary Agent 汇总为唯一待审核答案。
         WorkflowSummaryResult summaryResult = workflowSummaryAgent.summarize(
                 dagResult,
                 tokenStreamingEnabled,

@@ -34,7 +34,7 @@ public class MainWorkflowController {
             description = "先解析当前会话产品线索；需要召回时返回候选并等待确认，否则执行上下文对齐、意图识别、子智能体、总结和输出审核节点。")
     @PostMapping("/runs")
     public ApiResponse<MainWorkflowResponse> run(@Valid @RequestBody MainWorkflowRequest request) {
-        // 主工作流链路 1：受理已通过参数校验的请求，进入工作流应用服务。
+        // 同步兼容入口：复用同一 Main Graph，但不启用 SSE Token 流。
         return ApiResponse.success(mainWorkflowService.run(request));
     }
 

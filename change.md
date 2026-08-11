@@ -1,5 +1,27 @@
 # 工程变更记录
 
+## 2026-08-11：以 SSE 入口重新校准 Main Workflow 链路
+
+### 链路校准
+
+- 将 `POST /api/v1/workflows/main/runs/stream` 明确为主工作流实时入口，统一关键代码注释为17步：SSE受理与预订阅、启动事务、Main Graph、产品实体解析、可选召回/人工确认、恢复节点校验、上下文对齐、意图、Planner、动态DAG、Summary、输出审核和原子收口。
+- 同步接口 `/runs` 保留为兼容入口，但不再占用“主工作流链路1”的编号，也不启用模型 Token SSE。
+- 新增入口顺序测试，固定“预分配 workflowInstanceId -> 注册 SSE -> 提交后台任务 -> tokenStreamingEnabled=true”的时序。
+
+### 旧内容修复
+
+- 修复人工确认恢复和上下文对齐重复标为第7步的问题，并补齐 SSE 入口、interruptBefore、确认续流和最终收口序号。
+- 修正文档中“上下文对齐先做召回判断”的旧图；当前唯一召回判断节点是 `resolve-product-reference`，上下文对齐只在产品实体确定后执行。
+- 删除当前 Main Graph 中并不存在的固定 `route_agents`、`join_results`、`finish` 节点描述；四个领域 Agent 实际由 `dag-executor` 通过任务子图动态调度。
+- 修正顺序为 `summary -> output-review`，并更新实际 SSE 事件类型、Human Confirm 请求字段、State Keys、OceanBase Saver/动态DAG现状和README缺失的 `requestId`。
+
+### 范围
+
+- 未改变 Main Graph 拓扑、Checkpoint、SSE事件表、Memory、领域 Agent 或动态DAG业务逻辑。
+- 同步更新 `README.md`、`AGENTS.md`、项目理解文档及 Spring AI Alibaba项目落地文档。
+- SSE入口、Human Confirm拓扑、Summary/Review定向测试通过；`./gradlew test` 全量139项测试通过，0失败、0跳过。
+- 未执行Git提交或推送。
+
 ## 2026-08-11：会话锁回收与执行租约 Heartbeat
 
 ### 过期会话锁回收

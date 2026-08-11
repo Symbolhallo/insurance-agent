@@ -294,7 +294,7 @@ Graph 流转 SSE 时：
 
 ## 9. 保险项目映射与常见错误
 
-当前 `MainWorkflowGraphConfig` 已正确采用 `START -> Node -> END`，但仍是串行、无 Saver 的 v1。下一阶段先补 State Schema 和持久化，再加并行与 HITL。
+当前 `MainWorkflowGraphConfig` 已使用 OceanBase `BaseCheckpointSaver`、`interruptBefore(human-confirm-product)` 和动态 DAG 子图。Main Graph 的固定拓扑负责确定性生命周期，`dag-executor` 内依据 Planner `dependsOn` 动态形成串行、并行和混合执行；每个任务子图使用独立 Checkpoint thread。
 
 常见错误：
 

@@ -337,7 +337,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `WorkflowNodeDefinition` | 主图节点枚举；`code()`、`nodeName()`、`type()`、`target()`。 |
 | `WorkflowInstanceRecord` / `WorkflowInstanceExecutionView` | 实例写入记录和状态查询视图。 |
 | `WorkflowStepRecord` | 步骤写入记录。 |
-| `WorkflowSseEventType` | start/stage/human_confirm/agent_stream/summary/review/complete/error；`eventName()`。 |
+| `WorkflowSseEventType` | start/stage/human_confirm/agent_start/agent_stream/agent_complete/summary/review/complete/error；`eventName()`。 |
 | `WorkflowSseEvent` / `WorkflowSseEventRecord` | 前端事件和数据库事件记录。 |
 
 ## 4.7 `com.xxx.insurance.product`
@@ -560,21 +560,28 @@ erDiagram
 
 ```mermaid
 flowchart LR
-    A["POST /runs"] --> B["LocalDbMainWorkflowService"]
-    B --> C["保存 instance/steps"]
-    C --> D["resolve-product-reference"]
-    D -->|需要召回| E["retrieve-product-candidates"]
-    E --> F["interruptBefore human-confirm"]
-    F --> G["用户确认 + updateState + resume"]
-    D -->|无需召回| H["context-alignment"]
-    G --> H
-    H --> I["intent-recognition"]
-    I --> J["planner"]
-    J --> K["dynamic DAG"]
-    K --> L["summary"]
-    L --> M["output-review"]
-    M --> N["finalAnswer + Memory + Complete"]
+    A["1 POST /runs/stream"] --> B["2 先订阅 SSE，再提交后台任务"]
+    B --> C["3 会话锁 + instance/steps"]
+    C --> D["4 start + invoke Main Graph"]
+    D --> E["5 resolve-product-reference"]
+    E -->|需要召回| F["6 retrieve-product-candidates"]
+    F --> G["7 interruptBefore + human_confirm"]
+    G --> H["8 确认接口抢占 + 重放/订阅"]
+    H --> I["9 保存产品 + updateState + withResume"]
+    I --> J["10 human-confirm-product 校验"]
+    E -->|无需召回| K["11 context-alignment"]
+    J --> K
+    K --> L["12 intent-recognition"]
+    L --> M["13 planner-agent"]
+    M --> N["14 dynamic DAG"]
+    N --> O["15 summary"]
+    O --> P["16 output-review"]
+    P --> Q["17 原子收口 + complete"]
 ```
+
+链路边界：初始 SSE 在 `human_confirm` 后结束，不占用请求线程等待用户；确认时使用
+`POST /runs/{workflowInstanceId}/product-confirmations/stream` 建立第二段流。所有事件先写
+`ai_workflow_sse_event`，`complete.finalAnswer` 才是审核后的最终答案。
 
 ## 8.2 动态 DAG
 

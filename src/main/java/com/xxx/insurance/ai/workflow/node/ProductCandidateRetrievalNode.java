@@ -41,7 +41,7 @@ public class ProductCandidateRetrievalNode implements NodeAction {
                 workflowRequest.conversationId(),
                 3,
                 Map.of("domain", "insurance-product"));
-        // 主工作流链路 5：召回待确认的标准产品候选，并写入召回审计记录和 Checkpoint State。
+        // 主工作流链路 6：召回待确认的标准产品候选，并写入召回审计记录和 Checkpoint State。
         ProductRecallResult result = productRecallService.recall(
                 request,
                 new ProductRecallExecutionContext(workflowRequest.conversationId(), workflowInstanceId));

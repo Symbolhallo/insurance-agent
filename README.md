@@ -183,7 +183,7 @@ curl -X POST http://localhost:8080/api/v1/ai/memory/conversations/local-test-001
 curl -X POST http://localhost:8080/api/v1/workflows/main/runs \
   -H 'X-Trace-Id: local-workflow-001' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"鑫享人生收益怎么样？","conversationId":"local-test-001"}'
+  -d '{"message":"鑫享人生收益怎么样？","conversationId":"local-test-001","requestId":"req-local-workflow-001"}'
 ```
 
 当前记忆查询侧使用 MyBatis Mapper 实现；会话主表、调用流水、长期记忆写入侧也已迁移为 MyBatis Mapper。
@@ -264,7 +264,7 @@ ai_long_term_memory
 
 Workflow 调用子智能体时，模型使用 Planner 拆分后的任务指令；子智能体并行阶段只写 `ai_agent_invocation` 审计，Summary 完成后由 Main Workflow 向 `ai_chat_memory` 和 `ai_long_term_memory` 一次性写入用户原话与最终回答，调用流水同时关联 `workflow_instance_id` 与 `workflow_step_id`。
 
-`local-db` profile 还提供 Workflow SSE：`POST /api/v1/workflows/main/runs/stream` 在独立有界线程池中启动 Graph，发送 `start`、`stage`、`human_confirm`、`agent_start`、`agent_stream`、`agent_complete`、`summary`、`review`、`complete`、`error` 事件；`GET /api/v1/workflows/main/runs/{workflowInstanceId}/events` 可携带 `Last-Event-ID: {workflowInstanceId}:{sequence}` 重放断线后遗漏事件。产品线索解析、上下文对齐和意图识别通过 `ChatModel.stream(Prompt)` 输出结构化 JSON 增量，Planner、四个领域子智能体和多任务 Summary 通过 `ReactAgent.stream()` 输出模型增量。事件写入 `ai_workflow_sse_event` 并默认保留 10 分钟，到期后由30秒周期清理任务从数据库物理删除；最终答案以审核后的 `complete.finalAnswer` 为准。
+`local-db` profile 还提供 Workflow SSE：`POST /api/v1/workflows/main/runs/stream` 先注册连接，再在独立有界线程池中启动 Graph，发送 `start`、`stage`、`human_confirm`、`agent_start`、`agent_stream`、`agent_complete`、`summary`、`review`、`complete`、`error` 事件；`GET /api/v1/workflows/main/runs/{workflowInstanceId}/events` 可携带 `Last-Event-ID: {workflowInstanceId}:{sequence}` 重放断线后遗漏事件。初始流在 `human_confirm` 后结束，产品确认通过 `/product-confirmations/stream` 建立第二段流并恢复 Checkpoint。产品线索解析、上下文对齐和意图识别通过 `ChatModel.stream(Prompt)` 输出结构化 JSON 增量，Planner、四个领域子智能体和多任务 Summary 通过 `ReactAgent.stream()` 输出模型增量。事件写入 `ai_workflow_sse_event` 并默认保留 10 分钟，到期后由30秒周期清理任务从数据库物理删除；最终答案以审核后的 `complete.finalAnswer` 为准。
 
 需要产品人工确认时，初始 SSE 在 `human_confirm` 后结束。前端提交选择时调用 `POST /api/v1/workflows/main/runs/{workflowInstanceId}/product-confirmations/stream`，并建议把最后处理的事件编号放入 `Last-Event-ID` 请求头；服务会先补发遗漏事件并建立订阅，再从 OceanBase Checkpoint 恢复，后续模型和 Graph 事件继续实时返回。
 

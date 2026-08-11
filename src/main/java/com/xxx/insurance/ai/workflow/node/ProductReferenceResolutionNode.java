@@ -27,7 +27,7 @@ public class ProductReferenceResolutionNode implements NodeAction {
     public Map<String, Object> apply(OverAllState state) {
         MainWorkflowRequest request = state.value(MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class)
                 .orElseThrow(() -> new IllegalStateException("Missing main workflow request in graph state"));
-        // 主工作流链路 4：仅加载当前 conversationId 的确认产品，识别线索并决定是否进入候选确认分支。
+        // 主工作流链路 5：仅加载当前 conversationId 的确认产品，识别线索并决定是否进入候选确认分支。
         ProductReferenceResolution resolution = resolutionService.resolve(request, streamContext(state, request));
         return Map.of(
                 MainWorkflowStateKeys.PRODUCT_REFERENCE_RESOLUTION, resolution,

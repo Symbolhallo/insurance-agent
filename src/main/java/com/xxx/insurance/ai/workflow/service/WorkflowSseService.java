@@ -40,6 +40,7 @@ public class WorkflowSseService {
      * 先注册 SSE 连接，再使用同一 workflowInstanceId 在后台执行 Main Graph。
      */
     public SseEmitter start(MainWorkflowRequest request) {
+        // 主工作流链路 2：预分配实例编号并先注册连接，再把 Graph 提交到隔离线程池，避免首事件丢失。
         String workflowInstanceId = mainWorkflowService.createWorkflowInstanceId();
         SseEmitter emitter = eventService.subscribeNewRun(workflowInstanceId);
         try {
@@ -63,6 +64,7 @@ public class WorkflowSseService {
     public SseEmitter confirmProducts(String workflowInstanceId,
                                       ProductConfirmationRequest request,
                                       String lastEventId) {
+        // 主工作流链路 8：原子抢占确认权，随后重放/订阅，再异步恢复 Checkpoint，避免恢复事件早于连接。
         mainWorkflowService.claimProductConfirmation(workflowInstanceId, request.conversationId());
         try {
             SseEmitter emitter = eventService.subscribeConfirmationResume(workflowInstanceId, lastEventId);
