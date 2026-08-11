@@ -28,6 +28,7 @@ public class WorkflowAgentTokenStreamSink implements AgentTokenStreamSink {
         workflowEventPublisher.publish(
                 context.workflowInstanceId(),
                 context.conversationId(),
+                context.executionFenceToken(),
                 WorkflowSseEventType.AGENT_STREAM,
                 node(context),
                 eventData(context, streamId, chunkIndex, content, false));
@@ -41,6 +42,7 @@ public class WorkflowAgentTokenStreamSink implements AgentTokenStreamSink {
         workflowEventPublisher.publish(
                 context.workflowInstanceId(),
                 context.conversationId(),
+                context.executionFenceToken(),
                 WorkflowSseEventType.AGENT_STREAM,
                 node(context),
                 eventData(context, streamId, chunkCount, "", true));

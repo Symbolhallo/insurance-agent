@@ -73,7 +73,7 @@ class LocalDbMainWorkflowServiceTests {
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("请勿重复提交");
 
-        verify(executionMapper, never()).updateInstanceStatus(any(), any(), any(), any(), any());
+        verify(executionMapper, never()).updateInstanceStatus(any(), any(), any(), any(), any(Long.class), any());
     }
 
     private LocalDbMainWorkflowService service(WorkflowExecutionMapper executionMapper,
@@ -87,6 +87,7 @@ class LocalDbMainWorkflowServiceTests {
                 mock(WorkflowEventPublisher.class),
                 mock(WorkflowStartService.class),
                 mock(WorkflowFinalizationService.class),
+                mock(WorkflowPauseService.class),
                 new WorkflowLifecycleProperties(),
                 mock(ThreadPoolTaskExecutor.class));
     }

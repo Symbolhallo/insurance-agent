@@ -65,16 +65,17 @@ public class WorkflowSseService {
                                       ProductConfirmationRequest request,
                                       String lastEventId) {
         // 主工作流链路 8：原子抢占确认权，随后重放/订阅，再异步恢复 Checkpoint，避免恢复事件早于连接。
-        mainWorkflowService.claimProductConfirmation(workflowInstanceId, request.conversationId());
+        long executionFenceToken = mainWorkflowService.claimProductConfirmation(
+                workflowInstanceId, request.conversationId());
         try {
             SseEmitter emitter = eventService.subscribeConfirmationResume(workflowInstanceId, lastEventId);
-            taskExecutor.execute(() -> executeConfirmation(workflowInstanceId, request));
+            taskExecutor.execute(() -> executeConfirmation(workflowInstanceId, request, executionFenceToken));
             return emitter;
         }
         catch (RuntimeException ex) {
             eventService.completeSubscribers(workflowInstanceId);
             mainWorkflowService.releaseProductConfirmationClaim(
-                    workflowInstanceId, request.conversationId());
+                    workflowInstanceId, request.conversationId(), executionFenceToken);
             throw ex;
         }
     }
@@ -92,9 +93,12 @@ public class WorkflowSseService {
     }
 
     /** 从人工确认 Checkpoint 恢复，并保持后续前置节点、子智能体和 Summary 的模型流。 */
-    private void executeConfirmation(String workflowInstanceId, ProductConfirmationRequest request) {
+    private void executeConfirmation(String workflowInstanceId,
+                                     ProductConfirmationRequest request,
+                                     long executionFenceToken) {
         try {
-            mainWorkflowService.confirmClaimedProducts(workflowInstanceId, request, true);
+            mainWorkflowService.confirmClaimedProducts(
+                    workflowInstanceId, request, true, executionFenceToken);
         }
         catch (Exception ex) {
             eventService.failSubscribedRun(

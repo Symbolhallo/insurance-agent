@@ -17,6 +17,7 @@ public class NoOpWorkflowEventPublisher implements WorkflowEventPublisher {
     @Override
     public void publish(String workflowInstanceId,
                         String conversationId,
+                        long executionFenceToken,
                         WorkflowSseEventType type,
                         String node,
                         Map<String, Object> data) {

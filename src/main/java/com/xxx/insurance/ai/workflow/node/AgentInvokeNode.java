@@ -122,7 +122,9 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
     private void publish(WorkflowAgentTaskContext context,
                          WorkflowSseEventType type,
                          Map<String, Object> data) {
-        eventPublisher.publish(context.workflowInstanceId(), context.conversationId(), type, "agent-invoke", data);
+        eventPublisher.publish(
+                context.workflowInstanceId(), context.conversationId(), context.executionFenceToken(),
+                type, "agent-invoke", data);
     }
 
     /** 限制进入 Checkpoint 和审计数据的异常文本长度。 */

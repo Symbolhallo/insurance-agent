@@ -111,6 +111,7 @@ public class AuditedReactAgentExecutor {
                 ? new AgentTokenStreamContext(
                         executionContext.workflowInstanceId(),
                         conversationId,
+                        executionContext.executionFenceToken(),
                         executionContext.taskId(),
                         agentName,
                         AgentTokenStreamContext.PHASE_SUB_AGENT)

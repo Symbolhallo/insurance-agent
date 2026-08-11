@@ -55,6 +55,9 @@ public class PlannerNode implements NodeAction {
         return new AgentTokenStreamContext(
                 workflowInstanceId,
                 context.conversationId(),
+                state.value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
+                        .map(Number::longValue)
+                        .orElseThrow(() -> new IllegalStateException("Missing execution fence token")),
                 null,
                 WorkflowPlannerAgent.AGENT_NAME,
                 AgentTokenStreamContext.PHASE_PLANNER);

@@ -58,11 +58,14 @@ public class WorkflowFinalizationService {
      * 原子提交正常业务终态。返回 false 表示其他执行者已经提交终态，本次调用不再产生副作用。
      */
     @Transactional(rollbackFor = Exception.class)
-    public boolean complete(MainWorkflowResponse response, String outputJson, String modelName) {
+    public boolean complete(MainWorkflowResponse response,
+                            String outputJson,
+                            String modelName,
+                            long executionFenceToken) {
         Instant endedAt = response.endedAt();
         int finalized = workflowExecutionMapper.finalizeInstance(
                 response.workflowInstanceId(), response.status(), outputJson, response.errorMessage(),
-                lifecycleProperties.getInstanceId(), endedAt);
+                lifecycleProperties.getInstanceId(), executionFenceToken, endedAt);
         if (finalized == 0) {
             return false;
         }
@@ -70,10 +73,11 @@ public class WorkflowFinalizationService {
         // 最终收口 1：固定 invocationId，并与终态更新处于同一事务，重试不会重复写 Memory。
         saveFinalConversation(response, modelName);
         workflowExecutionMapper.skipPendingSteps(response.workflowInstanceId(), endedAt);
-        checkpointSaver.markWorkflowCompleted(response.workflowInstanceId());
+        checkpointSaver.markWorkflowCompleted(response.workflowInstanceId(), executionFenceToken);
         // 最终收口 2：COMPLETE 先作为事实事件落库，提交后由 SSE Poller 投递，具备 Outbox 语义。
         sseEventService.persistTransactionalEvent(
-                response.workflowInstanceId(), response.conversationId(), WorkflowSseEventType.COMPLETE, null,
+                response.workflowInstanceId(), response.conversationId(), executionFenceToken,
+                WorkflowSseEventType.COMPLETE, null,
                 Map.of(
                         "status", response.status(),
                         "finalAnswer", response.finalAnswer(),
@@ -89,15 +93,18 @@ public class WorkflowFinalizationService {
     public boolean fail(String workflowInstanceId,
                         String conversationId,
                         String errorMessage,
+                        long executionFenceToken,
                         Instant endedAt) {
         if (workflowExecutionMapper.failInstanceIfNonTerminal(
-                workflowInstanceId, errorMessage, lifecycleProperties.getInstanceId(), endedAt) == 0) {
+                workflowInstanceId, errorMessage, lifecycleProperties.getInstanceId(),
+                executionFenceToken, endedAt) == 0) {
             return false;
         }
         workflowExecutionMapper.skipPendingSteps(workflowInstanceId, endedAt);
-        checkpointSaver.markWorkflowFailed(workflowInstanceId);
+        checkpointSaver.markWorkflowFailed(workflowInstanceId, executionFenceToken);
         sseEventService.persistTransactionalEvent(
-                workflowInstanceId, conversationId, WorkflowSseEventType.ERROR, null,
+                workflowInstanceId, conversationId, executionFenceToken,
+                WorkflowSseEventType.ERROR, null,
                 Map.of("status", "FAILED", "message", "主工作流执行失败，请稍后重试或联系人工支持"));
         workflowExecutionMapper.deleteConversationLock(workflowInstanceId);
         return true;

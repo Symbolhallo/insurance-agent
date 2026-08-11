@@ -26,7 +26,7 @@ class WorkflowAgentTokenStreamSinkTests {
 
         ArgumentCaptor<Map<String, Object>> data = mapCaptor();
         verify(eventPublisher).publish(
-                eq("wfi-001"), eq("conversation-001"), eq(WorkflowSseEventType.AGENT_STREAM),
+                eq("wfi-001"), eq("conversation-001"), eq(0L), eq(WorkflowSseEventType.AGENT_STREAM),
                 eq("agent-invoke"), data.capture());
         assertThat(data.getValue())
                 .containsEntry("streamId", "stream-001")
@@ -51,7 +51,7 @@ class WorkflowAgentTokenStreamSinkTests {
 
         ArgumentCaptor<Map<String, Object>> data = mapCaptor();
         verify(eventPublisher).publish(
-                eq("wfi-001"), eq("conversation-001"), eq(WorkflowSseEventType.AGENT_STREAM),
+                eq("wfi-001"), eq("conversation-001"), eq(0L), eq(WorkflowSseEventType.AGENT_STREAM),
                 eq("summary"), data.capture());
         assertThat(data.getValue())
                 .doesNotContainKey("taskId")
@@ -72,7 +72,7 @@ class WorkflowAgentTokenStreamSinkTests {
         sink.publishToken(context, "stream-intent-001", 1, "{\"intentions\"");
 
         verify(eventPublisher).publish(
-                eq("wfi-001"), eq("conversation-001"), eq(WorkflowSseEventType.AGENT_STREAM),
+                eq("wfi-001"), eq("conversation-001"), eq(0L), eq(WorkflowSseEventType.AGENT_STREAM),
                 eq("intent-recognition"), org.mockito.ArgumentMatchers.anyMap());
     }
 

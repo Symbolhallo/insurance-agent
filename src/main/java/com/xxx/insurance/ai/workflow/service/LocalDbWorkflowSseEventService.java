@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.config.WorkflowSseProperties;
+import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowSseEventMapper;
 import com.xxx.insurance.ai.workflow.model.WorkflowInstanceExecutionView;
@@ -53,6 +54,8 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
 
     private final WorkflowSseProperties properties;
 
+    private final WorkflowLifecycleProperties lifecycleProperties;
+
     private final TransactionTemplate transactionTemplate;
 
     private final Map<String, Object> workflowLocks = new ConcurrentHashMap<>();
@@ -64,11 +67,13 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                                           WorkflowExecutionMapper executionMapper,
                                           ObjectMapper objectMapper,
                                           WorkflowSseProperties properties,
+                                          WorkflowLifecycleProperties lifecycleProperties,
                                           PlatformTransactionManager transactionManager) {
         this.eventMapper = eventMapper;
         this.executionMapper = executionMapper;
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.lifecycleProperties = lifecycleProperties;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -141,8 +146,12 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         if (!subscribers.containsKey(workflowInstanceId)) {
             return;
         }
-        publish(workflowInstanceId, conversationId, WorkflowSseEventType.ERROR, null,
-                Map.of("status", "FAILED", "message", message));
+        WorkflowInstanceExecutionView instance = executionMapper.findInstance(workflowInstanceId);
+        if (instance != null) {
+            publish(workflowInstanceId, conversationId, instance.executionFenceToken(),
+                    WorkflowSseEventType.ERROR, null,
+                    Map.of("status", "FAILED", "message", message));
+        }
         completeSubscribers(workflowInstanceId);
     }
 
@@ -150,6 +159,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     @Override
     public void publish(String workflowInstanceId,
                         String conversationId,
+                        long executionFenceToken,
                         WorkflowSseEventType type,
                         String node,
                         Map<String, Object> data) {
@@ -157,7 +167,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         synchronized (lock) {
             try {
                 WorkflowSseEvent event = transactionTemplate.execute(status -> persistEvent(
-                        workflowInstanceId, conversationId, type, node, data));
+                        workflowInstanceId, conversationId, executionFenceToken, type, node, data));
                 if (event == null) {
                     throw new IllegalStateException("SSE event transaction returned no event");
                 }
@@ -210,14 +220,27 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     /** 在独立事务连接内原子分配序号并持久化事件。 */
     private WorkflowSseEvent persistEvent(String workflowInstanceId,
                                           String conversationId,
+                                          long executionFenceToken,
                                           WorkflowSseEventType type,
                                           String node,
                                           Map<String, Object> data) {
-        if (eventMapper.allocateSequence(workflowInstanceId) != 1) {
-            throw new IllegalStateException("Workflow instance not found for SSE event");
-        }
-        long sequence = eventMapper.lastAllocatedSequence();
         Instant occurredAt = Instant.now();
+        if (eventMapper.allocateExecutionSequence(
+                workflowInstanceId, lifecycleProperties.getInstanceId(),
+                executionFenceToken, occurredAt) != 1) {
+            throw new IllegalStateException("Workflow execution lease was lost before SSE event");
+        }
+        return persistAllocatedEvent(workflowInstanceId, conversationId, type, node, data, occurredAt);
+    }
+
+    /** 使用当前事务连接已经分配的 sequence 写入不可变事件事实。 */
+    private WorkflowSseEvent persistAllocatedEvent(String workflowInstanceId,
+                                                   String conversationId,
+                                                   WorkflowSseEventType type,
+                                                   String node,
+                                                   Map<String, Object> data,
+                                                   Instant occurredAt) {
+        long sequence = eventMapper.lastAllocatedSequence();
         WorkflowSseEvent event = new WorkflowSseEvent(
                 workflowInstanceId + ":" + sequence,
                 type.eventName(),
@@ -241,10 +264,29 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     @Transactional(propagation = Propagation.MANDATORY)
     public void persistTransactionalEvent(String workflowInstanceId,
                                           String conversationId,
+                                          long executionFenceToken,
                                           WorkflowSseEventType type,
                                           String node,
                                           Map<String, Object> data) {
-        persistEvent(workflowInstanceId, conversationId, type, node, data);
+        if (eventMapper.allocateTerminalSequence(workflowInstanceId, executionFenceToken) != 1) {
+            throw new IllegalStateException("Workflow terminal fencing token was rejected for SSE event");
+        }
+        persistAllocatedEvent(workflowInstanceId, conversationId, type, node, data, Instant.now());
+    }
+
+    /** 在人工暂停事务内写入经过 WAITING_CONFIRM 状态和 fencing token 校验的事件。 */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void persistWaitingConfirmEvent(String workflowInstanceId,
+                                           String conversationId,
+                                           long executionFenceToken,
+                                           String node,
+                                           Map<String, Object> data) {
+        if (eventMapper.allocateWaitingConfirmSequence(workflowInstanceId, executionFenceToken) != 1) {
+            throw new IllegalStateException("Workflow waiting-confirm fencing token was rejected for SSE event");
+        }
+        persistAllocatedEvent(
+                workflowInstanceId, conversationId, WorkflowSseEventType.HUMAN_CONFIRM,
+                node, data, Instant.now());
     }
 
     /** 在事务提交后立即尝试投递事实表事件；失败时保留连接游标，交给下一轮数据库扫描补偿。 */

@@ -19,14 +19,46 @@ import java.util.List;
 @Mapper
 public interface WorkflowSseEventMapper {
 
-    /** 在实例行锁内原子递增事件序号，并把本连接的 LAST_INSERT_ID 设置为新序号。 */
+    /** 只有持有当前有效 execution lease 的执行者才能分配执行期事件序号。 */
     @Update("""
             update ai_workflow_instance
             set event_sequence = last_insert_id(event_sequence + 1),
                 updated_at = updated_at
             where workflow_instance_id = #{workflowInstanceId}
+              and execution_owner = #{executionOwner}
+              and execution_fence_token = #{executionFenceToken}
+              and lease_until > #{now}
+              and status in ('RUNNING', 'CONFIRMING', 'RESUMING')
             """)
-    int allocateSequence(@Param("workflowInstanceId") String workflowInstanceId);
+    int allocateExecutionSequence(@Param("workflowInstanceId") String workflowInstanceId,
+                                  @Param("executionOwner") String executionOwner,
+                                  @Param("executionFenceToken") long executionFenceToken,
+                                  @Param("now") Instant now);
+
+    /** 收口事务获得终态写入权后，按同一 fencing token 分配最终事件序号。 */
+    @Update("""
+            update ai_workflow_instance
+            set event_sequence = last_insert_id(event_sequence + 1),
+                updated_at = updated_at
+            where workflow_instance_id = #{workflowInstanceId}
+              and execution_fence_token = #{executionFenceToken}
+              and status in ('SUCCESS', 'PARTIAL_SUCCESS', 'REVIEW_BLOCKED', 'FAILED')
+            """)
+    int allocateTerminalSequence(@Param("workflowInstanceId") String workflowInstanceId,
+                                 @Param("executionFenceToken") long executionFenceToken);
+
+    /** 人工暂停事务完成状态切换后，仍以本次执行 token 分配确认事件序号。 */
+    @Update("""
+            update ai_workflow_instance
+            set event_sequence = last_insert_id(event_sequence + 1),
+                updated_at = updated_at
+            where workflow_instance_id = #{workflowInstanceId}
+              and execution_fence_token = #{executionFenceToken}
+              and status = 'WAITING_CONFIRM'
+              and execution_owner is null
+            """)
+    int allocateWaitingConfirmSequence(@Param("workflowInstanceId") String workflowInstanceId,
+                                       @Param("executionFenceToken") long executionFenceToken);
 
     /** 读取当前事务连接刚刚分配的工作流事件序号。 */
     @Select("select last_insert_id()")

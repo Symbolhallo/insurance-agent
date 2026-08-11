@@ -1,5 +1,27 @@
 # 工程变更记录
 
+## 2026-08-11：Execution Lease Fencing Token 加固
+
+### 执行权代次
+
+- Flyway V19 为 `ai_workflow_instance` 增加 `execution_fence_token`。新工作流从1开始，产品确认抢占和故障恢复接管时原子递增；heartbeat 只续租，不改变 fencing token。
+- `execution_owner` 标识 JVM 实例，`execution_fence_token` 标识本次执行权代次，`state_version` 继续记录实例行状态变化，三者职责分离。
+- token 进入 Main Graph State、`RunnableConfig` metadata、动态 DAG 任务上下文和模型 Token 流上下文；旧执行分支不会通过重新查询拿到新 token。
+
+### 写入门禁
+
+- Workflow 终态、失败、人工暂停和步骤审计写入统一校验 owner、fencing token、未过期 lease 与允许状态。
+- OceanBase Checkpoint 在原有 `ai_graph_thread.version` 乐观锁之外，联表校验 Workflow owner、fencing token 和 lease；旧执行者不能推进 thread version 或写入 Checkpoint。
+- 执行期 SSE sequence 分配校验 owner、token 和 lease；终态及 WAITING_CONFIRM 事件校验对应状态和 token。
+- 新增 `WorkflowPauseService`，将步骤暂停、实例 WAITING_CONFIRM、conversation lock 续期和 `human_confirm` 事实事件放在同一事务中。
+- 最终收口继续保持实例终态、Memory、Checkpoint 状态和终态 SSE Outbox 的单事务提交，并增加 fencing token 校验。
+
+### 验证
+
+- 新增 Workflow、Checkpoint、SSE Mapper 门禁测试，以及旧 token 无法写 Checkpoint/SSE 的服务测试。
+- `./gradlew test` 全量测试通过。
+- 本次未执行 Git 提交或推送。
+
 ## 2026-08-11：以 SSE 入口重新校准 Main Workflow 链路
 
 ### 链路校准

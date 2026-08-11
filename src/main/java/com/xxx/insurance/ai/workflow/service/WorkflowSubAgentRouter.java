@@ -40,6 +40,7 @@ public class WorkflowSubAgentRouter {
         AgentExecutionContext executionContext = new AgentExecutionContext(
                 taskContext.workflowInstanceId(),
                 taskContext.workflowStepId(),
+                taskContext.executionFenceToken(),
                 taskContext.originalQuestion(),
                 false,
                 taskContext.task().taskId(),

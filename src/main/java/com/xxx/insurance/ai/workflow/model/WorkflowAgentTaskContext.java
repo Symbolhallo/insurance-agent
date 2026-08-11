@@ -14,6 +14,7 @@ public record WorkflowAgentTaskContext(
         WorkflowPlanTask task,
         String conversationId,
         String workflowInstanceId,
+        long executionFenceToken,
         String workflowStepId,
         String originalQuestion,
         List<ConfirmedProduct> confirmedProducts,
@@ -24,5 +25,18 @@ public record WorkflowAgentTaskContext(
     public WorkflowAgentTaskContext {
         confirmedProducts = confirmedProducts == null ? List.of() : List.copyOf(confirmedProducts);
         dependencyResults = dependencyResults == null ? List.of() : List.copyOf(dependencyResults);
+    }
+
+    /** 兼容不验证持久化租约的单元测试与独立任务调用。 */
+    public WorkflowAgentTaskContext(WorkflowPlanTask task,
+                                    String conversationId,
+                                    String workflowInstanceId,
+                                    String workflowStepId,
+                                    String originalQuestion,
+                                    List<ConfirmedProduct> confirmedProducts,
+                                    List<AgentTaskExecutionResult> dependencyResults,
+                                    boolean tokenStreamingEnabled) {
+        this(task, conversationId, workflowInstanceId, 1L, workflowStepId, originalQuestion,
+                confirmedProducts, dependencyResults, tokenStreamingEnabled);
     }
 }

@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.config.WorkflowSseProperties;
+import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowSseEventMapper;
 import com.xxx.insurance.ai.workflow.model.WorkflowInstanceExecutionView;
@@ -23,8 +24,10 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class LocalDbWorkflowSseEventServiceTests {
@@ -39,12 +42,16 @@ class LocalDbWorkflowSseEventServiceTests {
     @Test
     void persistsEventWithWorkflowScopedIdAndTenMinuteExpiry() {
         WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
-        when(eventMapper.allocateSequence("wfi-001")).thenReturn(1);
+        when(eventMapper.allocateExecutionSequence(
+                org.mockito.ArgumentMatchers.eq("wfi-001"),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq(3L),
+                any(Instant.class))).thenReturn(1);
         when(eventMapper.lastAllocatedSequence()).thenReturn(3L);
         LocalDbWorkflowSseEventService service = service(eventMapper, mock(WorkflowExecutionMapper.class));
 
         service.publish(
-                "wfi-001", "conversation-001", WorkflowSseEventType.STAGE,
+                "wfi-001", "conversation-001", 3L, WorkflowSseEventType.STAGE,
                 "planner-agent", Map.of("status", "SUCCESS"));
 
         ArgumentCaptor<WorkflowSseEventRecord> recordCaptor = ArgumentCaptor.forClass(WorkflowSseEventRecord.class);
@@ -54,6 +61,20 @@ class LocalDbWorkflowSseEventServiceTests {
         assertThat(record.sequenceNo()).isEqualTo(3);
         assertThat(record.payloadJson()).contains("SUCCESS");
         assertThat(Duration.between(record.createdAt(), record.expireAt())).isEqualTo(Duration.ofMinutes(10));
+    }
+
+    @Test
+    void staleExecutionFenceCannotAppendSseEvent() {
+        WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
+        when(eventMapper.allocateExecutionSequence(
+                anyString(), anyString(), org.mockito.ArgumentMatchers.eq(2L), any(Instant.class)))
+                .thenReturn(0);
+
+        service(eventMapper, mock(WorkflowExecutionMapper.class)).publish(
+                "wfi-001", "conversation-001", 2L,
+                WorkflowSseEventType.STAGE, "planner", Map.of("status", "RUNNING"));
+
+        verify(eventMapper, never()).insert(any());
     }
 
     @Test
@@ -169,6 +190,7 @@ class LocalDbWorkflowSseEventServiceTests {
                 executionMapper,
                 new ObjectMapper().findAndRegisterModules(),
                 new WorkflowSseProperties(Duration.ofMinutes(5), Duration.ofMinutes(10), Duration.ofMillis(500)),
+                new WorkflowLifecycleProperties(),
                 transactionManager);
     }
 }

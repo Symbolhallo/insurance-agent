@@ -69,6 +69,8 @@ import java.util.stream.Collectors;
 @Profile("local-db")
 public class LocalDbMainWorkflowService implements MainWorkflowService {
 
+    private static final long INITIAL_EXECUTION_FENCE_TOKEN = 1L;
+
     private static final Logger log = LoggerFactory.getLogger(LocalDbMainWorkflowService.class);
 
     private static final String STATUS_RUNNING = "RUNNING";
@@ -76,6 +78,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     private static final String STATUS_WAITING_CONFIRM = "WAITING_CONFIRM";
 
     private static final String STATUS_CONFIRMING = "CONFIRMING";
+
+    private static final String STATUS_RESUMING = "RESUMING";
 
     private final WorkflowExecutionMapper workflowExecutionMapper;
 
@@ -95,6 +99,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
     private final WorkflowFinalizationService workflowFinalizationService;
 
+    private final WorkflowPauseService workflowPauseService;
+
     private final WorkflowLifecycleProperties lifecycleProperties;
 
     public LocalDbMainWorkflowService(WorkflowExecutionMapper workflowExecutionMapper,
@@ -106,6 +112,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                                       WorkflowEventPublisher workflowEventPublisher,
                                       WorkflowStartService workflowStartService,
                                       WorkflowFinalizationService workflowFinalizationService,
+                                      WorkflowPauseService workflowPauseService,
                                       WorkflowLifecycleProperties lifecycleProperties,
                                       @Qualifier(WorkflowExecutionConfig.WORKFLOW_DAG_TASK_EXECUTOR)
                                       ThreadPoolTaskExecutor workflowDagTaskExecutor) {
@@ -117,6 +124,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         this.workflowEventPublisher = workflowEventPublisher;
         this.workflowStartService = workflowStartService;
         this.workflowFinalizationService = workflowFinalizationService;
+        this.workflowPauseService = workflowPauseService;
         this.lifecycleProperties = lifecycleProperties;
         this.workflowDagTaskExecutor = workflowDagTaskExecutor;
     }
@@ -177,28 +185,33 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         workflowStartService.start(
                 instanceRecord,
                 workflowStepRecords(workflowInstanceId, workflowStepIds, inputJson, startedAt));
-        publishEvent(workflowInstanceId, request.conversationId(), WorkflowSseEventType.START, null,
+        long executionFenceToken = INITIAL_EXECUTION_FENCE_TOKEN;
+        publishEvent(workflowInstanceId, request.conversationId(), executionFenceToken,
+                WorkflowSseEventType.START, null,
                 Map.of("status", STATUS_RUNNING, "workflowCode", WORKFLOW_CODE));
 
         try {
             // 主工作流链路 4：发布 start 后，以实例 ID 作为 threadId 启动可持久化、可恢复的 Main Graph。
-            RunnableConfig config = runnableConfig(workflowInstanceId, request.conversationId());
+            RunnableConfig config = runnableConfig(
+                    workflowInstanceId, request.conversationId(), executionFenceToken);
             NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(
                             Map.of(
                                     MainWorkflowStateKeys.REQUEST, request,
                                     MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, workflowInstanceId,
+                                    MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, executionFenceToken,
                                     MainWorkflowStateKeys.WORKFLOW_STEP_IDS, workflowStepIds,
                                     MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, tokenStreamingEnabled),
                             config)
                     .orElseThrow(() -> new IllegalStateException("Main workflow graph returned empty output"));
             if (!output.isEND()) {
                 StateSnapshot snapshot = mainWorkflowGraph.getState(config);
-                return waitingConfirmResponse(snapshot, request, workflowInstanceId, startedAt);
+                return waitingConfirmResponse(
+                        snapshot, request, workflowInstanceId, executionFenceToken, startedAt);
             }
             return complete(output.state(), workflowInstanceId, startedAt);
         }
         catch (Exception ex) {
-            fail(workflowInstanceId, ex);
+            fail(workflowInstanceId, executionFenceToken, ex);
             throw new IllegalStateException("Main workflow execution failed", ex);
         }
     }
@@ -220,13 +233,15 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     public MainWorkflowResponse confirmProducts(String workflowInstanceId,
                                                 ProductConfirmationRequest request,
                                                 boolean tokenStreamingEnabled) {
-        claimProductConfirmation(workflowInstanceId, request.conversationId());
-        return confirmClaimedProducts(workflowInstanceId, request, tokenStreamingEnabled);
+        long executionFenceToken = claimProductConfirmation(
+                workflowInstanceId, request.conversationId());
+        return confirmClaimedProducts(
+                workflowInstanceId, request, tokenStreamingEnabled, executionFenceToken);
     }
 
     /** 原子抢占 WAITING_CONFIRM 实例，确保并发请求只有一个能够进入恢复链路。 */
     @Override
-    public void claimProductConfirmation(String workflowInstanceId, String conversationId) {
+    public long claimProductConfirmation(String workflowInstanceId, String conversationId) {
         WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
         validateConfirmationInstance(instance, conversationId, STATUS_WAITING_CONFIRM);
         // 确认续流 CAS：用数据库条件更新抢占确认权，只有一个请求能恢复当前 Checkpoint。
@@ -241,17 +256,21 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                     ErrorCode.WORKFLOW_STATE_CONFLICT,
                     "产品确认已被处理，请勿重复提交");
         }
+        return requireOwnedFenceToken(workflowInstanceId, STATUS_CONFIRMING);
     }
 
     /** 使用当前请求已经获得的确认权写入产品并恢复 Graph。 */
     @Override
     public MainWorkflowResponse confirmClaimedProducts(String workflowInstanceId,
                                                        ProductConfirmationRequest request,
-                                                       boolean tokenStreamingEnabled) {
+                                                       boolean tokenStreamingEnabled,
+                                                       long executionFenceToken) {
         WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
         validateConfirmationInstance(instance, request.conversationId(), STATUS_CONFIRMING);
         try {
-            RunnableConfig baseConfig = runnableConfig(workflowInstanceId, request.conversationId());
+            requireExpectedFence(instance, executionFenceToken);
+            RunnableConfig baseConfig = runnableConfig(
+                    workflowInstanceId, request.conversationId(), executionFenceToken);
             StateSnapshot snapshot = mainWorkflowGraph.getState(baseConfig);
             ProductRecallResult recallResult = snapshot.state()
                     .value(MainWorkflowStateKeys.PRODUCT_RECALL_RESULT, ProductRecallResult.class)
@@ -268,6 +287,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             if (workflowExecutionMapper.markRunningAfterConfirmation(
                     workflowInstanceId,
                     lifecycleProperties.getInstanceId(),
+                    executionFenceToken,
                     now.plus(lifecycleProperties.getExecutionLease()),
                     now) != 1) {
                 throw new IllegalStateException("Product confirmation execution lease was lost");
@@ -277,6 +297,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                     Map.of(
                             MainWorkflowStateKeys.RESOLVED_PRODUCTS, selectedProducts,
                             MainWorkflowStateKeys.HUMAN_CONFIRM_REQUIRED, false,
+                            MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, executionFenceToken,
                             MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, tokenStreamingEnabled));
             NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(Map.of(), updatedConfig.withResume())
                     .orElseThrow(() -> new IllegalStateException("Resumed workflow graph returned empty output"));
@@ -286,18 +307,21 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             return complete(output.state(), workflowInstanceId, instance.createdAt());
         }
         catch (Exception ex) {
-            fail(workflowInstanceId, ex);
+            fail(workflowInstanceId, executionFenceToken, ex);
             throw new IllegalStateException("Main workflow resume failed", ex);
         }
     }
 
     /** 后台恢复任务未提交时将 CONFIRMING 安全退回 WAITING_CONFIRM。 */
     @Override
-    public void releaseProductConfirmationClaim(String workflowInstanceId, String conversationId) {
+    public void releaseProductConfirmationClaim(String workflowInstanceId,
+                                                String conversationId,
+                                                long executionFenceToken) {
         if (workflowExecutionMapper.releaseProductConfirmationClaim(
                 workflowInstanceId,
                 conversationId,
                 lifecycleProperties.getInstanceId(),
+                executionFenceToken,
                 Instant.now()) != 1) {
             log.warn("[Workflow] action=release-confirmation-claim status=ignored workflowInstanceId={}",
                     workflowInstanceId);
@@ -324,13 +348,17 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             throw new IllegalStateException("Workflow instance is not available for resume");
         }
 
-        RunnableConfig config = runnableConfig(workflowInstanceId, request.conversationId());
+        long executionFenceToken = requireOwnedFenceToken(workflowInstanceId, STATUS_RESUMING);
+
+        RunnableConfig config = runnableConfig(
+                workflowInstanceId, request.conversationId(), executionFenceToken);
         try {
             StateSnapshot snapshot = mainWorkflowGraph.getState(config);
             MainWorkflowRequest originalRequest = snapshot.state()
                     .value(MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class)
                     .orElseThrow(() -> new IllegalStateException("Workflow checkpoint has no original request"));
-            publishEvent(workflowInstanceId, request.conversationId(), WorkflowSseEventType.STAGE, null,
+            publishEvent(workflowInstanceId, request.conversationId(), executionFenceToken,
+                    WorkflowSseEventType.STAGE, null,
                     Map.of("status", "RESUMING", "checkpointId",
                             snapshot.config().checkPointId().orElse("")));
 
@@ -338,23 +366,28 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             if (workflowExecutionMapper.markRunningAfterResume(
                     workflowInstanceId,
                     lifecycleProperties.getInstanceId(),
+                    executionFenceToken,
                     resumeTime.plus(lifecycleProperties.getExecutionLease()),
                     resumeTime) != 1) {
                 throw new IllegalStateException("Workflow resume execution lease was lost");
             }
 
             // 主工作流恢复链路 1：从最新主图 Checkpoint 继续；DAG 内 SUCCESS 子任务由独立子图直接复用。
-            NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(Map.of(), snapshot.config())
+            RunnableConfig updatedConfig = mainWorkflowGraph.updateState(
+                    snapshot.config(),
+                    Map.of(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, executionFenceToken));
+            NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(Map.of(), updatedConfig)
                     .orElseThrow(() -> new IllegalStateException("Resumed workflow graph returned empty output"));
             if (!output.isEND()) {
                 StateSnapshot interrupted = mainWorkflowGraph.getState(config);
                 return waitingConfirmResponse(
-                        interrupted, originalRequest, workflowInstanceId, instance.createdAt());
+                        interrupted, originalRequest, workflowInstanceId,
+                        executionFenceToken, instance.createdAt());
             }
             return complete(output.state(), workflowInstanceId, instance.createdAt());
         }
         catch (Exception ex) {
-            fail(workflowInstanceId, ex);
+            fail(workflowInstanceId, executionFenceToken, ex);
             throw new IllegalStateException("Main workflow checkpoint resume failed", ex);
         }
     }
@@ -365,6 +398,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     private MainWorkflowResponse waitingConfirmResponse(StateSnapshot snapshot,
                                                         MainWorkflowRequest request,
                                                         String workflowInstanceId,
+                                                        long executionFenceToken,
                                                         Instant startedAt) {
         // 主工作流链路 7：将 interruptBefore 快照转为 WAITING_CONFIRM，发布 human_confirm 后结束本段 SSE。
         OverAllState state = snapshot.state();
@@ -406,26 +440,20 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 null);
         String humanStepId = stepIds.get(WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code());
         Instant waitingAt = Instant.now();
-        if (workflowExecutionMapper.updateInstanceStatus(
+        workflowPauseService.pauseForProductConfirmation(
                 workflowInstanceId,
-                STATUS_WAITING_CONFIRM,
+                request.conversationId(),
+                executionFenceToken,
+                humanStepId,
                 toJson(response),
-                lifecycleProperties.getInstanceId(),
-                waitingAt) != 1) {
-            throw new IllegalStateException("Workflow execution lease was lost before human confirmation");
-        }
-        workflowExecutionMapper.updateStepWaitingConfirm(humanStepId, toJson(recallResult), waitingAt);
-        workflowExecutionMapper.renewConversationLock(
-                workflowInstanceId,
-                Instant.now().plus(lifecycleProperties.getWaitingConfirmLease()),
-                waitingAt);
-        publishEvent(workflowInstanceId, request.conversationId(), WorkflowSseEventType.HUMAN_CONFIRM,
+                toJson(recallResult),
                 WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code(),
                 Map.of(
                         "status", STATUS_WAITING_CONFIRM,
                         "checkpointId", checkpointId,
                         "candidateCount", recallResult.candidates().size(),
-                        "candidates", confirmationCandidates(recallResult)));
+                        "candidates", confirmationCandidates(recallResult)),
+                waitingAt);
         workflowEventPublisher.completeSubscribers(workflowInstanceId);
         log.info("[Workflow] code={} action=run status=waiting-confirm workflowInstanceId={} checkpointId={} "
                         + "candidateCount={}",
@@ -515,7 +543,13 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 endedAt,
                 errorMessage);
         // 主工作流链路 17：终态、最终 Memory、Checkpoint、SSE Outbox 和会话锁在同一事务收口。
-        boolean finalized = workflowFinalizationService.complete(response, toJson(response), modelName());
+        long executionFenceToken = finalState
+                .value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
+                .map(Number::longValue)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Main workflow graph returned empty execution fence token"));
+        boolean finalized = workflowFinalizationService.complete(
+                response, toJson(response), modelName(), executionFenceToken);
         if (!finalized) {
             log.info("[Workflow] code={} action=complete status=idempotent-ignore workflowInstanceId={}",
                     WORKFLOW_CODE, workflowInstanceId);
@@ -621,12 +655,18 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     }
 
     /** 创建 Graph 调用配置，以 workflowInstanceId 作为 Checkpoint threadId。 */
-    private RunnableConfig runnableConfig(String workflowInstanceId, String conversationId) {
+    private RunnableConfig runnableConfig(String workflowInstanceId,
+                                          String conversationId,
+                                          long executionFenceToken) {
         return RunnableConfig.builder()
                 .threadId(workflowInstanceId)
                 .defaultParallelExecutor(workflowDagTaskExecutor)
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_WORKFLOW_INSTANCE_ID, workflowInstanceId)
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_CONVERSATION_ID, conversationId)
+                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_OWNER,
+                        lifecycleProperties.getInstanceId())
+                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_FENCE_TOKEN,
+                        executionFenceToken)
                 .build();
     }
 
@@ -637,12 +677,13 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     }
 
     /** 统一收口未处理异常，将实例、待执行步骤和 Checkpoint 标记为失败。 */
-    private void fail(String workflowInstanceId, Exception exception) {
+    private void fail(String workflowInstanceId, long executionFenceToken, Exception exception) {
         Instant endedAt = Instant.now();
         String errorMessage = truncateErrorMessage(exception);
         WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
         boolean failed = instance != null && workflowFinalizationService.fail(
-                workflowInstanceId, instance.conversationId(), errorMessage, endedAt);
+                workflowInstanceId, instance.conversationId(), errorMessage,
+                executionFenceToken, endedAt);
         if (!failed) {
             log.warn("[Workflow] code={} action=fail status=terminal-preserved workflowInstanceId={}",
                     WORKFLOW_CODE, workflowInstanceId);
@@ -657,10 +698,35 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     /** 将已脱敏的工作流生命周期数据交给 profile 对应的 SSE 发布器。 */
     private void publishEvent(String workflowInstanceId,
                               String conversationId,
+                              long executionFenceToken,
                               WorkflowSseEventType type,
                               String node,
                               Map<String, Object> data) {
-        workflowEventPublisher.publish(workflowInstanceId, conversationId, type, node, data);
+        workflowEventPublisher.publish(
+                workflowInstanceId, conversationId, executionFenceToken, type, node, data);
+    }
+
+    /** 读取本次抢占后数据库生成的 fencing token，并确认执行权仍属于当前实例。 */
+    private long requireOwnedFenceToken(String workflowInstanceId, String expectedStatus) {
+        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
+        if (instance == null
+                || !expectedStatus.equals(instance.status())
+                || !lifecycleProperties.getInstanceId().equals(instance.executionOwner())
+                || instance.leaseUntil() == null
+                || !instance.leaseUntil().isAfter(Instant.now())) {
+            throw new IllegalStateException("Workflow execution lease was lost after claim");
+        }
+        return instance.executionFenceToken();
+    }
+
+    /** 防止旧确认请求误用同 JVM 后续抢占得到的新执行权。 */
+    private void requireExpectedFence(WorkflowInstanceExecutionView instance, long executionFenceToken) {
+        if (instance.executionFenceToken() != executionFenceToken
+                || !lifecycleProperties.getInstanceId().equals(instance.executionOwner())
+                || instance.leaseUntil() == null
+                || !instance.leaseUntil().isAfter(Instant.now())) {
+            throw new IllegalStateException("Workflow execution fencing token is stale");
+        }
     }
 
     /** 为当前 Graph 定义中的每个节点预分配数据库步骤编号。 */

@@ -28,21 +28,30 @@ public interface GraphCheckpointMapper {
                 expires_at,
                 created_at,
                 updated_at
-            ) values (
+            ) select
                 #{threadId},
-                #{workflowInstanceId},
-                #{conversationId},
+                i.workflow_instance_id,
+                i.conversation_id,
                 'ACTIVE',
                 0,
                 #{expiresAt},
                 #{now},
                 #{now}
-            ) on duplicate key update
+            from ai_workflow_instance i
+            where i.workflow_instance_id = #{workflowInstanceId}
+              and i.conversation_id = #{conversationId}
+              and i.execution_owner = #{executionOwner}
+              and i.execution_fence_token = #{executionFenceToken}
+              and i.lease_until > #{now}
+              and i.status in ('RUNNING', 'CONFIRMING', 'RESUMING')
+            on duplicate key update
                 thread_id = values(thread_id)
             """)
     int insertThreadIfAbsent(@Param("threadId") String threadId,
                              @Param("workflowInstanceId") String workflowInstanceId,
                              @Param("conversationId") String conversationId,
+                             @Param("executionOwner") String executionOwner,
+                             @Param("executionFenceToken") long executionFenceToken,
                              @Param("expiresAt") Instant expiresAt,
                              @Param("now") Instant now);
 
@@ -66,18 +75,26 @@ public interface GraphCheckpointMapper {
                                                    @Param("now") Instant now);
 
     @Update("""
-            update ai_graph_thread
-            set latest_checkpoint_id = #{checkpointId},
-                version = version + 1,
-                expires_at = #{expiresAt},
-                updated_at = #{now}
-            where thread_id = #{threadId}
-              and status = 'ACTIVE'
-              and version = #{expectedVersion}
+            update ai_graph_thread t
+            join ai_workflow_instance i
+              on i.workflow_instance_id = t.workflow_instance_id
+            set t.latest_checkpoint_id = #{checkpointId},
+                t.version = t.version + 1,
+                t.expires_at = #{expiresAt},
+                t.updated_at = #{now}
+            where t.thread_id = #{threadId}
+              and t.status = 'ACTIVE'
+              and t.version = #{expectedVersion}
+              and i.execution_owner = #{executionOwner}
+              and i.execution_fence_token = #{executionFenceToken}
+              and i.lease_until > #{now}
+              and i.status in ('RUNNING', 'CONFIRMING', 'RESUMING')
             """)
     int advanceThreadVersion(@Param("threadId") String threadId,
                              @Param("expectedVersion") long expectedVersion,
                              @Param("checkpointId") String checkpointId,
+                             @Param("executionOwner") String executionOwner,
+                             @Param("executionFenceToken") long executionFenceToken,
                              @Param("expiresAt") Instant expiresAt,
                              @Param("now") Instant now);
 
@@ -165,14 +182,19 @@ public interface GraphCheckpointMapper {
                            @Param("now") Instant now);
 
     @Update("""
-            update ai_graph_thread
-            set status = #{status},
-                expires_at = #{expiresAt},
-                updated_at = #{now}
-            where workflow_instance_id = #{workflowInstanceId}
-              and status <> 'RELEASED'
+            update ai_graph_thread t
+            join ai_workflow_instance i
+              on i.workflow_instance_id = t.workflow_instance_id
+            set t.status = #{status},
+                t.expires_at = #{expiresAt},
+                t.updated_at = #{now}
+            where t.workflow_instance_id = #{workflowInstanceId}
+              and t.status <> 'RELEASED'
+              and i.execution_fence_token = #{executionFenceToken}
+              and i.status in ('SUCCESS', 'PARTIAL_SUCCESS', 'REVIEW_BLOCKED', 'FAILED')
             """)
     int updateWorkflowThreadStatuses(@Param("workflowInstanceId") String workflowInstanceId,
+                                     @Param("executionFenceToken") long executionFenceToken,
                                      @Param("status") String status,
                                      @Param("expiresAt") Instant expiresAt,
                                      @Param("now") Instant now);

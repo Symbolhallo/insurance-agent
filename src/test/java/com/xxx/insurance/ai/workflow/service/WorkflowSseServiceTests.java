@@ -52,6 +52,8 @@ class WorkflowSseServiceTests {
         ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
         ProductConfirmationRequest request = new ProductConfirmationRequest(
                 "conversation-001", List.of("PA-001"));
+        when(mainWorkflowService.claimProductConfirmation("wfi-001", "conversation-001"))
+                .thenReturn(9L);
 
         SseEmitter result = new WorkflowSseService(mainWorkflowService, eventService, taskExecutor)
                 .confirmProducts("wfi-001", request, "wfi-001:5");
@@ -62,6 +64,6 @@ class WorkflowSseServiceTests {
         ordered.verify(eventService).subscribeConfirmationResume("wfi-001", "wfi-001:5");
         verify(taskExecutor).execute(task.capture());
         task.getValue().run();
-        verify(mainWorkflowService).confirmClaimedProducts("wfi-001", request, true);
+        verify(mainWorkflowService).confirmClaimedProducts("wfi-001", request, true, 9L);
     }
 }

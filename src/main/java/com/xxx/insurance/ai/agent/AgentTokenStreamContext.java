@@ -5,6 +5,7 @@ package com.xxx.insurance.ai.agent;
  *
  * @param workflowInstanceId 工作流实例编号
  * @param conversationId 会话编号
+ * @param executionFenceToken 当前工作流执行权代次
  * @param taskId DAG 任务编号；Summary 流为空
  * @param agentName 产生 Token 的 Agent 名称
  * @param phase 输出阶段，例如 SUB_AGENT 或 SUMMARY
@@ -12,9 +13,19 @@ package com.xxx.insurance.ai.agent;
 public record AgentTokenStreamContext(
         String workflowInstanceId,
         String conversationId,
+        long executionFenceToken,
         String taskId,
         String agentName,
         String phase) {
+
+    /** 兼容非工作流测试或独立调用；0 表示不携带执行租约。 */
+    public AgentTokenStreamContext(String workflowInstanceId,
+                                   String conversationId,
+                                   String taskId,
+                                   String agentName,
+                                   String phase) {
+        this(workflowInstanceId, conversationId, 0L, taskId, agentName, phase);
+    }
 
     public static final String PHASE_PRODUCT_REFERENCE_RESOLUTION = "PRODUCT_REFERENCE_RESOLUTION";
 

@@ -27,6 +27,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class OceanBaseCheckpointSaverTests {
@@ -59,7 +60,8 @@ class OceanBaseCheckpointSaverTests {
         Checkpoint checkpoint = checkpoint("cp-new", "node-a", "node-b", Map.of("answer", "ok"));
         GraphCheckpointThreadRecord thread = thread("wfi-001", "ACTIVE", "cp-latest", 4);
         when(mapper.findReadableThread(anyString(), any(Instant.class))).thenReturn(thread);
-        when(mapper.advanceThreadVersion(anyString(), anyLong(), anyString(), any(), any())).thenReturn(1);
+        when(mapper.advanceThreadVersion(
+                anyString(), anyLong(), anyString(), anyString(), anyLong(), any(), any())).thenReturn(1);
 
         RunnableConfig result = saver.put(config, checkpoint);
 
@@ -68,6 +70,8 @@ class OceanBaseCheckpointSaverTests {
                 org.mockito.ArgumentMatchers.eq("wfi-001"),
                 org.mockito.ArgumentMatchers.eq("wfi-001"),
                 org.mockito.ArgumentMatchers.eq("conversation-001"),
+                org.mockito.ArgumentMatchers.eq("test-instance"),
+                org.mockito.ArgumentMatchers.eq(1L),
                 any(Instant.class),
                 any(Instant.class));
         ArgumentCaptor<GraphCheckpointRecord> recordCaptor = ArgumentCaptor.forClass(GraphCheckpointRecord.class);
@@ -89,14 +93,16 @@ class OceanBaseCheckpointSaverTests {
 
     @Test
     void appliesStatusSpecificExpiryWhenWorkflowReachesTerminalState() {
-        when(mapper.updateWorkflowThreadStatuses(anyString(), anyString(), any(), any())).thenReturn(1);
+        when(mapper.updateWorkflowThreadStatuses(
+                anyString(), anyLong(), anyString(), any(), any())).thenReturn(1);
         ArgumentCaptor<Instant> completedExpiry = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<Instant> completedAt = ArgumentCaptor.forClass(Instant.class);
 
-        saver.markWorkflowCompleted("wfi-completed");
+        saver.markWorkflowCompleted("wfi-completed", 7L);
 
         verify(mapper).updateWorkflowThreadStatuses(
                 org.mockito.ArgumentMatchers.eq("wfi-completed"),
+                org.mockito.ArgumentMatchers.eq(7L),
                 org.mockito.ArgumentMatchers.eq("COMPLETED"),
                 completedExpiry.capture(),
                 completedAt.capture());
@@ -105,10 +111,11 @@ class OceanBaseCheckpointSaverTests {
 
         ArgumentCaptor<Instant> failedExpiry = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<Instant> failedAt = ArgumentCaptor.forClass(Instant.class);
-        saver.markWorkflowFailed("wfi-failed");
+        saver.markWorkflowFailed("wfi-failed", 8L);
 
         verify(mapper).updateWorkflowThreadStatuses(
                 org.mockito.ArgumentMatchers.eq("wfi-failed"),
+                org.mockito.ArgumentMatchers.eq(8L),
                 org.mockito.ArgumentMatchers.eq("FAILED"),
                 failedExpiry.capture(),
                 failedAt.capture());
@@ -122,17 +129,34 @@ class OceanBaseCheckpointSaverTests {
         GraphCheckpointThreadRecord versionTwo = thread("wfi-001", "ACTIVE", "cp-2", 2);
         when(mapper.findReadableThread(anyString(), any(Instant.class)))
                 .thenReturn(versionOne, versionTwo);
-        when(mapper.advanceThreadVersion(anyString(), anyLong(), anyString(), any(), any()))
+        when(mapper.advanceThreadVersion(
+                anyString(), anyLong(), anyString(), anyString(), anyLong(), any(), any()))
                 .thenReturn(0, 1);
 
         saver.put(config("wfi-001"), checkpoint("cp-3", "node-a", "node-b", Map.of("value", 3)));
 
         verify(mapper, times(2)).advanceThreadVersion(
-                anyString(), anyLong(), anyString(), any(Instant.class), any(Instant.class));
+                anyString(), anyLong(), anyString(), anyString(), anyLong(),
+                any(Instant.class), any(Instant.class));
         ArgumentCaptor<GraphCheckpointRecord> recordCaptor = ArgumentCaptor.forClass(GraphCheckpointRecord.class);
         verify(mapper).insertCheckpoint(recordCaptor.capture());
         assertThat(recordCaptor.getValue().checkpointVersion()).isEqualTo(3);
         assertThat(recordCaptor.getValue().parentCheckpointId()).isEqualTo("cp-2");
+    }
+
+    @Test
+    void rejectsCheckpointWhenExecutionFenceNoLongerOwnsLease() {
+        when(mapper.findReadableThread(anyString(), any(Instant.class)))
+                .thenReturn(thread("wfi-001", "ACTIVE", "cp-1", 1));
+        when(mapper.advanceThreadVersion(
+                anyString(), anyLong(), anyString(), anyString(), anyLong(), any(), any()))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> saver.put(
+                config("wfi-001"), checkpoint("cp-2", "node-a", "node-b", Map.of())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("concurrent update exceeded retry limit");
+        verify(mapper, never()).insertCheckpoint(any());
     }
 
     @Test
@@ -208,6 +232,8 @@ class OceanBaseCheckpointSaverTests {
                 .threadId(threadId)
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_WORKFLOW_INSTANCE_ID, threadId)
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_CONVERSATION_ID, "conversation-001")
+                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_OWNER, "test-instance")
+                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_FENCE_TOKEN, 1L)
                 .build();
     }
 

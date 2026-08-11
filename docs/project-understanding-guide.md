@@ -215,10 +215,10 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | 文件 | Bean/函数 | 作用 |
 | --- | --- | --- |
 | `GraphCheckpointStateCodec` | `encode()`、`decode()`、`EncodedState` | 对项目 StateSerializer 做二进制编解码包装。 |
-| `OceanBaseCheckpointSaver` | `list()`、`get()`、`put()`、`release()`、`markCompleted()`、`markFailed()`、`markWorkflowCompleted()`、`markWorkflowFailed()`、`purgeExpired()` | 自定义 `BaseCheckpointSaver`；通过线程版本乐观锁保存不可变 Checkpoint，支持恢复、分支和清理。 |
+| `OceanBaseCheckpointSaver` | `list()`、`get()`、`put()`、`release()`、`markCompleted()`、`markFailed()`、`markWorkflowCompleted()`、`markWorkflowFailed()`、`purgeExpired()` | 自定义 `BaseCheckpointSaver`；通过线程版本乐观锁保存不可变 Checkpoint，并联表校验 execution owner、fencing token 和 lease。 |
 | `GraphCheckpointConfig` | `mainWorkflowStateSerializer()`、`graphCheckpointStateCodec()`、`mainWorkflowCheckpointSaver()` Bean | 注册工作流 Record 的自定义 Jackson serializer/deserializer，解决 1.1.2.0 嵌套 Record 恢复为 Map 的兼容问题。内部类统一实现 `serialize()`、`serializeWithType()`、`deserialize()` 和类型规范化。 |
 | `GraphCheckpointProperties` | Getter/Setter、`validate()` | ACTIVE/FAILED 7 天、COMPLETED 24 小时、State Schema 版本、写冲突重试次数。 |
-| `GraphCheckpointMapper` | 线程插入/查询、`advanceThreadVersion()`、Checkpoint 插入/查询、状态更新、过期删除 | 操作 `ai_graph_thread` 和 `ai_graph_checkpoint`。 |
+| `GraphCheckpointMapper` | 线程插入/查询、`advanceThreadVersion()`、Checkpoint 插入/查询、状态更新、过期删除 | 操作 `ai_graph_thread` 和 `ai_graph_checkpoint`；执行期写入同时校验 `ai_workflow_instance` 执行权。 |
 | `GraphCheckpointRecord` / `GraphCheckpointThreadRecord` | Record 字段 | Checkpoint 快照与线程元数据。 |
 
 ### `workflow.client`
@@ -259,8 +259,8 @@ AI 全局基础设施配置，不放具体业务 Tool。
 
 | 文件 | 方法 | 作用 |
 | --- | --- | --- |
-| `WorkflowExecutionMapper` | 实例/步骤 CRUD、确认与恢复 claim、`renewOwnedExecutionLeases()`、过期会话锁删除 | 工作流执行持久化；数据库条件更新实现抢占、owner fencing、实例与会话锁联合续租，以及多实例安全的过期锁回收。 |
-| `WorkflowSseEventMapper` | `allocateSequence()`、`lastAllocatedSequence()`、`insert()`、`findReplayEvents()`、`findHighWatermark()`、`deleteExpiredEvents()` | 分配工作流内 SSE 序号、持久化、重放和清理。 |
+| `WorkflowExecutionMapper` | 实例/步骤 CRUD、确认与恢复 claim、`renewOwnedExecutionLeases()`、过期会话锁删除 | 工作流执行持久化；claim 递增 fencing token，执行期写入校验 owner、token 和未过期 lease，heartbeat 不改变 token。 |
+| `WorkflowSseEventMapper` | 执行期/暂停/终态 sequence 分配、`lastAllocatedSequence()`、`insert()`、`findReplayEvents()`、`findHighWatermark()`、`deleteExpiredEvents()` | 分配工作流内 SSE 序号、持久化、重放和清理；事件写入按阶段校验 owner、fencing token、lease 或终态。 |
 
 ### `workflow.node`
 
@@ -286,6 +286,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `LocalDbMainWorkflowService` | `run()`、`confirmProducts()`、`claimProductConfirmation()`、`confirmClaimedProducts()`、`releaseProductConfirmationClaim()`、`resume()`、`waitingConfirmResponse()`、`complete()`、`fail()` | 创建实例/步骤、调用 Graph、中断响应、原子确认恢复、最终记忆和状态收口。 |
 | `WorkflowStartService` | `start()` | 单事务内先条件清理当前 conversation 的过期失效锁，再插入会话锁、实例和步骤；主键冲突是多实例启动互斥的最终防线。 |
 | `WorkflowFinalizationService` | `complete()`、`fail()`、内部 `finalize()` | 单事务收口实例终态、最终 Memory、步骤、Checkpoint、SSE Outbox 和 conversation 锁。 |
+| `WorkflowPauseService` | `pauseForProductConfirmation()` | 单事务写入步骤暂停、WAITING_CONFIRM、会话锁续期和 human_confirm 事实事件。 |
 | `NoOpMainWorkflowService` | 同接口禁用响应 | 非 local-db profile 的可启动替代。 |
 | `ContextAlignmentService` | `align()` 重载、Prompt 拼装和确定性校验函数 | 加载会话快照，调用模型完成话题判断、指代消解、问题改写和确认信息合并。 |
 | `IntentRecognitionService` | `recognize()` 重载、`validateAndMap()` | 结构化识别意图，并只允许四个白名单 Agent。 |
@@ -420,7 +421,7 @@ Model 文件：
 | --- | --- |
 | `application.yml` | 默认 profile：端口、模型环境变量、Actuator、Swagger 和日志；禁用数据库/Flyway自动配置。 |
 | `application-local-db.yml` | 恢复 DataSource/Flyway/MyBatis；配置 Checkpoint、SSE 轮询和清理周期。 |
-| `db/migration/V1...V18` | 14 张项目表、Graph/SSE、幂等与租约扩展以及工作流定义演进；V18 同步 SSE 10 分钟保留期字段说明。已执行脚本不能回写修改。 |
+| `db/migration/V1...V19` | 14 张项目表、Graph/SSE、幂等与租约扩展以及工作流定义演进；V19 增加 execution fencing token。已执行脚本不能回写修改。 |
 | `skills/product-analysis/...` | 少量/批量产品分析 Skill。 |
 | `skills/knowledge-qa/...` | 保险业务知识问答 Skill。 |
 | `skills/policy-query/...` | 客户保单查询 Skill。 |
@@ -474,7 +475,7 @@ Model 文件：
 | 表 | 主键 | 作用 | 主要关联 |
 | --- | --- | --- | --- |
 | `ai_workflow_definition` | `workflow_code` | 工作流模板描述和 definition_json；当前主要为 `main-workflow-v1`。 | workflowCode → 实例。 |
-| `ai_workflow_instance` | `workflow_instance_id` | 一次工作流运行、请求幂等号、输入输出、执行租约、状态版本和 SSE 最大序号。 | conversationId、workflowCode。 |
+| `ai_workflow_instance` | `workflow_instance_id` | 一次工作流运行、请求幂等号、输入输出、owner/lease、执行 fencing token、状态版本和 SSE 最大序号。 | conversationId、workflowCode。 |
 | `ai_conversation_workflow_lock` | `conversation_id` | 同一会话只允许一个顶层工作流；运行中由 heartbeat 与实例租约同步续期，终态释放，过期且不再有效/可恢复时物理回收。 | workflowInstanceId、requestId。 |
 | `ai_workflow_step` | `workflow_step_id` | 主图各业务节点开始、结束、输入输出和错误。 | workflowInstanceId → 实例。 |
 | `ai_workflow_sse_event` | `event_id` | SSE 事实源、顺序重放和跨实例同步；workflow 内 sequenceNo 唯一。 | workflowInstanceId、conversationId、nodeCode。 |
@@ -496,6 +497,8 @@ RUNNING → RESUMING(lease) → RUNNING
 | `ai_graph_checkpoint` | `checkpoint_id` | 不可变 State 快照、父快照、节点位置、State 二进制和 Schema 版本。 | threadId → Graph 线程；parentCheckpointId → 历史快照。 |
 
 主图 threadId 使用 workflowInstanceId；子任务图使用包含 workflowInstanceId/taskId 的独立 threadId。V14 已取消 workflowInstanceId 唯一限制，因此一个工作流可以有多个子图 Checkpoint 线程。
+
+版本字段不要混用：`execution_fence_token` 只在新建或执行权接管时变化，用于拒绝旧执行者；`ai_workflow_instance.state_version` 记录实例状态更新；`ai_graph_thread.version` 是单个 Graph Thread 的 Checkpoint 乐观锁。Checkpoint 写入必须同时通过后两类并发条件中的 thread version，以及 Workflow owner/token/lease 门禁。
 
 ## 7.4 召回审计（1 张）
 

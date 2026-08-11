@@ -47,6 +47,10 @@ public class DagExecutorNode implements NodeAction {
                 .orElse(null);
         String workflowStepId = MainWorkflowGraphConfig.workflowStepIds(state)
                 .get(WorkflowNodeDefinition.DAG_EXECUTOR.code());
+        long executionFenceToken = state
+                .value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
+                .map(Number::longValue)
+                .orElseThrow(() -> new IllegalStateException("Missing execution fence token in graph state"));
         boolean tokenStreamingEnabled = state
                 .value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class)
                 .orElse(false);
@@ -57,6 +61,7 @@ public class DagExecutorNode implements NodeAction {
                 routingResult,
                 context,
                 workflowInstanceId,
+                executionFenceToken,
                 workflowStepId,
                 tokenStreamingEnabled);
         return Map.of(MainWorkflowStateKeys.DAG_EXECUTION_RESULT, result);

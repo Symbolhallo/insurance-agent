@@ -61,6 +61,7 @@ public class WorkflowDagExecutor {
                                       IntentRoutingResult routingResult,
                                       AlignedWorkflowContext context,
                                       String workflowInstanceId,
+                                      long executionFenceToken,
                                       String workflowStepId,
                                       boolean tokenStreamingEnabled) {
         Map<String, WorkflowPlanTask> pending = orderedTasks(plan);
@@ -86,6 +87,7 @@ public class WorkflowDagExecutor {
                         task,
                         context.conversationId(),
                         workflowInstanceId,
+                        executionFenceToken,
                         workflowStepId,
                         context.originalQuestion(),
                         context.resolvedProducts(),

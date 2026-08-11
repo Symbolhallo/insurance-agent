@@ -35,6 +35,8 @@ public final class MainWorkflowStateKeys {
 
     public static final String WORKFLOW_INSTANCE_ID = "workflowInstanceId";
 
+    public static final String EXECUTION_FENCE_TOKEN = "executionFenceToken";
+
     public static final String WORKFLOW_STEP_IDS = "workflowStepIds";
 
     public static final String TOKEN_STREAMING_ENABLED = "tokenStreamingEnabled";
@@ -54,6 +56,7 @@ public final class MainWorkflowStateKeys {
             OUTPUT_REVIEW_RESULT,
             FINAL_ANSWER,
             WORKFLOW_INSTANCE_ID,
+            EXECUTION_FENCE_TOKEN,
             WORKFLOW_STEP_IDS,
             TOKEN_STREAMING_ENABLED);
 

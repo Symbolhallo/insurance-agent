@@ -12,6 +12,7 @@ public interface WorkflowEventPublisher {
     /** 持久化并实时广播一个工作流事件；实现不得把发送失败传播到业务 Graph。 */
     void publish(String workflowInstanceId,
                  String conversationId,
+                 long executionFenceToken,
                  WorkflowSseEventType type,
                  String node,
                  Map<String, Object> data);

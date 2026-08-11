@@ -5,6 +5,7 @@ import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
+import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.config.WorkflowTaskGraphConfig;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
@@ -30,13 +31,17 @@ public class WorkflowTaskGraphRunner {
 
     private final ThreadPoolTaskExecutor taskExecutor;
 
+    private final WorkflowLifecycleProperties lifecycleProperties;
+
     /** 创建任务图运行器，并绑定项目自己的有界并行 Executor。 */
     public WorkflowTaskGraphRunner(
             @Qualifier(WorkflowTaskGraphConfig.WORKFLOW_TASK_GRAPH) CompiledGraph taskGraph,
             @Qualifier(WorkflowExecutionConfig.WORKFLOW_DAG_TASK_EXECUTOR)
-            ThreadPoolTaskExecutor taskExecutor) {
+            ThreadPoolTaskExecutor taskExecutor,
+            WorkflowLifecycleProperties lifecycleProperties) {
         this.taskGraph = taskGraph;
         this.taskExecutor = taskExecutor;
+        this.lifecycleProperties = lifecycleProperties;
     }
 
     /**
@@ -76,6 +81,10 @@ public class WorkflowTaskGraphRunner {
                 .addMetadata(TASK_CONTEXT_METADATA, context)
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_WORKFLOW_INSTANCE_ID, context.workflowInstanceId())
                 .addMetadata(OceanBaseCheckpointSaver.METADATA_CONVERSATION_ID, context.conversationId())
+                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_OWNER,
+                        lifecycleProperties.getInstanceId())
+                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_FENCE_TOKEN,
+                        context.executionFenceToken())
                 .defaultParallelExecutor(taskExecutor)
                 .build();
     }

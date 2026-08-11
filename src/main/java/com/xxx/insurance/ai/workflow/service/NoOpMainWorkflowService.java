@@ -85,19 +85,23 @@ public class NoOpMainWorkflowService implements MainWorkflowService {
     }
 
     @Override
-    public void claimProductConfirmation(String workflowInstanceId, String conversationId) {
+    public long claimProductConfirmation(String workflowInstanceId, String conversationId) {
         // 默认 profile 不启用持久化，不存在可抢占的确认实例。
+        return 0L;
     }
 
     @Override
     public MainWorkflowResponse confirmClaimedProducts(String workflowInstanceId,
                                                        ProductConfirmationRequest request,
-                                                       boolean tokenStreamingEnabled) {
+                                                       boolean tokenStreamingEnabled,
+                                                       long executionFenceToken) {
         return confirmProducts(workflowInstanceId, request, tokenStreamingEnabled);
     }
 
     @Override
-    public void releaseProductConfirmationClaim(String workflowInstanceId, String conversationId) {
+    public void releaseProductConfirmationClaim(String workflowInstanceId,
+                                                String conversationId,
+                                                long executionFenceToken) {
         // 默认 profile 不启用持久化，不需要释放状态。
     }
 

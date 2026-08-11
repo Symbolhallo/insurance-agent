@@ -62,6 +62,9 @@ public class IntentRecognitionNode implements NodeAction {
         return new AgentTokenStreamContext(
                 workflowInstanceId,
                 context.conversationId(),
+                state.value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
+                        .map(Number::longValue)
+                        .orElseThrow(() -> new IllegalStateException("Missing execution fence token")),
                 null,
                 "intent-recognition-model",
                 AgentTokenStreamContext.PHASE_INTENT_RECOGNITION);

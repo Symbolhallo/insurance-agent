@@ -7,6 +7,7 @@ import com.alibaba.cloud.ai.graph.serializer.StateSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.checkpoint.config.GraphCheckpointConfig;
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
+import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.config.WorkflowTaskGraphConfig;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
@@ -50,7 +51,7 @@ class WorkflowTaskGraphRunnerTests {
         StaticListableBeanFactory beanFactory = new StaticListableBeanFactory(Map.of("saver", saver));
         CompiledGraph graph = new WorkflowTaskGraphConfig().workflowTaskGraph(
                 invokeNode, serializer, beanFactory.getBeanProvider(BaseCheckpointSaver.class));
-        runner = new WorkflowTaskGraphRunner(graph, executor);
+        runner = new WorkflowTaskGraphRunner(graph, executor, new WorkflowLifecycleProperties());
     }
 
     @AfterEach

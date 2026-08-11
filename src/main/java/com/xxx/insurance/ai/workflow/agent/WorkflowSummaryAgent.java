@@ -55,14 +55,23 @@ public class WorkflowSummaryAgent {
 
     /** 根据 SSE 执行模式选择 ReactAgent.call 或 ReactAgent.stream，业务汇总规则保持一致。 */
     public WorkflowSummaryResult summarize(DagExecutionResult dagResult, boolean tokenStreamingEnabled) {
-        return summarize(dagResult, tokenStreamingEnabled, null, null);
+        return summarize(dagResult, tokenStreamingEnabled, null, null, 0L);
+    }
+
+    /** 兼容不涉及持久化 SSE 的直接汇总调用。 */
+    public WorkflowSummaryResult summarize(DagExecutionResult dagResult,
+                                           boolean tokenStreamingEnabled,
+                                           String workflowInstanceId,
+                                           String conversationId) {
+        return summarize(dagResult, tokenStreamingEnabled, workflowInstanceId, conversationId, 1L);
     }
 
     /** 在 SSE 工作流中实时发布 Summary 模型增量内容，完整结果仍返回给后续审核节点。 */
     public WorkflowSummaryResult summarize(DagExecutionResult dagResult,
                                            boolean tokenStreamingEnabled,
                                            String workflowInstanceId,
-                                           String conversationId) {
+                                           String conversationId,
+                                           long executionFenceToken) {
         Instant startedAt = Instant.now();
         List<AgentTaskExecutionResult> successfulTasks = dagResult.taskResults().stream()
                 .filter(task -> task.status() == AgentTaskStatus.SUCCESS)
@@ -87,6 +96,7 @@ public class WorkflowSummaryAgent {
                     ? new AgentTokenStreamContext(
                             workflowInstanceId,
                             conversationId,
+                            executionFenceToken,
                             null,
                             AGENT_NAME,
                             AgentTokenStreamContext.PHASE_SUMMARY)

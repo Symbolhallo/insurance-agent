@@ -46,6 +46,9 @@ public class ProductReferenceResolutionNode implements NodeAction {
         return new AgentTokenStreamContext(
                 workflowInstanceId,
                 request.conversationId(),
+                state.value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
+                        .map(Number::longValue)
+                        .orElseThrow(() -> new IllegalStateException("Missing execution fence token")),
                 null,
                 "product-reference-resolution-model",
                 AgentTokenStreamContext.PHASE_PRODUCT_REFERENCE_RESOLUTION);

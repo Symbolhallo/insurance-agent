@@ -60,6 +60,9 @@ public class ContextAlignmentNode implements NodeAction {
         return new AgentTokenStreamContext(
                 workflowInstanceId,
                 conversationId,
+                state.value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
+                        .map(Number::longValue)
+                        .orElseThrow(() -> new IllegalStateException("Missing execution fence token")),
                 null,
                 "context-alignment-model",
                 AgentTokenStreamContext.PHASE_CONTEXT_ALIGNMENT);

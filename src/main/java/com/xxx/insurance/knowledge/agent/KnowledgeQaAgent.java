@@ -169,6 +169,7 @@ public class KnowledgeQaAgent {
         return new AgentTokenStreamContext(
                 executionContext.workflowInstanceId(),
                 conversationId,
+                executionContext.executionFenceToken(),
                 executionContext.taskId(),
                 AGENT_NAME,
                 AgentTokenStreamContext.PHASE_SUB_AGENT);

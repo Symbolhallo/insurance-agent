@@ -34,6 +34,7 @@ class SummaryNodeTests {
                 MainWorkflowStateKeys.DAG_EXECUTION_RESULT, singleTaskResult(),
                 MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, false,
                 MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, "workflow-001",
+                MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, 1L,
                 MainWorkflowStateKeys.ALIGNED_CONTEXT, alignedContext)));
 
         assertThat(result.get(MainWorkflowStateKeys.SUMMARY_RESULT))

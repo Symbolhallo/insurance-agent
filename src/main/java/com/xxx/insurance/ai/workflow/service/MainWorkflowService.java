@@ -35,15 +35,18 @@ public interface MainWorkflowService {
                                          boolean tokenStreamingEnabled);
 
     /** 原子抢占等待确认实例；SSE 入口在建立响应前调用，冲突请求直接返回 409。 */
-    void claimProductConfirmation(String workflowInstanceId, String conversationId);
+    long claimProductConfirmation(String workflowInstanceId, String conversationId);
 
     /** 恢复已经由当前入口抢占为 CONFIRMING 的产品确认工作流。 */
     MainWorkflowResponse confirmClaimedProducts(String workflowInstanceId,
                                                 ProductConfirmationRequest request,
-                                                boolean tokenStreamingEnabled);
+                                                boolean tokenStreamingEnabled,
+                                                long executionFenceToken);
 
     /** SSE 后台任务未能提交时释放尚未消费的确认抢占。 */
-    void releaseProductConfirmationClaim(String workflowInstanceId, String conversationId);
+    void releaseProductConfirmationClaim(String workflowInstanceId,
+                                         String conversationId,
+                                         long executionFenceToken);
 
     /** 从最新持久化 Checkpoint 主动恢复异常中断但仍处于 RUNNING 的工作流。 */
     MainWorkflowResponse resume(String workflowInstanceId, WorkflowResumeRequest request);

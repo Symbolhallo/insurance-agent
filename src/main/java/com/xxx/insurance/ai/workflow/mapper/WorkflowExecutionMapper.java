@@ -22,6 +22,9 @@ public interface WorkflowExecutionMapper {
             select workflow_instance_id,
                    conversation_id,
                    status,
+                   execution_owner,
+                   lease_until,
+                   execution_fence_token,
                    created_at
             from ai_workflow_instance
             where workflow_instance_id = #{workflowInstanceId}
@@ -30,6 +33,9 @@ public interface WorkflowExecutionMapper {
             @Arg(column = "workflow_instance_id", javaType = String.class),
             @Arg(column = "conversation_id", javaType = String.class),
             @Arg(column = "status", javaType = String.class),
+            @Arg(column = "execution_owner", javaType = String.class),
+            @Arg(column = "lease_until", javaType = java.time.Instant.class),
+            @Arg(column = "execution_fence_token", javaType = long.class),
             @Arg(column = "created_at", javaType = java.time.Instant.class)
     })
     WorkflowInstanceExecutionView findInstance(@Param("workflowInstanceId") String workflowInstanceId);
@@ -45,6 +51,7 @@ public interface WorkflowExecutionMapper {
                 input_json,
                 execution_owner,
                 lease_until,
+                execution_fence_token,
                 state_version,
                 created_at,
                 updated_at
@@ -58,6 +65,7 @@ public interface WorkflowExecutionMapper {
                 #{inputJson},
                 #{executionOwner},
                 #{leaseUntil},
+                1,
                 1,
                 #{createdAt},
                 #{createdAt}
@@ -79,6 +87,8 @@ public interface WorkflowExecutionMapper {
                 updated_at = #{endedAt}
             where workflow_instance_id = #{workflowInstanceId}
               and execution_owner = #{executionOwner}
+              and execution_fence_token = #{executionFenceToken}
+              and lease_until > #{endedAt}
               and status not in ('SUCCESS', 'PARTIAL_SUCCESS', 'REVIEW_BLOCKED', 'FAILED')
             """)
     int finalizeInstance(@Param("workflowInstanceId") String workflowInstanceId,
@@ -86,6 +96,7 @@ public interface WorkflowExecutionMapper {
                          @Param("outputJson") String outputJson,
                          @Param("errorMessage") String errorMessage,
                          @Param("executionOwner") String executionOwner,
+                         @Param("executionFenceToken") long executionFenceToken,
                          @Param("endedAt") java.time.Instant endedAt);
 
     /** 仅允许非终态实例迁移为 FAILED，避免外层迟到 catch 覆盖已提交业务终态。 */
@@ -100,11 +111,14 @@ public interface WorkflowExecutionMapper {
                 updated_at = #{endedAt}
             where workflow_instance_id = #{workflowInstanceId}
               and execution_owner = #{executionOwner}
+              and execution_fence_token = #{executionFenceToken}
+              and lease_until > #{endedAt}
               and status not in ('SUCCESS', 'PARTIAL_SUCCESS', 'REVIEW_BLOCKED', 'FAILED')
             """)
     int failInstanceIfNonTerminal(@Param("workflowInstanceId") String workflowInstanceId,
                                   @Param("errorMessage") String errorMessage,
                                   @Param("executionOwner") String executionOwner,
+                                  @Param("executionFenceToken") long executionFenceToken,
                                   @Param("endedAt") java.time.Instant endedAt);
 
     @Update("""
@@ -118,11 +132,14 @@ public interface WorkflowExecutionMapper {
                 updated_at = #{updatedAt}
             where workflow_instance_id = #{workflowInstanceId}
               and execution_owner = #{executionOwner}
+              and execution_fence_token = #{executionFenceToken}
+              and lease_until > #{updatedAt}
             """)
     int updateInstanceStatus(@Param("workflowInstanceId") String workflowInstanceId,
                              @Param("status") String status,
                              @Param("outputJson") String outputJson,
                              @Param("executionOwner") String executionOwner,
+                             @Param("executionFenceToken") long executionFenceToken,
                              @Param("updatedAt") java.time.Instant updatedAt);
 
     /** 原子抢占等待产品确认的实例，防止多个确认请求从同一 Checkpoint 重复恢复。 */
@@ -132,6 +149,7 @@ public interface WorkflowExecutionMapper {
                 error_message = null,
                 execution_owner = #{executionOwner},
                 lease_until = #{leaseUntil},
+                execution_fence_token = execution_fence_token + 1,
                 state_version = state_version + 1,
                 updated_at = #{updatedAt}
             where workflow_instance_id = #{workflowInstanceId}
@@ -163,10 +181,12 @@ public interface WorkflowExecutionMapper {
               and conversation_id = #{conversationId}
               and status = 'CONFIRMING'
               and execution_owner = #{executionOwner}
+              and execution_fence_token = #{executionFenceToken}
             """)
     int releaseProductConfirmationClaim(@Param("workflowInstanceId") String workflowInstanceId,
                                         @Param("conversationId") String conversationId,
                                         @Param("executionOwner") String executionOwner,
+                                        @Param("executionFenceToken") long executionFenceToken,
                                         @Param("updatedAt") java.time.Instant updatedAt);
 
     @Update("""
@@ -175,6 +195,7 @@ public interface WorkflowExecutionMapper {
                 error_message = null,
                 execution_owner = #{executionOwner},
                 lease_until = #{leaseUntil},
+                execution_fence_token = execution_fence_token + 1,
                 state_version = state_version + 1,
                 updated_at = #{updatedAt}
             where workflow_instance_id = #{workflowInstanceId}
@@ -204,9 +225,12 @@ public interface WorkflowExecutionMapper {
             where workflow_instance_id = #{workflowInstanceId}
               and status = 'RESUMING'
               and execution_owner = #{executionOwner}
+              and execution_fence_token = #{executionFenceToken}
+              and lease_until > #{updatedAt}
             """)
     int markRunningAfterResume(@Param("workflowInstanceId") String workflowInstanceId,
                                @Param("executionOwner") String executionOwner,
+                               @Param("executionFenceToken") long executionFenceToken,
                                @Param("leaseUntil") java.time.Instant leaseUntil,
                                @Param("updatedAt") java.time.Instant updatedAt);
 
@@ -221,9 +245,12 @@ public interface WorkflowExecutionMapper {
             where workflow_instance_id = #{workflowInstanceId}
               and status = 'CONFIRMING'
               and execution_owner = #{executionOwner}
+              and execution_fence_token = #{executionFenceToken}
+              and lease_until > #{updatedAt}
             """)
     int markRunningAfterConfirmation(@Param("workflowInstanceId") String workflowInstanceId,
                                      @Param("executionOwner") String executionOwner,
+                                     @Param("executionFenceToken") long executionFenceToken,
                                      @Param("leaseUntil") java.time.Instant leaseUntil,
                                      @Param("updatedAt") java.time.Instant updatedAt);
 
@@ -351,8 +378,15 @@ public interface WorkflowExecutionMapper {
             set lease_until = #{leaseUntil},
                 updated_at = #{updatedAt}
             where workflow_instance_id = #{workflowInstanceId}
+              and exists (
+                  select 1 from ai_workflow_instance i
+                  where i.workflow_instance_id = ai_conversation_workflow_lock.workflow_instance_id
+                    and i.status = 'WAITING_CONFIRM'
+                    and i.execution_fence_token = #{executionFenceToken}
+              )
             """)
     int renewConversationLock(@Param("workflowInstanceId") String workflowInstanceId,
+                              @Param("executionFenceToken") long executionFenceToken,
                               @Param("leaseUntil") java.time.Instant leaseUntil,
                               @Param("updatedAt") java.time.Instant updatedAt);
 
@@ -398,9 +432,19 @@ public interface WorkflowExecutionMapper {
                 started_at = #{startedAt},
                 updated_at = #{startedAt}
             where workflow_step_id = #{workflowStepId}
+              and exists (
+                  select 1 from ai_workflow_instance i
+                  where i.workflow_instance_id = ai_workflow_step.workflow_instance_id
+                    and i.execution_owner = #{executionOwner}
+                    and i.execution_fence_token = #{executionFenceToken}
+                    and i.lease_until > #{startedAt}
+                    and i.status in ('RUNNING', 'CONFIRMING', 'RESUMING')
+              )
             """)
-    void updateStepStarted(@Param("workflowStepId") String workflowStepId,
-                           @Param("startedAt") java.time.Instant startedAt);
+    int updateStepStarted(@Param("workflowStepId") String workflowStepId,
+                          @Param("executionOwner") String executionOwner,
+                          @Param("executionFenceToken") long executionFenceToken,
+                          @Param("startedAt") java.time.Instant startedAt);
 
     @Update("""
             update ai_workflow_step
@@ -410,12 +454,22 @@ public interface WorkflowExecutionMapper {
                 ended_at = #{endedAt},
                 updated_at = #{endedAt}
             where workflow_step_id = #{workflowStepId}
+              and exists (
+                  select 1 from ai_workflow_instance i
+                  where i.workflow_instance_id = ai_workflow_step.workflow_instance_id
+                    and i.execution_owner = #{executionOwner}
+                    and i.execution_fence_token = #{executionFenceToken}
+                    and i.lease_until > #{endedAt}
+                    and i.status in ('RUNNING', 'CONFIRMING', 'RESUMING')
+              )
             """)
-    void updateStepResult(@Param("workflowStepId") String workflowStepId,
-                          @Param("status") String status,
-                          @Param("outputJson") String outputJson,
-                          @Param("errorMessage") String errorMessage,
-                          @Param("endedAt") java.time.Instant endedAt);
+    int updateStepResult(@Param("workflowStepId") String workflowStepId,
+                         @Param("status") String status,
+                         @Param("outputJson") String outputJson,
+                         @Param("errorMessage") String errorMessage,
+                         @Param("executionOwner") String executionOwner,
+                         @Param("executionFenceToken") long executionFenceToken,
+                         @Param("endedAt") java.time.Instant endedAt);
 
     @Update("""
             update ai_workflow_step
@@ -423,10 +477,20 @@ public interface WorkflowExecutionMapper {
                 output_json = #{outputJson},
                 updated_at = #{updatedAt}
             where workflow_step_id = #{workflowStepId}
+              and exists (
+                  select 1 from ai_workflow_instance i
+                  where i.workflow_instance_id = ai_workflow_step.workflow_instance_id
+                    and i.execution_owner = #{executionOwner}
+                    and i.execution_fence_token = #{executionFenceToken}
+                    and i.lease_until > #{updatedAt}
+                    and i.status in ('RUNNING', 'CONFIRMING', 'RESUMING')
+              )
             """)
-    void updateStepWaitingConfirm(@Param("workflowStepId") String workflowStepId,
-                                  @Param("outputJson") String outputJson,
-                                  @Param("updatedAt") java.time.Instant updatedAt);
+    int updateStepWaitingConfirm(@Param("workflowStepId") String workflowStepId,
+                                 @Param("outputJson") String outputJson,
+                                 @Param("executionOwner") String executionOwner,
+                                 @Param("executionFenceToken") long executionFenceToken,
+                                 @Param("updatedAt") java.time.Instant updatedAt);
 
     @Update("""
             update ai_workflow_step

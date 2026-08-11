@@ -46,12 +46,17 @@ public class SummaryNode implements NodeAction {
         AlignedWorkflowContext alignedContext = state
                 .value(MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class)
                 .orElseThrow(() -> new IllegalStateException("Missing aligned context in graph state"));
+        long executionFenceToken = state
+                .value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
+                .map(Number::longValue)
+                .orElseThrow(() -> new IllegalStateException("Missing execution fence token in graph state"));
         // 主工作流链路 15：单任务直接透传，多任务调用 Summary Agent 汇总为唯一待审核答案。
         WorkflowSummaryResult summaryResult = workflowSummaryAgent.summarize(
                 dagResult,
                 tokenStreamingEnabled,
                 workflowInstanceId,
-                alignedContext.conversationId());
+                alignedContext.conversationId(),
+                executionFenceToken);
         log.info("[Workflow] node=summary action=complete summaryId={} modelInvoked={} sourceTaskCount={}",
                 summaryResult.summaryId(), summaryResult.modelInvoked(), summaryResult.sourceTaskCount());
         return Map.of(MainWorkflowStateKeys.SUMMARY_RESULT, summaryResult);

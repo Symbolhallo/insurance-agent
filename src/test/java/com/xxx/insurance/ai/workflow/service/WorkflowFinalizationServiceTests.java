@@ -27,7 +27,8 @@ class WorkflowFinalizationServiceTests {
     void usesWorkflowInstanceIdAsFinalMemoryIdempotencyKey() {
         WorkflowExecutionMapper mapper = mock(WorkflowExecutionMapper.class);
         AgentMemoryService memoryService = mock(AgentMemoryService.class);
-        when(mapper.finalizeInstance(anyString(), anyString(), anyString(), any(), anyString(), any())).thenReturn(1);
+        when(mapper.finalizeInstance(
+                anyString(), anyString(), anyString(), any(), anyString(), any(Long.class), any())).thenReturn(1);
         when(memoryService.isEnabled()).thenReturn(true);
         WorkflowFinalizationService service = new WorkflowFinalizationService(
                 mapper,
@@ -36,7 +37,7 @@ class WorkflowFinalizationServiceTests {
                 mock(LocalDbWorkflowSseEventService.class),
                 new WorkflowLifecycleProperties());
 
-        boolean applied = service.complete(response(), "{}", "deepseek-chat");
+        boolean applied = service.complete(response(), "{}", "deepseek-chat", 7L);
 
         ArgumentCaptor<AgentInvocationRecord> invocation = ArgumentCaptor.forClass(AgentInvocationRecord.class);
         verify(memoryService).saveSuccessfulExchange(any(), invocation.capture());
@@ -48,18 +49,20 @@ class WorkflowFinalizationServiceTests {
     @Test
     void lateFailureDoesNotMutateAlreadyTerminalWorkflow() {
         WorkflowExecutionMapper mapper = mock(WorkflowExecutionMapper.class);
-        when(mapper.failInstanceIfNonTerminal(anyString(), anyString(), anyString(), any())).thenReturn(0);
+        when(mapper.failInstanceIfNonTerminal(
+                anyString(), anyString(), anyString(), any(Long.class), any())).thenReturn(0);
         OceanBaseCheckpointSaver checkpointSaver = mock(OceanBaseCheckpointSaver.class);
         LocalDbWorkflowSseEventService eventService = mock(LocalDbWorkflowSseEventService.class);
         WorkflowFinalizationService service = new WorkflowFinalizationService(
                 mapper, mock(AgentMemoryService.class), checkpointSaver, eventService,
                 new WorkflowLifecycleProperties());
 
-        boolean applied = service.fail("wfi-001", "conversation-001", "late error", Instant.now());
+        boolean applied = service.fail("wfi-001", "conversation-001", "late error", 7L, Instant.now());
 
         assertThat(applied).isFalse();
-        verify(checkpointSaver, never()).markWorkflowFailed(anyString());
-        verify(eventService, never()).persistTransactionalEvent(anyString(), anyString(), any(), any(), any());
+        verify(checkpointSaver, never()).markWorkflowFailed(anyString(), any(Long.class));
+        verify(eventService, never()).persistTransactionalEvent(
+                anyString(), anyString(), any(Long.class), any(), any(), any());
     }
 
     private MainWorkflowResponse response() {

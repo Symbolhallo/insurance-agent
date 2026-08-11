@@ -32,6 +32,31 @@ class WorkflowExecutionMapperLeaseSqlTests {
                 .contains("i.lease_until > #{now}")
                 .contains("l.workflow_instance_id = i.workflow_instance_id")
                 .contains("l.lease_until = #{leaseUntil}");
+        assertThat(sql).doesNotContain("execution_fence_token = execution_fence_token + 1");
+    }
+
+    @Test
+    void finalizationRequiresOwnerFenceTokenAndUnexpiredLease() throws Exception {
+        String sql = updateSql(
+                "finalizeInstance", String.class, String.class, String.class, String.class,
+                String.class, long.class, Instant.class);
+
+        assertThat(sql)
+                .contains("execution_owner = #{executionOwner}")
+                .contains("execution_fence_token = #{executionFenceToken}")
+                .contains("lease_until > #{endedAt}");
+    }
+
+    @Test
+    void claimsAdvanceFenceTokenButHeartbeatDoesNot() throws Exception {
+        String confirmSql = updateSql(
+                "claimProductConfirmation",
+                String.class, String.class, String.class, Instant.class, Instant.class);
+        String resumeSql = updateSql(
+                "claimResume", String.class, String.class, String.class, Instant.class, Instant.class);
+
+        assertThat(confirmSql).contains("execution_fence_token = execution_fence_token + 1");
+        assertThat(resumeSql).contains("execution_fence_token = execution_fence_token + 1");
     }
 
     @Test

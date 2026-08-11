@@ -33,6 +33,10 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
 
     public static final String METADATA_CONVERSATION_ID = "conversationId";
 
+    public static final String METADATA_EXECUTION_OWNER = "executionOwner";
+
+    public static final String METADATA_EXECUTION_FENCE_TOKEN = "executionFenceToken";
+
     private static final Logger log = LoggerFactory.getLogger(OceanBaseCheckpointSaver.class);
 
     private static final String STATUS_ACTIVE = "ACTIVE";
@@ -96,12 +100,18 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
     public RunnableConfig put(RunnableConfig config, Checkpoint checkpoint) {
         Objects.requireNonNull(checkpoint, "checkpoint must not be null");
         String threadId = requiredThreadId(config);
+        String workflowInstanceId = requiredMetadata(config, METADATA_WORKFLOW_INSTANCE_ID);
+        String conversationId = requiredMetadata(config, METADATA_CONVERSATION_ID);
+        String executionOwner = requiredMetadata(config, METADATA_EXECUTION_OWNER);
+        long executionFenceToken = requiredLongMetadata(config, METADATA_EXECUTION_FENCE_TOKEN);
         Instant now = Instant.now();
         Instant expiresAt = now.plus(properties.getActiveRetention());
         mapper.insertThreadIfAbsent(
                 threadId,
-                metadata(config, METADATA_WORKFLOW_INSTANCE_ID),
-                metadata(config, METADATA_CONVERSATION_ID),
+                workflowInstanceId,
+                conversationId,
+                executionOwner,
+                executionFenceToken,
                 expiresAt,
                 now);
 
@@ -121,6 +131,8 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
                     threadId,
                     thread.version(),
                     checkpoint.getId(),
+                    executionOwner,
+                    executionFenceToken,
                     expiresAt,
                     now);
             if (updated == 0) {
@@ -186,14 +198,15 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
 
     /** 将同一工作流实例的主图与全部任务子图统一标记为完成。 */
     @Transactional(rollbackFor = Exception.class)
-    public void markWorkflowCompleted(String workflowInstanceId) {
-        updateWorkflowStatus(workflowInstanceId, STATUS_COMPLETED, properties.getCompletedRetention());
+    public void markWorkflowCompleted(String workflowInstanceId, long executionFenceToken) {
+        updateWorkflowStatus(
+                workflowInstanceId, executionFenceToken, STATUS_COMPLETED, properties.getCompletedRetention());
     }
 
     /** 将同一工作流实例的主图与全部任务子图统一标记为失败并保留现场。 */
     @Transactional(rollbackFor = Exception.class)
-    public void markWorkflowFailed(String workflowInstanceId) {
-        updateWorkflowStatus(workflowInstanceId, STATUS_FAILED, properties.getActiveRetention());
+    public void markWorkflowFailed(String workflowInstanceId, long executionFenceToken) {
+        updateWorkflowStatus(workflowInstanceId, executionFenceToken, STATUS_FAILED, properties.getActiveRetention());
     }
 
     /** 清理已超过保留期的 Checkpoint 和线程记录。 */
@@ -222,12 +235,13 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
 
     /** 按 workflowInstanceId 批量收口主图和任务子图线程。 */
     private void updateWorkflowStatus(String workflowInstanceId,
+                                      long executionFenceToken,
                                       String status,
                                       java.time.Duration retention) {
         Objects.requireNonNull(workflowInstanceId, "workflowInstanceId must not be null");
         Instant now = Instant.now();
         int updated = mapper.updateWorkflowThreadStatuses(
-                workflowInstanceId, status, now.plus(retention), now);
+                workflowInstanceId, executionFenceToken, status, now.plus(retention), now);
         if (updated == 0) {
             log.warn("[Memory] type=checkpoint action=workflow-status-update status=ignored "
                             + "workflowInstanceId={} targetStatus={}",
@@ -260,6 +274,30 @@ public class OceanBaseCheckpointSaver implements BaseCheckpointSaver {
     /** 从 RunnableConfig 元数据中读取工作流关联字段。 */
     private String metadata(RunnableConfig config, String key) {
         return config.metadata(key).map(String::valueOf).orElse(null);
+    }
+
+    /** 读取执行期 Checkpoint 必需的租约元数据。 */
+    private String requiredMetadata(RunnableConfig config, String key) {
+        String value = metadata(config, key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("RunnableConfig metadata is required: " + key);
+        }
+        return value;
+    }
+
+    /** 读取正数 fencing token，防止未授权调用退化为普通 Checkpoint 写入。 */
+    private long requiredLongMetadata(RunnableConfig config, String key) {
+        String value = requiredMetadata(config, key);
+        try {
+            long token = Long.parseLong(value);
+            if (token <= 0) {
+                throw new IllegalArgumentException("RunnableConfig metadata must be positive: " + key);
+            }
+            return token;
+        }
+        catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("RunnableConfig metadata must be a long: " + key, ex);
+        }
     }
 
     /**

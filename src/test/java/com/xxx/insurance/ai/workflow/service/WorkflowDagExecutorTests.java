@@ -243,7 +243,7 @@ class WorkflowDagExecutorTests {
     }
 
     private DagExecutionResult execute(WorkflowPlan plan) {
-        return executor.execute(plan, routing(), alignedContext(), "workflow-001", "step-001", true);
+        return executor.execute(plan, routing(), alignedContext(), "workflow-001", 3L, "step-001", true);
     }
 
     private WorkflowPlan plan(WorkflowPlanTask... tasks) {
