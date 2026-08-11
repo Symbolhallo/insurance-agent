@@ -19,6 +19,8 @@ public class WorkflowLifecycleProperties {
 
     private Duration waitingConfirmLease = Duration.ofHours(24);
 
+    private Duration heartbeatInterval = Duration.ofMinutes(1);
+
     /** 当前 JVM 的执行者编号，写入数据库后用于识别租约持有者。 */
     public String getInstanceId() {
         return instanceId;
@@ -53,5 +55,36 @@ public class WorkflowLifecycleProperties {
 
     public void setWaitingConfirmLease(Duration waitingConfirmLease) {
         this.waitingConfirmLease = waitingConfirmLease;
+    }
+
+    /** 当前实例持有执行权期间刷新 execution lease 的周期。 */
+    public Duration getHeartbeatInterval() {
+        return heartbeatInterval;
+    }
+
+    public void setHeartbeatInterval(Duration heartbeatInterval) {
+        this.heartbeatInterval = heartbeatInterval;
+    }
+
+    /** 校验 heartbeat 能在最短租约到期前至少执行一次。 */
+    public void validate() {
+        if (instanceId == null || instanceId.isBlank()) {
+            throw new IllegalArgumentException("instanceId must not be blank");
+        }
+        validatePositive(executionLease, "executionLease");
+        validatePositive(claimLease, "claimLease");
+        validatePositive(waitingConfirmLease, "waitingConfirmLease");
+        validatePositive(heartbeatInterval, "heartbeatInterval");
+        if (heartbeatInterval.compareTo(executionLease) >= 0
+                || heartbeatInterval.compareTo(claimLease) >= 0) {
+            throw new IllegalArgumentException(
+                    "heartbeatInterval must be shorter than executionLease and claimLease");
+        }
+    }
+
+    private void validatePositive(Duration duration, String name) {
+        if (duration == null || duration.isZero() || duration.isNegative()) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
     }
 }

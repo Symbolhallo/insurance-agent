@@ -239,6 +239,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `OutputReviewConfig` | `outputReviewGateway()` | 注册当前 Mock 审核网关。 |
 | `WorkflowExecutionConfig` | `workflowDagTaskExecutor()`、`workflowSseTaskExecutor()`、`createExecutor()` | 两个有界线程池、MDC 传播、优雅关闭，并启用 Scheduling。 |
 | `WorkflowSseProperties` | Record 字段与默认校验 | SSE 连接超时、事件保留期和数据库轮询周期。 |
+| `WorkflowLifecycleProperties` | 租约 Getter/Setter、`validate()` | 配置实例 owner、执行/抢占/等待确认租约和 heartbeat 周期，并保证续租周期短于最短执行租约。 |
 
 ### `workflow.controller`
 
@@ -252,12 +253,13 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | 文件 | 函数 | 作用 |
 | --- | --- | --- |
 | `WorkflowPersistenceCleanupJob` | `cleanExpiredCheckpoints()`、`cleanExpiredSseEvents()` | Checkpoint 按小时物理清理7天/24小时到期数据；SSE 事件每30秒物理删除10分钟到期数据。 |
+| `WorkflowLeaseRecoveryJob` | `renewOwnedLeases()`、`recoverExpiredClaims()` | 每分钟按当前 JVM owner 条件续租 RUNNING/CONFIRMING/RESUMING 实例及其会话锁；每30秒释放过期瞬时状态并物理回收失效会话锁。 |
 
 ### `workflow.mapper`
 
 | 文件 | 方法 | 作用 |
 | --- | --- | --- |
-| `WorkflowExecutionMapper` | `findInstance()`、`insertInstance()`、`updateInstanceResult()`、`updateInstanceStatus()`、`claimProductConfirmation()`、`releaseProductConfirmationClaim()`、`claimResume()`、步骤 insert/start/result/wait/skip | 工作流实例与步骤持久化；条件更新实现确认和恢复的并发抢占。 |
+| `WorkflowExecutionMapper` | 实例/步骤 CRUD、确认与恢复 claim、`renewOwnedExecutionLeases()`、过期会话锁删除 | 工作流执行持久化；数据库条件更新实现抢占、owner fencing、实例与会话锁联合续租，以及多实例安全的过期锁回收。 |
 | `WorkflowSseEventMapper` | `allocateSequence()`、`lastAllocatedSequence()`、`insert()`、`findReplayEvents()`、`findHighWatermark()`、`deleteExpiredEvents()` | 分配工作流内 SSE 序号、持久化、重放和清理。 |
 
 ### `workflow.node`
@@ -282,6 +284,8 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | --- | --- | --- |
 | `MainWorkflowService` | run/confirm/claim/resume 接口族 | 主工作流应用端口。 |
 | `LocalDbMainWorkflowService` | `run()`、`confirmProducts()`、`claimProductConfirmation()`、`confirmClaimedProducts()`、`releaseProductConfirmationClaim()`、`resume()`、`waitingConfirmResponse()`、`complete()`、`fail()` | 创建实例/步骤、调用 Graph、中断响应、原子确认恢复、最终记忆和状态收口。 |
+| `WorkflowStartService` | `start()` | 单事务内先条件清理当前 conversation 的过期失效锁，再插入会话锁、实例和步骤；主键冲突是多实例启动互斥的最终防线。 |
+| `WorkflowFinalizationService` | `complete()`、`fail()`、内部 `finalize()` | 单事务收口实例终态、最终 Memory、步骤、Checkpoint、SSE Outbox 和 conversation 锁。 |
 | `NoOpMainWorkflowService` | 同接口禁用响应 | 非 local-db profile 的可启动替代。 |
 | `ContextAlignmentService` | `align()` 重载、Prompt 拼装和确定性校验函数 | 加载会话快照，调用模型完成话题判断、指代消解、问题改写和确认信息合并。 |
 | `IntentRecognitionService` | `recognize()` 重载、`validateAndMap()` | 结构化识别意图，并只允许四个白名单 Agent。 |
@@ -442,6 +446,8 @@ Model 文件：
 | `ai/workflow/node/*Tests` | AgentInvoke、HumanConfirm、Summary、OutputReview。 |
 | `ai/workflow/service/*Tests` | 前置模型、DAG、SSE、确认并发、任务子图和校验器。 |
 | `ai/workflow/job/WorkflowPersistenceCleanupJobTests` | Checkpoint/SSE 定时清理及失败隔离。 |
+| `ai/workflow/job/WorkflowLeaseRecoveryJobTests` | 当前 owner heartbeat 续租参数、瞬时状态恢复和过期 conversation 锁回收。 |
+| `ai/workflow/mapper/WorkflowExecutionMapperLeaseSqlTests` | 锁回收、联合续租、恢复 claim 和确认 claim 的数据库 CAS 条件。 |
 | `ai/workflow/WorkflowStreamTestPageTests` | 静态流式测试页面资源和安全约束。 |
 | `product/knowledge/policy/asset/service/*Tests` | Mock 业务数据、过滤和客户边界。 |
 
@@ -469,7 +475,7 @@ Model 文件：
 | --- | --- | --- | --- |
 | `ai_workflow_definition` | `workflow_code` | 工作流模板描述和 definition_json；当前主要为 `main-workflow-v1`。 | workflowCode → 实例。 |
 | `ai_workflow_instance` | `workflow_instance_id` | 一次工作流运行、请求幂等号、输入输出、执行租约、状态版本和 SSE 最大序号。 | conversationId、workflowCode。 |
-| `ai_conversation_workflow_lock` | `conversation_id` | 同一会话只允许一个顶层工作流执行，终态事务提交时释放。 | workflowInstanceId、requestId。 |
+| `ai_conversation_workflow_lock` | `conversation_id` | 同一会话只允许一个顶层工作流；运行中由 heartbeat 与实例租约同步续期，终态释放，过期且不再有效/可恢复时物理回收。 | workflowInstanceId、requestId。 |
 | `ai_workflow_step` | `workflow_step_id` | 主图各业务节点开始、结束、输入输出和错误。 | workflowInstanceId → 实例。 |
 | `ai_workflow_sse_event` | `event_id` | SSE 事实源、顺序重放和跨实例同步；workflow 内 sequenceNo 唯一。 | workflowInstanceId、conversationId、nodeCode。 |
 | `ai_conversation_confirmed_product` | `confirmation_id` | conversationId 内有效的标准产品确认结果。 | conversationId、workflowInstanceId、retrievalCallId。 |
@@ -542,6 +548,8 @@ erDiagram
 | 活动/运行中/失败 Checkpoint | 默认 7 天；到期前可恢复和排障。 |
 | 完成 Checkpoint | 默认 24 小时。 |
 | SSE Event | 默认 10 分钟；`expire_at` 之后不再参与 Last-Event-ID 重放，并由30秒周期清理任务物理删除，最大清理延迟约30秒。 |
+| Workflow execution lease | RUNNING 默认15分钟，CONFIRMING/RESUMING 抢占默认2分钟；当前 owner 每1分钟续租实例及其 conversation lock。宕机后 heartbeat 停止，租约到期才允许其他实例恢复。 |
+| Conversation workflow lock | 未过期锁始终阻止并发启动；过期锁仅在实例终态/等待确认超时/不存在，或执行租约已失效且无未过期 Graph Thread 时删除。 |
 | 清理周期 | 启动 1 分钟后首次执行，之后每小时。 |
 
 ---

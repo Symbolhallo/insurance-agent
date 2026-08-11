@@ -1,5 +1,37 @@
 # 工程变更记录
 
+## 2026-08-11：会话锁回收与执行租约 Heartbeat
+
+### 过期会话锁回收
+
+- `WorkflowStartService` 在抢占 conversation 前先执行数据库条件删除，只清理 `lease_until <= now` 且已失效的旧锁，随后仍由 `conversation_id` 主键保证多实例只会有一个启动事务成功。
+- `WorkflowLeaseRecoveryJob` 每30秒批量物理删除过期失效锁，避免没有新请求触发时残留数据长期堆积。
+- 清理 SQL 不会删除未过期锁，也不会删除仍有有效 execution lease 的锁；执行租约已失效但仍有未过期 Graph Thread 的工作流继续保留锁，供现有 Checkpoint 恢复链路接管。
+- 产品确认 claim 必须持有未过期 conversation lock；主动恢复 claim 必须仍存在该 workflow 对应的 conversation lock，避免已失去会话所有权的旧工作流重新执行。
+
+### 执行租约续租
+
+- `WorkflowLifecycleProperties` 新增可配置 `heartbeatInterval`，默认1分钟，并校验它短于15分钟 execution lease 和2分钟 claim lease。
+- heartbeat 使用一条 OceanBase `UPDATE JOIN` 同时刷新 `ai_workflow_instance.lease_until` 和 `ai_conversation_workflow_lock.lease_until`。
+- SQL 同时校验当前 `execution_owner`、RUNNING/CONFIRMING/RESUMING 状态以及旧租约仍未过期；终态、失去 owner、已过期或已被其他实例接管的记录更新行数为0。
+- JVM 宕机后 heartbeat 自然停止；租约到期后原有恢复机制才可由其他实例 claim，旧 owner 不能再续租新 owner 的记录。
+
+### 配置与验证
+
+```yaml
+insurance.ai.workflow.lifecycle.execution-lease: 15m
+insurance.ai.workflow.lifecycle.claim-lease: 2m
+insurance.ai.workflow.lifecycle.waiting-confirm-lease: 24h
+insurance.ai.workflow.lifecycle.heartbeat-interval: 1m
+```
+
+- 定向测试覆盖过期锁启动前回收、未过期锁冲突、owner 条件续租、租约到期后恢复条件、旧 owner 隔离和产品确认锁过期保护。
+- `./gradlew test` 全量138项测试通过，0失败、0跳过。
+- 使用本地 OceanBase `EXPLAIN` 验证联合续租和过期锁删除 SQL 均兼容 MySQL 模式；校验过程未写入数据。
+- `local-db` profile 在18083端口启动成功，Flyway 18个迁移校验通过，新增配置绑定和定时 Bean 装配正常；验证后已停止进程。
+- 未修改 Main Graph、Checkpoint、SSE、Memory、Human Confirm 或动态 DAG 业务逻辑，未新增数据库迁移。
+- 未执行 Git 提交或推送。
+
 ## 2026-08-10：新增项目理解与开发地图
 
 ### 文档目标

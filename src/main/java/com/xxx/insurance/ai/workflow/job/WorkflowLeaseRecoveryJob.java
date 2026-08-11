@@ -1,5 +1,6 @@
 package com.xxx.insurance.ai.workflow.job;
 
+import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +25,32 @@ public class WorkflowLeaseRecoveryJob {
 
     private final WorkflowExecutionMapper workflowExecutionMapper;
 
+    private final WorkflowLifecycleProperties lifecycleProperties;
+
     /** 创建工作流租约恢复任务。 */
-    public WorkflowLeaseRecoveryJob(WorkflowExecutionMapper workflowExecutionMapper) {
+    public WorkflowLeaseRecoveryJob(WorkflowExecutionMapper workflowExecutionMapper,
+                                    WorkflowLifecycleProperties lifecycleProperties) {
         this.workflowExecutionMapper = workflowExecutionMapper;
+        this.lifecycleProperties = lifecycleProperties;
+        this.lifecycleProperties.validate();
+    }
+
+    /**
+     * 当前 JVM 按 owner 条件续租所有仍有效的执行权；终态或已经换 owner 的实例自然更新不到。
+     */
+    @Scheduled(
+            initialDelayString = "${insurance.ai.workflow.lifecycle.heartbeat-interval:1m}",
+            fixedDelayString = "${insurance.ai.workflow.lifecycle.heartbeat-interval:1m}")
+    public void renewOwnedLeases() {
+        Instant now = Instant.now();
+        int renewed = workflowExecutionMapper.renewOwnedExecutionLeases(
+                lifecycleProperties.getInstanceId(),
+                now.plus(lifecycleProperties.getExecutionLease()),
+                now);
+        if (renewed > 0) {
+            log.debug("[Workflow] action=lease-heartbeat status=success owner={} renewedCount={}",
+                    lifecycleProperties.getInstanceId(), renewed);
+        }
     }
 
     /** 定期释放已超过 lease_until 的瞬时抢占状态。 */
@@ -38,9 +62,11 @@ public class WorkflowLeaseRecoveryJob {
         Instant now = Instant.now();
         int confirming = workflowExecutionMapper.recoverExpiredConfirming(now);
         int resuming = workflowExecutionMapper.recoverExpiredResuming(now);
-        if (confirming > 0 || resuming > 0) {
-            log.warn("[Workflow] action=lease-recovery status=success confirmingCount={} resumingCount={}",
-                    confirming, resuming);
+        int conversationLocks = workflowExecutionMapper.deleteExpiredInvalidConversationLocks(now);
+        if (confirming > 0 || resuming > 0 || conversationLocks > 0) {
+            log.warn("[Workflow] action=lease-recovery status=success confirmingCount={} resumingCount={} "
+                            + "conversationLockCount={}",
+                    confirming, resuming, conversationLocks);
         }
     }
 }

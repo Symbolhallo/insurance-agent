@@ -137,6 +137,13 @@ public interface WorkflowExecutionMapper {
             where workflow_instance_id = #{workflowInstanceId}
               and conversation_id = #{conversationId}
               and status = 'WAITING_CONFIRM'
+              and exists (
+                  select 1
+                  from ai_conversation_workflow_lock l
+                  where l.workflow_instance_id = ai_workflow_instance.workflow_instance_id
+                    and l.conversation_id = ai_workflow_instance.conversation_id
+                    and l.lease_until > #{updatedAt}
+              )
             """)
     int claimProductConfirmation(@Param("workflowInstanceId") String workflowInstanceId,
                                  @Param("conversationId") String conversationId,
@@ -174,6 +181,12 @@ public interface WorkflowExecutionMapper {
               and conversation_id = #{conversationId}
               and status = 'RUNNING'
               and (execution_owner is null or lease_until is null or lease_until <= #{updatedAt})
+              and exists (
+                  select 1
+                  from ai_conversation_workflow_lock l
+                  where l.workflow_instance_id = ai_workflow_instance.workflow_instance_id
+                    and l.conversation_id = ai_workflow_instance.conversation_id
+              )
             """)
     int claimResume(@Param("workflowInstanceId") String workflowInstanceId,
                     @Param("conversationId") String conversationId,
@@ -242,6 +255,29 @@ public interface WorkflowExecutionMapper {
             """)
     int recoverExpiredResuming(@Param("now") java.time.Instant now);
 
+    /**
+     * 在一条数据库语句内同时刷新实例和 conversation lock。只有租约尚未过期的当前 owner
+     * 可以续租，旧 owner 或已失去执行权的状态不会产生更新。
+     */
+    @Update("""
+            update ai_workflow_instance i
+            join ai_conversation_workflow_lock l
+              on l.workflow_instance_id = i.workflow_instance_id
+             and l.conversation_id = i.conversation_id
+            set i.lease_until = #{leaseUntil},
+                i.state_version = i.state_version + 1,
+                i.updated_at = #{now},
+                l.lease_until = #{leaseUntil},
+                l.updated_at = #{now}
+            where i.execution_owner = #{executionOwner}
+              and i.status in ('RUNNING', 'CONFIRMING', 'RESUMING')
+              and i.lease_until is not null
+              and i.lease_until > #{now}
+            """)
+    int renewOwnedExecutionLeases(@Param("executionOwner") String executionOwner,
+                                  @Param("leaseUntil") java.time.Instant leaseUntil,
+                                  @Param("now") java.time.Instant now);
+
     /** 同一 conversation 的顶层工作流锁；主键冲突即表示前一轮仍未收口。 */
     @Insert("""
             insert into ai_conversation_workflow_lock (
@@ -255,6 +291,59 @@ public interface WorkflowExecutionMapper {
                                 @Param("requestId") String requestId,
                                 @Param("leaseUntil") java.time.Instant leaseUntil,
                                 @Param("createdAt") java.time.Instant createdAt);
+
+    /**
+     * 启动新工作流前，仅回收当前 conversation 已过期且不再由有效执行或可恢复 Checkpoint
+     * 保护的锁。WAITING_CONFIRM 的锁以自身 lease_until 作为确认有效期。
+     */
+    @Delete("""
+            delete l
+            from ai_conversation_workflow_lock l
+            left join ai_workflow_instance i
+              on i.workflow_instance_id = l.workflow_instance_id
+            where l.conversation_id = #{conversationId}
+              and l.lease_until <= #{now}
+              and (
+                  i.workflow_instance_id is null
+                  or i.status in ('SUCCESS', 'PARTIAL_SUCCESS', 'REVIEW_BLOCKED', 'FAILED')
+                  or i.status = 'WAITING_CONFIRM'
+                  or (
+                      (i.execution_owner is null or i.lease_until is null or i.lease_until <= #{now})
+                      and not exists (
+                          select 1
+                          from ai_graph_thread t
+                          where t.workflow_instance_id = i.workflow_instance_id
+                            and t.expires_at > #{now}
+                      )
+                  )
+              )
+            """)
+    int deleteExpiredInvalidConversationLock(@Param("conversationId") String conversationId,
+                                             @Param("now") java.time.Instant now);
+
+    /** 定时批量物理删除所有已过期且失效的 conversation workflow lock。 */
+    @Delete("""
+            delete l
+            from ai_conversation_workflow_lock l
+            left join ai_workflow_instance i
+              on i.workflow_instance_id = l.workflow_instance_id
+            where l.lease_until <= #{now}
+              and (
+                  i.workflow_instance_id is null
+                  or i.status in ('SUCCESS', 'PARTIAL_SUCCESS', 'REVIEW_BLOCKED', 'FAILED')
+                  or i.status = 'WAITING_CONFIRM'
+                  or (
+                      (i.execution_owner is null or i.lease_until is null or i.lease_until <= #{now})
+                      and not exists (
+                          select 1
+                          from ai_graph_thread t
+                          where t.workflow_instance_id = i.workflow_instance_id
+                            and t.expires_at > #{now}
+                      )
+                  )
+              )
+            """)
+    int deleteExpiredInvalidConversationLocks(@Param("now") java.time.Instant now);
 
     /** 等待人工确认时延长会话独占，避免下一轮覆盖尚未完成的 Memory 上下文。 */
     @Update("""

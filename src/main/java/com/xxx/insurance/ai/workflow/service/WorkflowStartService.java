@@ -33,6 +33,9 @@ public class WorkflowStartService {
     @Transactional(rollbackFor = Exception.class)
     public void start(WorkflowInstanceRecord instance, List<WorkflowStepRecord> steps) {
         try {
+            // 启动链路 1：先条件删除当前会话已过期且失效的旧锁；有效执行或可恢复工作流仍受保护。
+            workflowExecutionMapper.deleteExpiredInvalidConversationLock(
+                    instance.conversationId(), instance.createdAt());
             workflowExecutionMapper.insertConversationLock(
                     instance.conversationId(),
                     instance.workflowInstanceId(),

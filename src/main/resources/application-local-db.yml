@@ -38,3 +38,4 @@ insurance:
         execution-lease: 15m
         claim-lease: 2m
         waiting-confirm-lease: 24h
+        heartbeat-interval: 1m
