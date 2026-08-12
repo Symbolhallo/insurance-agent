@@ -1,8 +1,10 @@
 package com.xxx.insurance.asset.config;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.agent.AuditedReactAgentExecutor;
+import com.xxx.insurance.ai.config.AgentSafetyConfig;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.asset.agent.AssetQueryAgent;
 import com.xxx.insurance.asset.tool.AssetQueryTool;
@@ -39,13 +41,15 @@ public class AssetQueryAgentConfig {
     public ReactAgent assetQueryReactAgent(
             ChatModel chatModel,
             @Qualifier(SkillConfig.ASSET_QUERY_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
+            @Qualifier(AgentSafetyConfig.DOMAIN_AGENT_MODEL_CALL_LIMIT_HOOK)
+            ModelCallLimitHook modelCallLimitHook,
             @Qualifier(ASSET_QUERY_TOOL_CALLBACKS) ToolCallback[] toolCallbacks) {
         return ReactAgent.builder()
                 .name(AssetQueryAgent.AGENT_NAME)
                 .description(AssetQueryAgent.AGENT_DESCRIPTION)
                 .model(chatModel)
                 .instruction(ASSET_QUERY_INSTRUCTION)
-                .hooks(skillsAgentHook)
+                .hooks(skillsAgentHook, modelCallLimitHook)
                 .tools(toolCallbacks)
                 .enableLogging(true)
                 .build();

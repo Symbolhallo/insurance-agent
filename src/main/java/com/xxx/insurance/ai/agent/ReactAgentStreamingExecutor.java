@@ -20,6 +20,10 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>该组件消费完整 {@link ReactAgent#stream(String)}，将 AGENT_MODEL_STREAMING 的增量
  * Message 实时交给 Token Sink，同时从最终 Graph State 提取完整 AssistantMessage。</p>
+ *
+ * <p>1.1.2.0 的 streamMessages() 只透出模型增量和 Tool 完成消息，会过滤
+ * AGENT_MODEL_FINISHED 及最终 Graph State。当前调用必须在一次 Tool/ReAct 执行内同时获得
+ * Token 和权威最终消息，因此不能改成 streamMessages() 后再调用 call()，否则 Tool 会重复执行。</p>
  */
 @Component
 public class ReactAgentStreamingExecutor {

@@ -1,9 +1,11 @@
 package com.xxx.insurance.product.config;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
+import com.xxx.insurance.ai.config.AgentSafetyConfig;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
@@ -97,13 +99,15 @@ public class ProductAnalysisAgentConfig {
     public ReactAgent productAnalysisReactAgent(
             ChatModel chatModel,
             @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
+            @Qualifier(AgentSafetyConfig.DOMAIN_AGENT_MODEL_CALL_LIMIT_HOOK)
+            ModelCallLimitHook modelCallLimitHook,
             @Qualifier("productAnalysisToolCallbacks") List<ToolCallback> productAnalysisToolCallbacks) {
         return ReactAgent.builder()
                 .name(ProductAnalysisAgent.AGENT_NAME)
                 .description(ProductAnalysisAgent.AGENT_DESCRIPTION)
                 .model(chatModel)
                 .instruction(PRODUCT_ANALYSIS_AGENT_INSTRUCTION)
-                .hooks(skillsAgentHook)
+                .hooks(skillsAgentHook, modelCallLimitHook)
                 .tools(productAnalysisToolCallbacks)
                 .enableLogging(true)
                 .build();

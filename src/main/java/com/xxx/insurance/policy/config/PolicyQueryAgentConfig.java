@@ -1,8 +1,10 @@
 package com.xxx.insurance.policy.config;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.agent.AuditedReactAgentExecutor;
+import com.xxx.insurance.ai.config.AgentSafetyConfig;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.policy.agent.PolicyQueryAgent;
 import com.xxx.insurance.policy.tool.PolicyQueryTool;
@@ -39,13 +41,15 @@ public class PolicyQueryAgentConfig {
     public ReactAgent policyQueryReactAgent(
             ChatModel chatModel,
             @Qualifier(SkillConfig.POLICY_QUERY_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
+            @Qualifier(AgentSafetyConfig.DOMAIN_AGENT_MODEL_CALL_LIMIT_HOOK)
+            ModelCallLimitHook modelCallLimitHook,
             @Qualifier(POLICY_QUERY_TOOL_CALLBACKS) ToolCallback[] toolCallbacks) {
         return ReactAgent.builder()
                 .name(PolicyQueryAgent.AGENT_NAME)
                 .description(PolicyQueryAgent.AGENT_DESCRIPTION)
                 .model(chatModel)
                 .instruction(POLICY_QUERY_INSTRUCTION)
-                .hooks(skillsAgentHook)
+                .hooks(skillsAgentHook, modelCallLimitHook)
                 .tools(toolCallbacks)
                 .enableLogging(true)
                 .build();

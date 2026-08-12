@@ -1,9 +1,11 @@
 package com.xxx.insurance.knowledge.config;
 
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
+import com.xxx.insurance.ai.config.AgentSafetyConfig;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
@@ -65,13 +67,15 @@ public class KnowledgeQaAgentConfig {
     public ReactAgent knowledgeQaReactAgent(
             ChatModel chatModel,
             @Qualifier(SkillConfig.KNOWLEDGE_QA_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
+            @Qualifier(AgentSafetyConfig.DOMAIN_AGENT_MODEL_CALL_LIMIT_HOOK)
+            ModelCallLimitHook modelCallLimitHook,
             @Qualifier(KNOWLEDGE_QA_TOOL_CALLBACKS) ToolCallback[] toolCallbacks) {
         return ReactAgent.builder()
                 .name(KnowledgeQaAgent.AGENT_NAME)
                 .description(KnowledgeQaAgent.AGENT_DESCRIPTION)
                 .model(chatModel)
                 .instruction(INSTRUCTION)
-                .hooks(skillsAgentHook)
+                .hooks(skillsAgentHook, modelCallLimitHook)
                 .tools(Arrays.asList(toolCallbacks))
                 .enableLogging(true)
                 .build();
