@@ -24,6 +24,12 @@ public class NoOpWorkflowEventPublisher implements WorkflowEventPublisher {
         // Intentionally empty: SSE is available only with the local-db profile.
     }
 
+    /** 默认 profile 没有持久化事件需要投递。 */
+    @Override
+    public void flushPersistedEvents(String workflowInstanceId) {
+        // Intentionally empty: SSE is available only with the local-db profile.
+    }
+
     /** 默认 profile 没有实时订阅连接需要关闭。 */
     @Override
     public void completeSubscribers(String workflowInstanceId) {

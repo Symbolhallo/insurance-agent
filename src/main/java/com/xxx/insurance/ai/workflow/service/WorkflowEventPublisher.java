@@ -17,6 +17,9 @@ public interface WorkflowEventPublisher {
                  String node,
                  Map<String, Object> data);
 
+    /** 立即从事件事实表投递当前工作流尚未发送的事件；终止事件发送成功后由实现关闭连接。 */
+    void flushPersistedEvents(String workflowInstanceId);
+
     /** 关闭当前工作流全部实时订阅连接。 */
     void completeSubscribers(String workflowInstanceId);
 }

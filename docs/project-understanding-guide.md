@@ -260,7 +260,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | 文件 | 方法 | 作用 |
 | --- | --- | --- |
 | `WorkflowExecutionMapper` | 实例/步骤 CRUD、确认与恢复 claim、`renewOwnedExecutionLeases()`、过期会话锁删除 | 工作流执行持久化；claim 递增 fencing token，执行期写入校验 owner、token 和未过期 lease，heartbeat 不改变 token。 |
-| `WorkflowSseEventMapper` | 执行期/暂停/终态 sequence 分配、`lastAllocatedSequence()`、`insert()`、`findReplayEvents()`、`findHighWatermark()`、`deleteExpiredEvents()` | 分配工作流内 SSE 序号、持久化、重放和清理；事件写入按阶段校验 owner、fencing token、lease 或终态。 |
+| `WorkflowSseEventMapper` | 执行期/暂停/终态 sequence 分配、`lastAllocatedSequence()`、`insert()`、`findReplayEvents()`、`findHighWatermark()`、`deleteExpiredEvents()` | 分配工作流内 SSE 序号、持久化、重放和清理；事件写入按阶段校验 owner、fencing token、lease 或终态。人工确认事务提交后立即 flush，`human_confirm` 实际发送成功后才关闭本段连接。 |
 
 ### `workflow.node`
 

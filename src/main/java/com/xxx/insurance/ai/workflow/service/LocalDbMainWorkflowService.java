@@ -454,7 +454,9 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                         "candidateCount", recallResult.candidates().size(),
                         "candidates", confirmationCandidates(recallResult)),
                 waitingAt);
-        workflowEventPublisher.completeSubscribers(workflowInstanceId);
+        // 主工作流链路 7.1：暂停事务提交后立即读取事实表；human_confirm 发送成功后自动关闭本段 SSE。
+        // 若本次读取失败则保留订阅，由数据库 Poller 继续补偿，禁止在事件送达前强制关闭连接。
+        workflowEventPublisher.flushPersistedEvents(workflowInstanceId);
         log.info("[Workflow] code={} action=run status=waiting-confirm workflowInstanceId={} checkpointId={} "
                         + "candidateCount={}",
                 WORKFLOW_CODE, workflowInstanceId, checkpointId, recallResult.candidates().size());
