@@ -15,7 +15,8 @@ import com.xxx.insurance.ai.workflow.checkpoint.config.GraphCheckpointConfig;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
 import com.xxx.insurance.ai.workflow.model.ProductRecallDecision;
 import com.xxx.insurance.ai.workflow.model.WorkflowNodeDefinition;
-import com.xxx.insurance.ai.workflow.service.WorkflowNodeExecutionRecorder;
+import com.xxx.insurance.ai.workflow.service.MainWorkflowLifecycleListener;
+import com.xxx.insurance.ai.workflow.service.WorkflowNodeExecutionGuard;
 import com.xxx.insurance.ai.workflow.node.DagExecutorNode;
 import com.xxx.insurance.ai.workflow.node.ContextAlignmentNode;
 import com.xxx.insurance.ai.workflow.node.IntentRecognitionNode;
@@ -63,8 +64,9 @@ public class MainWorkflowGraphConfig {
     /**
      * 装配并编译主工作流 StateGraph。
      *
-     * <p>各业务 Node 在此注册固定拓扑，所有 NodeAction 先由执行记录器包装；编译阶段设置
-     * human-confirm-product 前中断，并在 local-db profile 下挂载 OceanBase CheckpointSaver。
+     * <p>各业务 Node 在此注册固定拓扑，所有 NodeAction 先由执行安全门禁包装；编译阶段设置
+     * human-confirm-product 前中断，在 local-db profile 下挂载 OceanBase CheckpointSaver 和
+     * GraphLifecycleListener。
      * 返回的 CompiledGraph 由 MainWorkflowService 负责首次 invoke、updateState 和 resume。</p>
      *
      * @return 可执行、可中断和可恢复的主工作流 Graph Bean
@@ -79,7 +81,8 @@ public class MainWorkflowGraphConfig {
                                            DagExecutorNode dagExecutorNode,
                                            OutputReviewNode outputReviewNode,
                                            SummaryNode summaryNode,
-                                           WorkflowNodeExecutionRecorder workflowNodeExecutionRecorder,
+                                           WorkflowNodeExecutionGuard workflowNodeExecutionGuard,
+                                           ObjectProvider<MainWorkflowLifecycleListener> lifecycleListenerProvider,
                                            @Qualifier(GraphCheckpointConfig.MAIN_WORKFLOW_STATE_SERIALIZER)
                                            StateSerializer stateSerializer,
                                            @Qualifier(GraphCheckpointConfig.MAIN_WORKFLOW_CHECKPOINT_SAVER)
@@ -88,31 +91,31 @@ public class MainWorkflowGraphConfig {
         StateGraph stateGraph = new StateGraph(MAIN_WORKFLOW_NAME, this::mainWorkflowKeyStrategies, stateSerializer)
                 .addNode(WorkflowNodeDefinition.PRODUCT_REFERENCE_RESOLUTION.code(),
                         node_async(tracked(WorkflowNodeDefinition.PRODUCT_REFERENCE_RESOLUTION,
-                                productReferenceResolutionNode, workflowNodeExecutionRecorder)))
+                                productReferenceResolutionNode, workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.PRODUCT_CANDIDATE_RETRIEVAL.code(),
                         node_async(tracked(WorkflowNodeDefinition.PRODUCT_CANDIDATE_RETRIEVAL,
-                                productCandidateRetrievalNode, workflowNodeExecutionRecorder)))
+                                productCandidateRetrievalNode, workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code(),
                         node_async(tracked(WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT,
-                                humanConfirmProductNode, workflowNodeExecutionRecorder)))
+                                humanConfirmProductNode, workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.CONTEXT_ALIGNMENT.code(),
                         node_async(tracked(WorkflowNodeDefinition.CONTEXT_ALIGNMENT, contextAlignmentNode,
-                                workflowNodeExecutionRecorder)))
+                                workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.INTENT_RECOGNITION.code(),
                         node_async(tracked(WorkflowNodeDefinition.INTENT_RECOGNITION, intentRecognitionNode,
-                                workflowNodeExecutionRecorder)))
+                                workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.PLANNER.code(),
                         node_async(tracked(WorkflowNodeDefinition.PLANNER, plannerNode,
-                                workflowNodeExecutionRecorder)))
+                                workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.DAG_EXECUTOR.code(),
                         node_async(tracked(WorkflowNodeDefinition.DAG_EXECUTOR, dagExecutorNode,
-                                workflowNodeExecutionRecorder)))
+                                workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.OUTPUT_REVIEW.code(),
                         node_async(tracked(WorkflowNodeDefinition.OUTPUT_REVIEW, outputReviewNode,
-                                workflowNodeExecutionRecorder)))
+                                workflowNodeExecutionGuard)))
                 .addNode(WorkflowNodeDefinition.SUMMARY.code(),
                         node_async(tracked(WorkflowNodeDefinition.SUMMARY, summaryNode,
-                                workflowNodeExecutionRecorder)))
+                                workflowNodeExecutionGuard)))
                 .addEdge(START, WorkflowNodeDefinition.PRODUCT_REFERENCE_RESOLUTION.code())
                 .addConditionalEdges(
                         WorkflowNodeDefinition.PRODUCT_REFERENCE_RESOLUTION.code(),
@@ -140,6 +143,7 @@ public class MainWorkflowGraphConfig {
         CompileConfig.Builder compileConfigBuilder = CompileConfig.builder()
                 .interruptBefore(WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code())
                 .releaseThread(false);
+        lifecycleListenerProvider.ifAvailable(compileConfigBuilder::withLifecycleListener);
         if (checkpointSaver != null) {
             compileConfigBuilder.saverConfig(SaverConfig.builder().register(checkpointSaver).build());
         }
@@ -158,12 +162,12 @@ public class MainWorkflowGraphConfig {
     }
 
     /**
-     * 使用统一执行记录器包装节点，自动保存步骤开始、输出和异常。
+     * 使用统一安全门禁包装节点，强制步骤状态、Lease/Fence 与结果审计。
      */
     private NodeAction tracked(WorkflowNodeDefinition nodeDefinition,
                                NodeAction nodeAction,
-                               WorkflowNodeExecutionRecorder workflowNodeExecutionRecorder) {
-        return state -> workflowNodeExecutionRecorder.record(nodeDefinition, state, () -> nodeAction.apply(state));
+                               WorkflowNodeExecutionGuard workflowNodeExecutionGuard) {
+        return state -> workflowNodeExecutionGuard.execute(nodeDefinition, state, () -> nodeAction.apply(state));
     }
 
     /**

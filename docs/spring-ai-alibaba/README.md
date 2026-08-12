@@ -65,6 +65,7 @@
 4. [保险智能体落地指南](04-insurance-agent-implementation-guide.md)
 5. [API 速查](05-api-cheatsheet.md)
 6. [来源索引](06-source-index.md)
+7. [1.1.2.0 原生能力适配报告](07-native-capability-adoption-report.md)
 
 推荐先读本文和第 3 篇建立边界，再读第 1、2 篇，最后按第 4、5 篇实施。
 

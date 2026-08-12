@@ -96,7 +96,7 @@ Workflow 可以调用领域 Agent；领域 Agent 不应反向依赖主 Workflow�
 | `AgentExecutionContext` | 两个便捷构造器、`standalone()`、`auditedUserMessage()` | 携带 workflowInstanceId、stepId、taskId、原始问题和流式开关；独立 Agent 调用也能创建上下文。 |
 | `AgentTokenStreamContext` | Record 字段 | 定义一次模型流的 conversationId、workflowId、taskId、agentName、phase、streamId。 |
 | `AgentTokenStreamSink` | `publishToken()`、`complete()` | 流式 Token 输出端口；Agent 执行器不直接依赖 SSE。 |
-| `ReactAgentStreamingExecutor` | 四个 `execute()` 重载；内部 `handleOutput()`、`extractAssistantMessage()`、`StreamPublication` | 消费 `ReactAgent.stream(...)`，只处理有效模型事件，发布增量 Token，并从最终 State 提取 AssistantMessage。 |
+| `ReactAgentStreamingExecutor` | 四个 `execute()` 重载；内部 `handleOutput()`、`extractAssistantMessage()`、`StreamPublication` | 消费一次 `ReactAgent.stream(...)`，发布增量 Token，并从最终 State 提取 AssistantMessage；1.1.2.0 的 `streamMessages()` 会过滤最终 State，不能直接替换。 |
 | `ChatModelStreamingExecutor` | `execute()`；`publishChunk()`、`repairMissingObjectStart()` | 前置 LLM 节点直接消费 `ChatModel.stream(Prompt)`；聚合结构化输出并处理已知 DeepSeek JSON 起始边界问题。 |
 | `AuditedReactAgentExecutor` | `execute()`；`call()`、`saveFailure()`、`invocation()` | 保单和资产 Agent 的公共执行器，统一同步/流式调用、耗时统计、成功/失败审计。 |
 
@@ -109,6 +109,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `AiConfig` | `chatModel()` Bean | 根据 Spring AI OpenAI-compatible 配置创建全局复用的 `ChatModel`。所有 ReactAgent 共享该 Bean。 |
 | `AiModelProperties` | Getter/Setter；内部 `Chat`、`Options` | 映射 API Key、Base URL、模型名、Temperature，供状态检查和审计读取。 |
 | `SkillConfig` | 4 个 `SkillRegistry` Bean + 4 个 `SkillsAgentHook` Bean | 分别加载 `product-analysis`、`knowledge-qa`、`policy-query`、`asset-query` Skill 根目录，确保子智能体隔离。 |
+| `AgentSafetyConfig` / `AgentSafetyProperties` | `domainAgentModelCallLimitHook()` Bean；`validate()` | 使用 Spring AI Alibaba `ModelCallLimitHook` 将四个领域 Agent 单次运行模型调用限制为默认8次。 |
 
 `SkillConfig` 只负责 Skill 基础设施；ReactAgent 和 ToolCallback 在各业务域自己的 `config` 包装配。
 
@@ -295,8 +296,9 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `WorkflowDagExecutor` | `execute()`、就绪判断、失败传播、完成等待函数 | 依据 dependsOn 动态提交任务；A 完成即可释放只依赖 A 的 B，无需等待无关 C。 |
 | `WorkflowTaskGraphRunner` | `execute()`、`runnableConfig()`、`pending()` | 为每个任务生成独立 threadId，恢复 SUCCESS Checkpoint，执行任务子图。 |
 | `WorkflowSubAgentRouter` | `invoke()`、`buildAgentQuery()`、结果转换函数 | 将受控 agentType 路由到产品、知识、保单、资产 Agent，只传最小任务上下文。 |
-| `WorkflowNodeExecutionRecorder` / `LocalDbWorkflowNodeExecutionRecorder` | `record()`；阶段发布和错误辅助函数 | 装饰主图 Node，记录步骤开始/成功/失败并发布脱敏阶段事件。 |
-| `NoOpWorkflowNodeExecutionRecorder` | `record()` 直接执行 | 非 local-db 替代。 |
+| `WorkflowNodeExecutionGuard` / `LocalDbWorkflowNodeExecutionGuard` | `execute()`；Lease/Fence 与步骤状态辅助函数 | 装饰主图 Node，强制步骤状态 CAS、Lease/Fence 门禁及结果审计；安全异常必须传播给 Graph。 |
+| `NoOpWorkflowNodeExecutionGuard` | `execute()` 直接执行 | 非 local-db 替代。 |
+| `MainWorkflowLifecycleListener` | `onStart()`、`before()`、`after()`、`onError()`、`onComplete()` | Spring AI Alibaba 原生 Graph Listener；负责 Graph/Node 日志、耗时和脱敏 Stage SSE，不承担安全门禁。 |
 | `WorkflowEventPublisher` | `publish()`、`completeSubscribers()` | Workflow 事件输出端口。 |
 | `LocalDbWorkflowSseEventService` | subscribe/reconnect/publish/poll/deliver/purge/complete；`SseClient.send()` | OceanBase 是事件事实源；每个连接按 sequenceNo 重放、跨实例轮询和幂等推送。 |
 | `NoOpWorkflowEventPublisher` | 空发布 | 非 local-db 替代。 |
@@ -434,8 +436,8 @@ Model 文件：
 
 `application.yml` 是所有 profile 共用的基础配置。默认关闭 JDBC 与 Flyway，但仍装配
 ChatModel、ReactAgent、Skill 和 Tool，适合不依赖数据库的单 Agent 验证。模型连接通过
-`AI_API_KEY`、`AI_BASE_URL`、`AI_MODEL`、`AI_TEMPERATURE` 环境变量覆盖；密钥空值只允许
-Spring 上下文装配，真实模型调用仍会失败。Actuator 仅暴露 `health/info`，Swagger UI 位于
+`AI_API_KEY`、`AI_BASE_URL`、`AI_MODEL`、`AI_TEMPERATURE` 环境变量覆盖；Spring AI OpenAI
+自动配置要求启动时提供非空 `AI_API_KEY`，即使只使用默认 profile 也不能省略。Actuator仅暴露 `health/info`，Swagger UI 位于
 `/swagger-ui.html`，日志通过 MDC 输出 `traceId`。
 
 `application-local-db.yml` 只在 `local-db` profile 下合并生效。它恢复 DataSource/Flyway

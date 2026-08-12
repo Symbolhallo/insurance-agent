@@ -1,5 +1,35 @@
 # 工程变更记录
 
+## 2026-08-12：Spring AI Alibaba 1.1.2.0 原生能力优化
+
+### 已采用
+
+- Main Graph 注册原生 `GraphLifecycleListener`，迁移 Graph/Node 起止日志、耗时和 Stage SSE。
+- 原 Recorder 收敛并改名为 `WorkflowNodeExecutionGuard`，只保留步骤状态 CAS、结果审计与 Lease/Fence 强制门禁。
+- 四个领域 ReactAgent 接入原生 `ModelCallLimitHook`，默认单次运行最多8次模型调用，超限按异常进入既有审计和失败链路。
+
+### 经源码核对后保留现状
+
+- `streamMessages()` 在1.1.2.0只透出模型增量和Tool完成消息，过滤最终完成消息与Graph State；继续使用单次 `stream()` 同时获得Token和权威最终回答，避免二次执行Tool。
+- `Store` 是覆盖式 namespace/key KV，与 `ai_long_term_memory` 追加审计语义不一致，不增加形式化适配层。
+- 官方 `MysqlSaver` 缺少版本CAS、State Schema、Lease/Fence、Retention和工作流状态机联动，继续保留 `OceanBaseCheckpointSaver`。
+- ToolCallLimit、ToolRetry、ToolContextHelper、ContextEditing与并行Tool执行当前均无安全替换收益，未启用。
+
+### 文档与测试
+
+- 新增 `docs/spring-ai-alibaba/07-native-capability-adoption-report.md`，记录本地1.1.2.0源码依据和最终职责边界。
+- 新增 Agent调用上限隔离测试、Graph生命周期事件测试和流式最终State保护测试。
+- `./gradlew test` 全量153项测试通过，0失败、0错误、0跳过。
+- 当前终端未配置模型密钥，因此未执行真实DeepSeek网络调用；本次没有修改模型Prompt、Tool业务结果或最终回答格式。
+
+## 2026-08-12：默认 Profile HTTP 启动验收
+
+- 确认 Spring AI OpenAI 自动配置在启动阶段强制要求非空 `AI_API_KEY`；修正 YAML 和项目理解文档中“空Key可装配”的旧说明。
+- 使用仅存在于进程环境的无效占位Key启动默认profile，不发起任何模型请求，不把占位值写入代码或配置文件。
+- 应用在8080启动成功，四个领域SkillRegistry分别加载2/1/1/1个Skill。
+- `/actuator/health` 返回200和UP，`/api/v1/ai/model/status` 返回200，`/v3/api-docs` 返回200，Swagger入口返回302到UI页面，`/workflow-test/index.html` 返回200。
+- 验收完成后已停止测试进程。当前终端没有真实模型密钥且OceanBase 2881未监听，因此未执行local-db、真实Tool Calling和Main Workflow SSE网络验收。
+
 ## 2026-08-12：修复 HUMAN_CONFIRM 落库后提前关闭 SSE
 
 - 确认原链路存在时序窗口：`WorkflowPauseService` 在事务内写入 `human_confirm` 事实事件后，`waitingConfirmResponse()` 直接调用 `completeSubscribers()`，可能早于500ms数据库 Poller 的实际发送。

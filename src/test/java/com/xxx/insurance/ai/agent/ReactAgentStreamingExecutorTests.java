@@ -21,6 +21,22 @@ import static org.mockito.Mockito.when;
 class ReactAgentStreamingExecutorTests {
 
     @Test
+    void usesSingleLowLevelStreamBecauseFinalStateIsRequired() throws Exception {
+        ReactAgent reactAgent = mock(ReactAgent.class);
+        AssistantMessage finalAnswer = AssistantMessage.builder().content("最终回答").build();
+        OverAllState finalState = new OverAllState(Map.of("messages", List.of(finalAnswer)));
+        when(reactAgent.stream("问题")).thenReturn(Flux.just(new StreamingOutput<>(
+                finalAnswer, "done", "test-agent", finalState, OutputType.AGENT_MODEL_FINISHED)));
+
+        AssistantMessage result = new ReactAgentStreamingExecutor(mock(AgentTokenStreamSink.class))
+                .execute(reactAgent, "问题");
+
+        assertThat(result).isSameAs(finalAnswer);
+        verify(reactAgent).stream("问题");
+        org.mockito.Mockito.verifyNoMoreInteractions(reactAgent);
+    }
+
+    @Test
     void extractsLastAssistantMessageFromFinalStreamState() throws Exception {
         ReactAgent reactAgent = mock(ReactAgent.class);
         AssistantMessage firstRound = AssistantMessage.builder().content("准备调用工具").build();

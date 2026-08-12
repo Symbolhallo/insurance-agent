@@ -67,6 +67,10 @@ Current phase:
 - After every architecture, workflow, persistence, API, package-structure, or business-capability optimization, update `docs/project-understanding-guide.md` in the same change so it remains the authoritative project map.
 - Spring AI Alibaba 1.1.2.0 may materialize nested final Record elements in generic lists as `LinkedHashMap` between Graph checkpoints. The Main Workflow checkpoint serializer explicitly normalizes and restores `IntentRoutingResult.routes` as `IntentRoute` objects; new nested State DTO lists require the same consecutive-checkpoint regression test.
 - All four domain agents invoke the shared real ChatModel. ProductAnalysisAgent, KnowledgeQAAgent, PolicyQueryAgent, and AssetQueryAgent each have isolated Skill registries and Tool callbacks.
+- All four domain ReactAgents use Spring AI Alibaba `ModelCallLimitHook`; the default per-run model call limit is 8 and counters remain isolated in each `RunnableConfig.context()`.
+- Main Graph lifecycle observation uses Spring AI Alibaba `GraphLifecycleListener` for logs, duration and Stage SSE. `WorkflowNodeExecutionGuard` remains in the node call chain for step-state CAS, Lease/Fence rejection and output audit because listener exceptions are isolated by the framework.
+- Spring AI Alibaba 1.1.2.0 `streamMessages()` filters final model completion and Graph State. `ReactAgentStreamingExecutor` intentionally keeps one low-level `stream()` execution to publish tokens and extract the authoritative final AssistantMessage without executing tools twice.
+- Graph `Store` does not replace append-only `ai_long_term_memory`, and official `MysqlSaver` does not replace `OceanBaseCheckpointSaver`; see `docs/spring-ai-alibaba/07-native-capability-adoption-report.md`.
 - PolicyQueryAgent and AssetQueryAgent currently query only `MOCK-CUSTOMER-001` through read-only Mock Tools, then use ReactAgent to format the Tool facts. They must never invent customer data. Production integration must inject customer identity and authorization through server-side context instead of model-generated Tool arguments.
 
 ## Technology Baseline

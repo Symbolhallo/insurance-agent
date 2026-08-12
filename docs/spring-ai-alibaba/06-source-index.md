@@ -42,6 +42,11 @@
 | 源码 | Flow Agents | 同上，`agent/flow/agent/` | Sequential、Parallel、Routing、Loop | 01、03 |
 | 源码 | StateGraph / CompiledGraph | Gradle Cache `spring-ai-alibaba-graph-core-1.1.2.0-sources.jar`, `com/alibaba/cloud/ai/graph/` | 图 API、状态、流式、恢复 | 02、05 |
 | 源码 | Saver 实现 | 同上，`graph/checkpoint/savers/` | Memory、Redis、Postgres、Mongo Saver | 02、05 |
+| 源码 | Agent 消息流提取 | Agent Framework sources JAR，`agent/Agent.java#extractMessages` | `streamMessages` 在1.1.2.0只保留模型增量和Tool完成消息 | 07 |
+| 源码 | GraphLifecycleListener / CompileConfig / GraphRunnerContext | Graph Core sources JAR，`graph/GraphLifecycleListener.java`、`CompileConfig.java`、`GraphRunnerContext.java` | Listener注册、回调时机及异常隔离 | 07 |
+| 源码 | Store / DatabaseStore | Graph Core sources JAR，`graph/store/` | namespace/key覆盖模型及数据库实现兼容性 | 07 |
+| 源码 | MysqlSaver | Graph Core sources JAR，`graph/checkpoint/savers/mysql/MysqlSaver.java` | 官方MySQL表结构、内存缓存和持久化能力边界 | 07 |
+| 源码 | ModelCallLimit / ToolCallLimit / ToolRetry / ToolContextHelper / ContextEditing | Agent Framework sources JAR，对应 `agent/hook/`、`agent/interceptor/`、`agent/tools/` | Agent安全与上下文能力实际行为 | 07 |
 | 源码 | Strategies | 同上，`graph/KeyStrategyFactory.java`、`graph/strategy/` | Replace、Append、Merge | 02、05 |
 | 项目 | build.gradle | `build.gradle` | 当前实际版本与依赖 | README |
 | 项目 | Agent/Skill/Memory/Workflow 源码 | `src/main/java/com/xxx/insurance/` | 当前能力基线与落地映射 | 04 |

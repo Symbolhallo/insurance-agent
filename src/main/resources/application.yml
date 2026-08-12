@@ -21,7 +21,7 @@ spring:
   ai:
     # 使用 Spring AI OpenAI-compatible 协议连接模型服务；DeepSeek、DashScope兼容模式均可复用。
     openai:
-      # 模型密钥从环境变量读取；空默认值只保证应用可装配，不代表模型调用可用。
+      # 模型密钥从环境变量读取；Spring AI 自动配置要求启动时必须提供非空 AI_API_KEY。
       api-key: ${AI_API_KEY:}
       # 模型服务基础地址；未配置时使用 DashScope OpenAI 兼容地址。
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
@@ -80,3 +80,11 @@ logging:
     root: INFO
     # 当前项目代码默认记录 INFO 及以上日志；本地排障可临时改为 DEBUG。
     com.xxx.insurance: INFO
+
+# 项目级 ReactAgent 运行保护；使用 Spring AI Alibaba 1.1.2.0 原生 Hook 实施。
+insurance:
+  ai:
+    agent:
+      safety:
+        # 单次领域 Agent 最多调用模型8次；正常一次 Tool 循环通常只需2次。
+        model-call-limit: 8
