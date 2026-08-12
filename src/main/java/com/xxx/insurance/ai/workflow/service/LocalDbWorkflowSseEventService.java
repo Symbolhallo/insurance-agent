@@ -290,6 +290,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     }
 
     /** 在事务提交后立即尝试投递事实表事件；失败时保留连接游标，交给下一轮数据库扫描补偿。 */
+    @Override
     public void flushPersistedEvents(String workflowInstanceId) {
         try {
             deliverPersistedEvents(workflowInstanceId);

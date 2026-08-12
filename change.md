@@ -1,5 +1,13 @@
 # 工程变更记录
 
+## 2026-08-12：修复 HUMAN_CONFIRM 落库后提前关闭 SSE
+
+- 确认原链路存在时序窗口：`WorkflowPauseService` 在事务内写入 `human_confirm` 事实事件后，`waitingConfirmResponse()` 直接调用 `completeSubscribers()`，可能早于500ms数据库 Poller 的实际发送。
+- `WorkflowEventPublisher` 增加 `flushPersistedEvents()` 端口；暂停事务提交后立即从 OceanBase 读取尚未投递事件。
+- 删除人工确认路径上的强制关闭调用；`sendOrRemove()` 在 `emitter.send(human_confirm)` 成功后按既有终止事件规则自动完成并移除连接。
+- 若即时 flush 查询或发送失败，不提前关闭连接，由现有数据库 Poller 和 Last-Event-ID 重放继续补偿。
+- 未改变 Main Graph、事件表、SSE协议、多实例轮询或断线重连机制。
+
 ## 2026-08-11：Execution Lease Fencing Token 加固
 
 ### 执行权代次

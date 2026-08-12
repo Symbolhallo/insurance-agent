@@ -28,6 +28,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class LocalDbWorkflowSseEventServiceTests {
@@ -178,6 +180,29 @@ class LocalDbWorkflowSseEventServiceTests {
         verify(eventMapper, org.mockito.Mockito.times(2)).findReplayEvents(
                 org.mockito.ArgumentMatchers.eq("wfi-001"), sequenceCaptor.capture(), any(Instant.class));
         assertThat(sequenceCaptor.getAllValues()).containsExactly(0L, 3L);
+    }
+
+    @Test
+    void flushSendsHumanConfirmBeforeTerminalEventClosesSubscriber() {
+        WorkflowSseEventMapper eventMapper = mock(WorkflowSseEventMapper.class);
+        LocalDbWorkflowSseEventService service = service(eventMapper, mock(WorkflowExecutionMapper.class));
+        WorkflowSseEventRecord event = new WorkflowSseEventRecord(
+                "wfi-001:4", "wfi-001", "conversation-001", 4L,
+                WorkflowSseEventType.HUMAN_CONFIRM.eventName(), "human-confirm-product",
+                "{\"status\":\"WAITING_CONFIRM\"}", Instant.now(),
+                Instant.now().plus(Duration.ofMinutes(10)));
+        when(eventMapper.findReplayEvents(any(), any(Long.class), any(Instant.class)))
+                .thenReturn(List.of(event));
+        service.subscribeNewRun("wfi-001");
+
+        service.flushPersistedEvents("wfi-001");
+
+        verify(eventMapper).findReplayEvents(
+                org.mockito.ArgumentMatchers.eq("wfi-001"),
+                org.mockito.ArgumentMatchers.eq(0L), any(Instant.class));
+        clearInvocations(eventMapper);
+        service.pollPersistedEvents();
+        verifyNoInteractions(eventMapper);
     }
 
     private LocalDbWorkflowSseEventService service(WorkflowSseEventMapper eventMapper,
