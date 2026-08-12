@@ -430,6 +430,27 @@ Model 文件：
 | `static/workflow-test/app.js` | fetch + ReadableStream SSE 解析、Last-Event-ID、Human Confirm 和 Token 拼接。 |
 | `static/workflow-test/styles.css` | 测试页面响应式样式。 |
 
+### 5.1 配置文件速查
+
+`application.yml` 是所有 profile 共用的基础配置。默认关闭 JDBC 与 Flyway，但仍装配
+ChatModel、ReactAgent、Skill 和 Tool，适合不依赖数据库的单 Agent 验证。模型连接通过
+`AI_API_KEY`、`AI_BASE_URL`、`AI_MODEL`、`AI_TEMPERATURE` 环境变量覆盖；密钥空值只允许
+Spring 上下文装配，真实模型调用仍会失败。Actuator 仅暴露 `health/info`，Swagger UI 位于
+`/swagger-ui.html`，日志通过 MDC 输出 `traceId`。
+
+`application-local-db.yml` 只在 `local-db` profile 下合并生效。它恢复 DataSource/Flyway
+自动配置，通过 MySQL 协议连接 OceanBase，并开启 MyBatis 下划线转驼峰。工作流自定义配置分为：
+
+| 配置组 | 当前值 | 运行语义 |
+| --- | --- | --- |
+| `checkpoint` | 活动7天、完成24小时、Schema v1、写重试5次 | 控制 Graph 状态恢复窗口、序列化版本和乐观锁重试。 |
+| `sse` | 连接5分钟、事件10分钟、轮询500ms | 控制单段连接、Last-Event-ID 重放窗口和跨实例跟随延迟。 |
+| `maintenance` | Checkpoint 每小时、SSE 每30秒、恢复每30秒 | 控制过期数据物理删除和失效 claim/lock 回收；调度周期会形成到期后的删除延迟。 |
+| `lifecycle` | 执行15分钟、claim 2分钟、等待确认24小时、心跳1分钟 | 控制多实例 owner 租约、故障接管和同会话并发锁；heartbeat 必须短于执行及claim租约。 |
+
+两份 YAML 已对每个属性添加就地注释，配置值本身未因此改变。SSE 的10分钟事件保留期与
+Checkpoint 的7天/24小时保留期是两套独立生命周期，不能混用。
+
 ---
 
 ## 6. 测试目录

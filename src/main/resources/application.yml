@@ -1,24 +1,38 @@
+# Web 服务基础配置。
 server:
+  # 应用监听端口；本地 Swagger UI 默认访问 http://localhost:8080/swagger-ui.html。
   port: 8080
+  # 收到停机信号后停止接收新请求，并等待正在处理的请求结束。
   shutdown: graceful
 
 spring:
   application:
+    # Spring 应用名，用于日志、监控以及未来服务注册标识。
     name: insurance-agent
+  # 默认 profile 不连接数据库，使模型、Agent、Skill 和 Tool 可以独立启动验证。
+  # 启用 local-db profile 时，application-local-db.yml 使用空列表恢复这两项自动配置。
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
       - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
   lifecycle:
+    # 优雅停机每个阶段最多等待30秒，超时后 Spring 继续关闭应用上下文。
     timeout-per-shutdown-phase: 30s
   ai:
+    # 使用 Spring AI OpenAI-compatible 协议连接模型服务；DeepSeek、DashScope兼容模式均可复用。
     openai:
+      # 模型密钥从环境变量读取；空默认值只保证应用可装配，不代表模型调用可用。
       api-key: ${AI_API_KEY:}
+      # 模型服务基础地址；未配置时使用 DashScope OpenAI 兼容地址。
       base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
       chat:
         options:
+          # 对话模型名称，可通过 AI_MODEL 切换，例如 deepseek-chat 或 qwen-plus。
           model: ${AI_MODEL:qwen-plus}
+          # 采样温度；当前0.2偏向稳定、可复现的金融业务回答，而非高随机创作。
           temperature: ${AI_TEMPERATURE:0.2}
+    # 显式指定只启用 OpenAI-compatible ChatModel，关闭当前阶段未使用的模型能力，
+    # 避免引入对应自动配置、凭据校验和无关 Bean。
     model:
       chat: openai
       embedding: none
@@ -28,28 +42,41 @@ spring:
         speech: none
         transcription: none
 
+# Spring Boot Actuator 运维端点配置。
 management:
   endpoints:
     web:
       exposure:
+        # 仅通过 HTTP 暴露健康检查和应用信息，避免开放敏感管理端点。
         include: health,info
   endpoint:
     health:
       probes:
+        # 开启 liveness/readiness 健康探针分组，便于未来容器平台接入。
         enabled: true
 
+# springdoc-openapi 与 Swagger UI 配置。
 springdoc:
   api-docs:
+    # 生成 OpenAPI JSON 文档。
     enabled: true
+    # OpenAPI JSON 地址。
     path: /v3/api-docs
   swagger-ui:
+    # 启用浏览器接口调试页面。
     enabled: true
+    # Swagger UI 入口地址。
     path: /swagger-ui.html
+    # 在页面中展示每次 HTTP 请求耗时。
     display-request-duration: true
 
+# 统一日志格式和级别。
 logging:
   pattern:
+    # 输出时间、级别、线程、MDC traceId、logger和正文；没有traceId时显示“-”。
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-}] %logger{36} - %msg%n"
   level:
+    # 第三方依赖默认只记录 INFO 及以上日志。
     root: INFO
+    # 当前项目代码默认记录 INFO 及以上日志；本地排障可临时改为 DEBUG。
     com.xxx.insurance: INFO

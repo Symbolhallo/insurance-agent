@@ -84,6 +84,21 @@ insurance.ai.workflow.lifecycle.heartbeat-interval: 1m
 - 未修改 Main Graph、Checkpoint、SSE、Memory、Human Confirm 或动态 DAG 业务逻辑，未新增数据库迁移。
 - 未执行 Git 提交或推送。
 
+## 2026-08-12：补全应用配置说明
+
+### 变更目标
+
+- 为 `application.yml` 和 `application-local-db.yml` 的每个配置组及关键属性补充中文说明。
+- 明确环境变量覆盖、默认 profile 与 `local-db` profile 的装配差异。
+- 说明 Checkpoint、SSE、定时清理和执行租约配置值对应的实际生命周期语义。
+
+### 变更内容
+
+- `application.yml` 增加端口、优雅停机、模型连接、禁用模型类型、Actuator、Swagger和日志注释。
+- `application-local-db.yml` 增加 OceanBase/MySQL连接、Flyway、MyBatis、Checkpoint、SSE、维护任务和租约注释。
+- `docs/project-understanding-guide.md` 新增配置文件速查表，并强调 SSE 与 Checkpoint 保留期相互独立。
+- 所有配置值保持不变，没有写入 API Key 或数据库密码。
+
 ## 2026-08-10：新增项目理解与开发地图
 
 ### 文档目标

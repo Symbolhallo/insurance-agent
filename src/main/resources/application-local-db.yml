@@ -1,41 +1,77 @@
+# local-db profile 的增量配置。
+# 启动方式：--spring.profiles.active=local-db。该文件会与 application.yml 合并，
+# 用于启用 OceanBase 持久化、Flyway、MyBatis、Graph Checkpoint、SSE事实表和租约恢复任务。
 spring:
   autoconfigure:
+    # 覆盖 application.yml 的排除列表，恢复 DataSource 和 Flyway 自动配置。
     exclude: []
   datasource:
+    # OceanBase 当前使用 MySQL 兼容模式，因此使用 MySQL JDBC 驱动。
     driver-class-name: com.mysql.cj.jdbc.Driver
+    # 默认连接本机2881端口的 insurance_agent 库；生产或不同环境必须通过 DB_URL 覆盖。
+    # 参数分别表示 UTF-8、关闭本地测试 SSL、上海时区及允许公钥获取。
     url: ${DB_URL:jdbc:mysql://127.0.0.1:2881/insurance_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    # 数据库账号，可通过 DB_USERNAME 覆盖。
     username: ${DB_USERNAME:root}
+    # 数据库密码只从环境变量读取；默认空值适配当前本地 OceanBase，禁止提交真实密码。
     password: ${DB_PASSWORD:}
   flyway:
+    # local-db 启动时自动检查并执行尚未应用的数据库迁移。
     enabled: true
+    # 按版本读取 src/main/resources/db/migration 下的 SQL 文件。
     locations: classpath:db/migration
+    # 数据库已有非 Flyway 对象但没有历史表时允许建立基线；空库仍从最低迁移版本执行。
     baseline-on-migrate: true
+    # 执行迁移前校验已应用脚本，防止历史 SQL 被修改后静默启动。
     validate-on-migrate: true
 
+# MyBatis 全局映射规则。
 mybatis:
   configuration:
+    # 将数据库 snake_case 字段自动映射为 Java camelCase 属性。
     map-underscore-to-camel-case: true
 
+# insurance.ai.workflow.* 是本项目自定义工作流配置，不属于 Spring AI Alibaba 官方属性。
 insurance:
   ai:
     workflow:
+      # Spring AI Alibaba Graph 状态快照在 OceanBase 中的保留与写入策略。
       checkpoint:
+        # ACTIVE、RUNNING、FAILED 等非完成线程保留7天，用于恢复和故障排查。
         active-retention: 7d
+        # COMPLETED、RELEASED 线程保留24小时；到期后由清理任务物理删除。
         completed-retention: 24h
+        # 持久化 State 的结构版本；未来不兼容变更时递增并提供迁移/兼容逻辑。
         state-schema-version: 1
+        # Checkpoint 乐观锁冲突时最多重试5次，避免多实例竞争造成无限循环。
         max-write-retries: 5
+      # SSE HTTP连接、事件重放和多实例数据库同步配置。
       sse:
+        # 单段 SseEmitter 最长保持5分钟；人工确认前后会使用两段独立 SSE 连接。
         connection-timeout: 5m
+        # 事件写入后保留10分钟，期间支持 Last-Event-ID 重放；到期后不再参与查询。
         event-retention: 10m
+        # 每个实例每500毫秒扫描一次 OceanBase 事件表，将其他实例产生的事件推给本机连接。
         database-poll-interval: 500ms
+      # 数据物理清理及过期执行权恢复任务的调度周期。
       maintenance:
+        # 应用启动1分钟后首次执行 Checkpoint 清理和租约恢复扫描。
         cleanup-initial-delay: 1m
+        # Checkpoint 每1小时清理一次；因此过期后的物理删除可能有最多约1小时延迟。
         cleanup-interval: 1h
+        # 应用启动30秒后首次物理清理过期 SSE 事件。
         sse-cleanup-initial-delay: 30s
+        # SSE 事件每30秒清理一次；10分钟到期后最多约30秒从数据库删除。
         sse-cleanup-interval: 30s
+        # 每30秒回收过期的 CONFIRMING/RESUMING claim 和失效 conversation lock。
         recovery-interval: 30s
+      # 多实例执行所有权、抢占和 heartbeat 配置。
       lifecycle:
+        # RUNNING 等正常执行状态一次租约15分钟；当前 owner 会持续续租。
         execution-lease: 15m
+        # CONFIRMING、RESUMING 短暂抢占状态租约2分钟，宕机后允许恢复任务释放。
         claim-lease: 2m
+        # WAITING_CONFIRM 最多为当前 conversation 保留24小时执行权。
         waiting-confirm-lease: 24h
+        # 当前 JVM 每1分钟按 owner + fencing token 条件续租；必须短于 execution/claim lease。
         heartbeat-interval: 1m
