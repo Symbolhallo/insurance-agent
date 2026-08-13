@@ -40,18 +40,26 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
 
     private final ConcurrentMap<String, Long> nodeStartedNanos = new ConcurrentHashMap<>();
 
-    /** 创建 Main Graph 生命周期观测器。 */
+    /**
+     * 创建 Main Graph 生命周期观测器：Mapper 仅在 State 尚未携带 conversationId 时回查实例，
+     * Publisher 负责把脱敏后的节点事件持久化到 OceanBase 并衔接本机即时投递/多实例轮询。
+     */
     public MainWorkflowLifecycleListener(WorkflowExecutionMapper workflowExecutionMapper,
                                          WorkflowEventPublisher workflowEventPublisher) {
         this.workflowExecutionMapper = workflowExecutionMapper;
         this.workflowEventPublisher = workflowEventPublisher;
     }
 
+    /** 记录 Graph 整体启动日志；执行权校验和实例状态变更不在 Listener 中完成。 */
     @Override
     public void onStart(String nodeId, Map<String, Object> state, RunnableConfig config) {
         log.info("[Workflow] action=graph-start status=running workflowInstanceId={}", workflowInstanceId(state));
     }
 
+    /**
+     * 在受支持节点执行前记录单次执行的单调时钟起点，发布 RUNNING 阶段事件并记录链路日志。
+     * 事件只包含节点名和状态，不会把完整 Graph State 或客户数据发送到前端。
+     */
     @Override
     public void before(String nodeId, Map<String, Object> state, RunnableConfig config, Long curTime) {
         nodeDefinition(nodeId).ifPresent(definition -> {
@@ -62,6 +70,10 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
         });
     }
 
+    /**
+     * 节点成功后回收计时状态、计算耗时、发布 SUCCESS 阶段事件并记录完成日志；
+     * 步骤表 SUCCESS CAS 和 Lease/Fence 校验仍由 WorkflowNodeExecutionGuard 完成。
+     */
     @Override
     public void after(String nodeId, Map<String, Object> state, RunnableConfig config, Long curTime) {
         nodeDefinition(nodeId).ifPresent(definition -> {
@@ -72,6 +84,10 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
         });
     }
 
+    /**
+     * 节点异常后回收计时状态，向前端发布不含内部异常细节的 FAILED 事件，并把原始异常写入服务日志；
+     * 本方法不吞掉 Graph 业务异常，也不负责把工作流实例收口为 FAILED。
+     */
     @Override
     public void onError(String nodeId, Map<String, Object> state, Throwable ex, RunnableConfig config) {
         nodeDefinition(nodeId).ifPresent(definition -> {
@@ -82,12 +98,18 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
         });
     }
 
+    /** 记录 Graph 到达 END 的观测日志；最终 Memory、Checkpoint、实例状态和 COMPLETE 事件另行事务收口。 */
     @Override
     public void onComplete(String nodeId, Map<String, Object> state, RunnableConfig config) {
         log.info("[Workflow] action=graph-complete status=success workflowInstanceId={}", workflowInstanceId(state));
     }
 
-    /** 发布不包含完整 State 的生命周期事件，Summary 和 Review 保持既有协议事件名。 */
+    /**
+     * 将一次节点生命周期转换成可靠 SSE 事件：先从 State（必要时回查实例表）解析工作流、会话和
+     * fencing token，再按节点映射 stage/summary/review 协议，只构造脱敏状态字段，最后交给
+     * WorkflowEventPublisher 校验当前执行权、分配单调 sequence、写入 OceanBase 事件事实表并尝试
+     * 投递本机连接；其他 JVM 上的连接由数据库 Poller 补偿。关键标识缺失时跳过非关键观测事件。
+     */
     private void publishStage(WorkflowNodeDefinition definition,
                               Map<String, Object> state,
                               String status,
@@ -110,6 +132,7 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
                 workflowInstanceId, conversationId, executionFenceToken, eventType, definition.code(), data);
     }
 
+    /** 只观测主图已登记节点，忽略框架内部节点和未知扩展节点。 */
     private Optional<WorkflowNodeDefinition> nodeDefinition(String nodeId) {
         return Arrays.stream(WorkflowNodeDefinition.values())
                 .filter(definition -> definition.code().equals(nodeId))
@@ -120,6 +143,7 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
         return value(state, MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, String.class).orElse(null);
     }
 
+    /** 按请求、对齐上下文、实例表的优先级解析会话，兼容节点执行前后 State 内容不同。 */
     private String conversationId(Map<String, Object> state, String workflowInstanceId) {
         return value(state, MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class)
                 .map(MainWorkflowRequest::conversationId)
@@ -131,6 +155,7 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
                 .orElse(null);
     }
 
+    /** 删除本次节点计时记录并返回耗时；缺少 before 回调时返回 -1，避免残留并发状态。 */
     private long elapsedMillis(Map<String, Object> state, String nodeId) {
         Long started = nodeStartedNanos.remove(executionKey(state, nodeId));
         return started == null ? -1L : TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);

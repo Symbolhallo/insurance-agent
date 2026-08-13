@@ -21,19 +21,22 @@ public class WorkflowStartService {
 
     private final WorkflowExecutionMapper workflowExecutionMapper;
 
-    /** 创建工作流启动事务服务。 */
+    /** 创建工作流启动事务服务；Mapper 的唯一约束和条件删除共同承担多实例幂等与会话互斥。 */
     public WorkflowStartService(WorkflowExecutionMapper workflowExecutionMapper) {
         this.workflowExecutionMapper = workflowExecutionMapper;
     }
 
     /**
-     * 在同一个事务中占用 conversation 并创建实例。数据库主键和幂等唯一键是最终并发防线，
-     * 因此多个 JVM 同时启动相同请求时也只有一个事务能够成功。
+     * 在一个事务中完成顶层工作流启动：先仅清理当前 conversation 已过期、无有效执行租约且无可恢复
+     * Graph Thread 保护的失效锁，再插入 conversation 独占锁、RUNNING 实例和全部 PENDING 步骤。
+     * conversation 主键与 (conversationId, requestId) 幂等唯一键是多 JVM 并发的最终防线；任一写入失败
+     * 整体回滚，唯一键冲突统一转换为 WORKFLOW_REQUEST_CONFLICT，不会留下半初始化实例。
      */
     @Transactional(rollbackFor = Exception.class)
     public void start(WorkflowInstanceRecord instance, List<WorkflowStepRecord> steps) {
         try {
-            // 启动链路 1：先条件删除当前会话已过期且失效的旧锁；有效执行或可恢复工作流仍受保护。
+            // 启动链路 1：仅回收当前 conversation 已过期且不再需要保护的旧锁；
+            // 仍有有效执行租约，或仍存在有效 Graph Thread 可恢复的工作流继续保持会话独占。
             workflowExecutionMapper.deleteExpiredInvalidConversationLock(
                     instance.conversationId(), instance.createdAt());
             workflowExecutionMapper.insertConversationLock(

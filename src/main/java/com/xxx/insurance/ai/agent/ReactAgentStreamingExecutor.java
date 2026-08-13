@@ -40,7 +40,11 @@ public class ReactAgentStreamingExecutor {
         return execute(reactAgent, input, null);
     }
 
-    /** 执行字符串输入，并在存在工作流上下文时实时发布模型增量内容。 */
+    /**
+     * 用一次 ReactAgent.stream 完成完整 ReAct/Tool 循环：持续保存最新 Graph State，只发布无 ToolCall 的
+     * AGENT_MODEL_STREAMING 助手正文，流结束后从最终 messages 提取并校验权威 AssistantMessage，再刷新
+     * Token Sink 的尾批次和结束标记。任何异常都会 abort 当前 streamId、保留已生成正文且不伪造正常结束。
+     */
     public AssistantMessage execute(ReactAgent reactAgent,
                                     String input,
                                     AgentTokenStreamContext streamContext) throws Exception {
@@ -65,7 +69,10 @@ public class ReactAgentStreamingExecutor {
         return execute(reactAgent, input, null);
     }
 
-    /** 执行历史消息输入，并在存在工作流上下文时实时发布模型增量内容。 */
+    /**
+     * 使用历史消息执行与字符串入口相同的单次 ReactAgent 流、Tool 循环、Token 过滤、最终 State 提取和
+     * 正常/异常资源收口；不会为获取最终回答再次 call，从而避免 Tool 重复执行。
+     */
     public AssistantMessage execute(ReactAgent reactAgent,
                                     List<Message> input,
                                     AgentTokenStreamContext streamContext) throws Exception {
@@ -85,7 +92,10 @@ public class ReactAgentStreamingExecutor {
         }
     }
 
-    /** 同时维护最终 State，并严格过滤可向前端发布的模型增量事件。 */
+    /**
+     * 对每个 NodeOutput 先保存最新 State，再仅接受 AGENT_MODEL_STREAMING、AssistantMessage、无 ToolCall、
+     * 非空正文的增量块；Tool 请求、Tool 完成、Hook 事件和空块不进入面向用户的 Token SSE。
+     */
     private void handleOutput(NodeOutput output,
                               AtomicReference<OverAllState> lastState,
                               StreamPublication publication) {
@@ -135,7 +145,10 @@ public class ReactAgentStreamingExecutor {
         return message;
     }
 
-    /** 保存单次模型调用的流编号和块序号，支持并行子智能体独立拼接。 */
+    /**
+     * 维护单次模型调用的稳定 streamId 和单调 chunkIndex，使并行子智能体可独立拼接；仅存在工作流上下文
+     * 时调用 Sink，正常结束强制刷新尾批次并发结束标记，异常结束只刷新正文和释放临时批次。
+     */
     private final class StreamPublication {
 
         private final AgentTokenStreamContext context;

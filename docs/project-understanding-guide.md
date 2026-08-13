@@ -24,6 +24,11 @@
 
 > Spring AI Alibaba API 的详细参考仍以 `docs/spring-ai-alibaba/` 为准；本文主要解释这些 API 在当前项目中的实际落点。
 
+关键复合方法的 Javadoc 采用“外层即可看懂完整链路”的写法：除当前方法直接动作外，还应概括其同步调用
+的事务/CAS、Lease/Fence、Checkpoint、SSE 事实落库和失败补偿语义；同时必须明确事务提交后的网络发送
+属于即时 flush、数据库 Poller 或 Last-Event-ID 重放，不能把“事件已落库”描述成“前端已收到”。简单
+getter、纯转换和显而易见委托保持短注释，避免注释重复代码本身。
+
 ---
 
 ## 2. 先看整体分层

@@ -15,8 +15,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 产品分析智能体受控调用 API。
  *
- * <p>该 Controller 只暴露 ProductAnalysisAgent 的自然语言调用入口，用于 Phase1
- * 单 Agent 闭环本地验证。当前不提供 Workflow、Planner、Memory 或跨智能体调用 API。</p>
+ * <p>该 Controller 暴露 ProductAnalysisAgent 的独立自然语言调用入口；local-db 下可使用会话 Memory 和
+ * 审计。Main Workflow/Planner 通过 Java 业务门面调用同一 Agent，不经本 HTTP Controller 转发。</p>
  */
 @Tag(name = "ProductAnalysisAgent", description = "保险产品分析智能体受控调用接口")
 @RestController

@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
  * 产品分析智能体自然语言调用请求。
  *
  * @param message 用户自然语言问题
- * @param conversationId 会话标识，当前仅透传，后续接入 Memory 时使用
+ * @param conversationId 会话标识；local-db 独立调用时用于窗口记忆、长期记忆和审计
  */
 @Schema(description = "产品分析智能体自然语言调用请求")
 public record ProductAnalysisChatRequest(

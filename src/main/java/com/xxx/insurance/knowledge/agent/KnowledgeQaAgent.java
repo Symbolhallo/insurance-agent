@@ -69,7 +69,11 @@ public class KnowledgeQaAgent {
         return chat(request, AgentExecutionContext.standalone(userMessage));
     }
 
-    /** 使用 Workflow 提供的链路上下文执行知识问答并关联调用审计。 */
+    /**
+     * 执行完整知识问答链路：按上下文选择历史记忆和 call/stream，由 ReactAgent 渐进加载知识 Skill 并通过
+     * Tool 获取事实；成功时独立模式原子保存问答记忆，DAG 模式只写调用流水，失败时尽力写 FAILED 审计。
+     * Workflow/step/task 和用户原话均从 executionContext 进入审计，模型仍使用标准化子问题推理。
+     */
     public KnowledgeQaChatResponse chat(KnowledgeQaChatRequest request,
                                         AgentExecutionContext executionContext) {
         validate(request);
@@ -142,7 +146,7 @@ public class KnowledgeQaAgent {
         return skillsAgentHook;
     }
 
-    /** 根据是否启用会话记忆选择单消息或历史消息列表调用 ReactAgent。 */
+    /** 根据记忆与 Token 开关选择输入和 call/stream，并从同一次 ReAct/Tool 执行获得增量正文与最终回答。 */
     private AssistantMessage callReactAgent(KnowledgeQaChatRequest request,
                                             MemoryCallContext memoryContext,
                                             AgentExecutionContext executionContext) throws Exception {

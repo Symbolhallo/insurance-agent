@@ -10,7 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.Map;
 
-/** 原子提交人工确认暂停状态、步骤审计、会话锁和可重放事件。 */
+/** 原子提交人工确认暂停状态、步骤审计、会话锁和可重放 HUMAN_CONFIRM Outbox 事件。 */
 @Service
 @Profile("local-db")
 public class WorkflowPauseService {
@@ -21,7 +21,7 @@ public class WorkflowPauseService {
     private final LocalDbWorkflowSseEventService eventService;
     private final WorkflowLifecycleProperties lifecycleProperties;
 
-    /** 创建人工暂停事务服务。 */
+    /** 创建人工暂停事务服务，组合状态机 Mapper、SSE 事实表和等待确认租约配置。 */
     public WorkflowPauseService(WorkflowExecutionMapper executionMapper,
                                 LocalDbWorkflowSseEventService eventService,
                                 WorkflowLifecycleProperties lifecycleProperties) {
@@ -31,7 +31,11 @@ public class WorkflowPauseService {
     }
 
     /**
-     * 只有当前 owner/token/lease 能把运行实例暂停；任一步失败都会回滚，避免状态与确认事件分离。
+     * 将 Graph 中断原子转换为可恢复的人工确认状态。依次用 owner、fencing token 和有效 lease 校验并
+     * 更新人工确认步骤，迁移实例到 WAITING_CONFIRM，延长 conversation 独占锁到人工确认期限，最后在
+     * 同一事务写入带候选信息的 HUMAN_CONFIRM 事实事件。任一步 CAS 或事件写入失败都会整体回滚，避免
+     * 出现实例已暂停但前端无可重放确认事件，或事件存在但 Checkpoint 不允许确认的分裂状态；实际网络
+     * 发送发生在事务提交后的 flush/Poller 中。
      */
     @Transactional(rollbackFor = Exception.class)
     public void pauseForProductConfirmation(String workflowInstanceId,

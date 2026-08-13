@@ -1,5 +1,14 @@
 # 工程变更记录
 
+## 2026-08-13：主工作流关键方法注释与真实链路对齐
+
+- 重新审阅主工作流 HTTP/SSE 入口、应用门面、生命周期 Listener、启动/暂停/收口事务、节点安全门禁和 OceanBase SSE 事件服务的关键复合方法。
+- 外层注释不再只描述“调用发布器/调用服务”，而是概括实际下游链路：owner/lease/fencing token 校验、数据库 CAS、sequence 分配、事实表落库、即时 emitter 投递、跨实例 Poller 与 Last-Event-ID 补偿。
+- 明确区分事务内完成的状态一致性和事务提交后的网络交付，避免把 Outbox 已落库误写为前端已经收到；同时记录失败是否回滚业务 Graph、何时保留游标、何时关闭连接。
+- 补全工作流启动、人工确认、Checkpoint 恢复、动态执行收口和迟到异常幂等保护的入口级说明；普通 getter、简单 DTO 转换和显而易见代码保持简洁。
+- 清理 ProductAnalysisAgent、SkillConfig、AiConfig、Memory 等 Phase1 遗留描述，修正“尚未接入 Workflow/Memory/Tool”与当前四领域 Agent、动态 DAG、MyBatis/OceanBase 实现不一致的问题。
+- 本次只优化注释与项目理解信息，不改变 API、Bean、Graph、SQL、SSE 协议或业务执行逻辑。
+
 ## 2026-08-13：增加 IDEA 长断点调试 Profile
 
 - 新增 `local-debug` Profile Group，按顺序组合 `local-db` 与 `debug-timing`；IDEA 只需在 Active profiles 填写 `local-debug`。

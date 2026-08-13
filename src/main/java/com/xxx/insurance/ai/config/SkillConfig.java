@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>Skill 是 Spring AI Alibaba Agent Framework 向 ReactAgent 注入领域能力上下文的机制。
  * 它不是普通的 Markdown 文件读取器，而是由 SkillRegistry 管理的一组领域能力说明，
- * 后续 ReactAgent 会通过 SkillsAgentHook 获得以下能力：</p>
+ * 四个领域 ReactAgent 通过各自的 SkillsAgentHook 获得以下能力：</p>
  *
  * <ul>
  *     <li>在模型系统提示词中注入可用 Skill 列表；</li>
@@ -20,9 +20,9 @@ import org.springframework.context.annotation.Configuration;
  *     <li>在模型选择某个 Skill 后，按 Skill 规则增强推理上下文。</li>
  * </ul>
  *
- * <p>当前 Phase1-Task2 只完成 ProductAnalysisAgent 的 Skill Registry 和 Hook 装配。
- * 本配置不会创建 ProductAnalysisAgent，不会组装 ReactAgent，也不会启用业务 Tool Calling。
- * 这样可以先验证 Skill 资源加载链路，再在后续任务中把 Hook 注入 ReactAgent。</p>
+ * <p>本配置只创建四组相互隔离的 Registry/Hook，不创建 ReactAgent 或业务 Tool。各领域 config 将专属
+ * Hook、ToolCallback 和共享 ChatModel 组装进对应 ReactAgent，避免共享 {@code skills} 根目录导致规则、
+ * read_skill 结果或工具能力跨产品、知识、保单、资产子智能体泄漏。</p>
  */
 @Configuration
 public class SkillConfig {
@@ -46,7 +46,7 @@ public class SkillConfig {
     /**
      * ProductAnalysisAgent 专属 Skill 根路径。
      *
-     * <p>不要使用共享根路径 {@code skills}，否则未来 policy、knowledge、asset 等子智能体
+     * <p>不要使用共享根路径 {@code skills}，否则 policy、knowledge、asset 等子智能体
      * 的 Skill 会被产品分析智能体误加载。这里将 Registry 限定到
      * {@code classpath:skills/product-analysis}，确保产品分析智能体只能看到自己的
      * limited-product-analysis 与 batch-product-analysis。</p>
@@ -64,8 +64,8 @@ public class SkillConfig {
      *
      * <p>ClasspathSkillRegistry 会从 classpath 扫描 Skill 目录。开发态读取
      * {@code src/main/resources}，打包后读取应用 Jar 内资源；框架会解析每个 Skill 目录下的
-     * SKILL.md 并生成 SkillMetadata。后续 ProductAnalysisAgent 的 ReactAgent 只需要注入
-     * 这个 Registry 对应的 SkillsAgentHook，即可获得产品分析 Skill 上下文。</p>
+     * SKILL.md 并生成 SkillMetadata。ProductAnalysisAgent 的 ReactAgent 注入这个 Registry 对应的
+     * SkillsAgentHook 后，只会渐进披露产品分析 Skill 元数据和详细规则。</p>
      *
      * @return 只加载 product-analysis Skill 根目录的 SkillRegistry
      */
@@ -79,15 +79,15 @@ public class SkillConfig {
     /**
      * 创建产品分析智能体专属 SkillsAgentHook。
      *
-     * <p>SkillsAgentHook 是 SkillRegistry 与 ReactAgent 之间的桥。后续组装 ReactAgent 时，
+     * <p>SkillsAgentHook 是 SkillRegistry 与 ReactAgent 之间的桥。ReactAgent 运行时，
      * 该 Hook 会在 Agent 执行前提供 Skill 列表和 Skill 读取工具，并通过
      * SkillsInterceptor 将 Skill 说明注入模型调用链。</p>
      *
-     * <p>当前没有配置 groupedTools 或 ToolCallbackResolver，因为 Phase1-Task2 不启用业务
-     * Tool Calling。等产品分析 Tool Registry 建立后，再把 Skill 与 Tool 的映射接入这里。</p>
+     * <p>业务 ToolCallback 由产品 Agent config 直接注册到 ReactAgent，不通过 groupedTools 动态启停；
+     * Skill 负责渐进披露任务规则，Tool 负责执行确定性产品事实查询，两者职责分离。</p>
      *
      * @param skillRegistry 产品分析智能体专属 SkillRegistry
-     * @return 产品分析智能体后续组装 ReactAgent 时使用的 SkillsAgentHook
+     * @return 产品分析 ReactAgent 当前使用的 SkillsAgentHook
      */
     @Bean(PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK)
     public SkillsAgentHook productAnalysisSkillsAgentHook(
@@ -131,7 +131,7 @@ public class SkillConfig {
                 .build();
     }
 
-    /** 将保单 SkillRegistry 接入保单 ReactAgent；当前仅加载能力边界说明。 */
+    /** 将保单 SkillRegistry 接入保单 ReactAgent，提供渐进披露和 read_skill 能力。 */
     @Bean(POLICY_QUERY_SKILLS_AGENT_HOOK)
     public SkillsAgentHook policyQuerySkillsAgentHook(
             @Qualifier(POLICY_QUERY_SKILL_REGISTRY) SkillRegistry skillRegistry) {
@@ -149,7 +149,7 @@ public class SkillConfig {
                 .build();
     }
 
-    /** 将资产 SkillRegistry 接入资产 ReactAgent；当前仅加载能力边界说明。 */
+    /** 将资产 SkillRegistry 接入资产 ReactAgent，提供渐进披露和 read_skill 能力。 */
     @Bean(ASSET_QUERY_SKILLS_AGENT_HOOK)
     public SkillsAgentHook assetQuerySkillsAgentHook(
             @Qualifier(ASSET_QUERY_SKILL_REGISTRY) SkillRegistry skillRegistry) {

@@ -26,7 +26,7 @@ public record ProductAnalysisChatResponse(
         @Schema(description = "智能体名称", example = "product-analysis-agent")
         String agentName,
 
-        @Schema(description = "会话编号，当前阶段仅透传", example = "local-test-001")
+        @Schema(description = "会话编号，用于 Memory、审计和工作流关联", example = "local-test-001")
         String conversationId,
 
         @Schema(description = "单次 Agent 调用标识", example = "pai-7b65d4eecdd44d73a4d15de78d986f21")

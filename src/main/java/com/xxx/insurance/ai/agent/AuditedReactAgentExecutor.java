@@ -33,7 +33,7 @@ public class AuditedReactAgentExecutor {
     private final AiModelProperties aiModelProperties;
     private final ReactAgentStreamingExecutor streamingExecutor;
 
-    /** 创建统一执行器并注入审计、模型配置和流式执行能力。 */
+    /** 创建统一执行器，组合持久化审计、当前模型标识和单次 ReactAgent 流式执行适配器。 */
     public AuditedReactAgentExecutor(AgentMemoryService agentMemoryService,
                                      AiModelProperties aiModelProperties,
                                      ReactAgentStreamingExecutor streamingExecutor) {
@@ -42,7 +42,12 @@ public class AuditedReactAgentExecutor {
         this.streamingExecutor = streamingExecutor;
     }
 
-    /** 调用真实 ReactAgent，并将成功或失败结果写入 Agent 调用流水。 */
+    /**
+     * 执行一次受审计的领域 Agent 调用。先校验查询并生成 invocationId，再按工作流上下文选择
+     * ReactAgent.call 或单次 stream/ReAct Tool 循环，拒绝空最终答案；成功时记录耗时并只追加子任务调用
+     * 流水（不并发覆盖会话 ChatMemory），返回统一 SubAgentExecutionResult。模型、Tool 或流异常时尽力写
+     * FAILED 审计，审计持久化失败不会覆盖原始异常，最终统一抛出领域 Agent 调用失败。
+     */
     public SubAgentExecutionResult execute(ReactAgent reactAgent,
                                            String agentName,
                                            String invocationPrefix,
@@ -98,7 +103,11 @@ public class AuditedReactAgentExecutor {
         }
     }
 
-    /** 根据工作流 SSE 开关选择 call 或 stream，流内容使用当前任务标识发布。 */
+    /**
+     * 根据工作流 Token 开关选择同步 call 或单次 stream：流式路径用 workflow/task/agent/phase 构造独立
+     * streamContext，逐块交给可靠 SSE Sink，同时从同一次 ReactAgent 最终 State 提取权威 AssistantMessage；
+     * 独立非工作流调用没有 SSE 上下文，但仍复用相同最终消息校验。
+     */
     private AssistantMessage call(ReactAgent reactAgent,
                                   String agentName,
                                   String query,
@@ -119,7 +128,10 @@ public class AuditedReactAgentExecutor {
         return streamingExecutor.execute(reactAgent, query, streamContext);
     }
 
-    /** 审计失败，但不让审计异常覆盖原始模型异常。 */
+    /**
+     * 在启用 local-db 且存在 conversationId 时构造 FAILED 调用流水并持久化；错误文本限制为数据库长度。
+     * 该补偿自身异常只记录 WARN，确保调用方看到的 cause 始终是原始模型/Tool/流失败。
+     */
     private void saveFailure(String agentName,
                              String invocationId,
                              String query,

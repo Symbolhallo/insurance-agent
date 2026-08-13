@@ -26,20 +26,18 @@ import java.util.List;
 /**
  * 产品分析智能体装配配置。
  *
- * <p>本配置开始进入 Spring AI Alibaba Agent Framework 的原生路线：
- * 使用全局 {@link ChatModel} 作为模型能力，使用 Phase1-Task2 创建的
- * {@link SkillsAgentHook} 注入产品分析 Skill 上下文，再组装为 {@link ReactAgent}。</p>
+ * <p>使用全局 {@link ChatModel}、产品专属 {@link SkillsAgentHook}、ModelCallLimitHook 和
+ * ProductAnalysisToolCallback 装配 {@link ReactAgent}，再通过业务门面接入 Memory、流式输出和审计。</p>
  *
- * <p>当前仍然保持单 Agent 闭环验证阶段的边界：</p>
+ * <p>产品域装配边界：</p>
  *
  * <ul>
  *     <li>只注册产品分析 ToolCallback；</li>
- *     <li>local-db profile 下可接入 Spring AI ChatMemory；</li>
- *     <li>不编排 Graph Workflow；</li>
- *     <li>只提供用于本地验证的受控产品分析 API。</li>
+ *     <li>local-db profile 下接入 Spring AI ChatMemory 与 OceanBase 审计；</li>
+ *     <li>既支持独立 API，也作为 Main Workflow 动态 DAG 子智能体；</li>
+ *     <li>模型调用次数由 Spring AI Alibaba 原生 Hook 限制。</li>
  * </ul>
  *
- * <p>后续阶段会在这个 ReactAgent 上继续追加 Memory、审计和更完整的模型调用入口。</p>
  */
 @Configuration
 public class ProductAnalysisAgentConfig {
@@ -87,7 +85,7 @@ public class ProductAnalysisAgentConfig {
      * Confirm 等扩展能力。本阶段注入 SkillsAgentHook 与产品分析 ToolCallback，让模型
      * 能够读取产品分析 Skill，并在需要确定性产品数据时调用 product_analysis 工具。</p>
      *
-     * <p>当前只允许产品分析 Tool，不接入保单查询、资产查询、知识库检索等其他业务 Tool，
+     * <p>只允许产品分析 Tool，不接入保单查询、资产查询、知识库检索等其他业务 Tool，
      * 避免 ProductAnalysisAgent 越过自身业务边界。</p>
      *
      * @param chatModel 全局复用的单模型 ChatModel Bean
@@ -116,9 +114,8 @@ public class ProductAnalysisAgentConfig {
     /**
      * 创建业务侧产品分析智能体入口。
      *
-     * <p>该 Bean 让 product 业务域不直接暴露 ReactAgent 细节。本阶段额外注入
-     * ProductAnalysisService 与 ProductAnalysisFormatter，提供一个不触发模型调用的
-     * 受控业务调用边界。未来如果升级为 Agent -> Model Router -> 多模型选择，
+     * <p>该 Bean 让 product 业务域不直接暴露 ReactAgent 细节，并组合确定性 Service/Formatter、
+     * 输出合同检查、Memory、审计和流式执行。未来升级为 Agent -> Model Router -> 多模型选择时，
      * 或者把该边界包装成 ProductAnalysisTool，都可以优先在业务入口中演进。</p>
      *
      * @param reactAgent 产品分析 ReactAgent

@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
  * 默认长期记忆实现。
  *
  * <p>默认 profile 不连接本地数据库，因此该实现不执行任何持久化动作。启用 local-db
- * profile 后会由 JDBC 实现接管。</p>
+ * profile 后由 MyBatis/OceanBase 实现接管。</p>
  */
 @Service
 @Profile("!local-db")

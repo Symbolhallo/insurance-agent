@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Profile;
  * ChatMemory 配置。
  *
  * <p>该配置只在 {@code local-db} profile 下启用。默认启动和单元测试不强依赖本地数据库，
- * 本地联调 Memory 时再通过 OceanBase/MySQL 协议启用 JDBC 存储。</p>
+ * 本地联调 Memory 时再通过 OceanBase/MySQL 协议启用 MyBatis 持久化。</p>
  */
 @Configuration
 @Profile("local-db")

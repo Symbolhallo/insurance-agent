@@ -13,7 +13,7 @@ import java.util.List;
  * @param temperature 采样温度
  * @param apiKeyConfigured API Key 是否已配置
  * @param apiKeyMasked API Key 脱敏展示
- * @param activeAgent 当前 Phase1 活跃智能体
+ * @param activeAgent 当前状态接口展示的主验证智能体
  * @param skillCount 当前智能体加载的 Skill 数量
  * @param skills 当前智能体 Skill 名称
  * @param tools 当前智能体 Tool 名称
@@ -38,7 +38,7 @@ public record AiModelStatus(
         @Schema(description = "API Key 脱敏展示", example = "sk-****abcd")
         String apiKeyMasked,
 
-        @Schema(description = "当前 Phase1 活跃智能体", example = "product-analysis-agent")
+        @Schema(description = "当前状态接口展示的主验证智能体", example = "product-analysis-agent")
         String activeAgent,
 
         @Schema(description = "当前智能体加载的 Skill 数量", example = "2")

@@ -161,7 +161,11 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     }
 
     /**
-     * 使用预先分配的实例编号执行 Main Graph，并把 Token 流开关写入可恢复 Graph State。
+     * 执行一次完整顶层工作流。先序列化请求并预分配步骤编号，在启动事务中取得 conversation 独占锁、
+     * 创建 RUNNING 实例和 PENDING 步骤，再发布 START 事实事件；随后以 workflowInstanceId 作为 Checkpoint
+     * threadId，把固定 fencing token、步骤映射和 Token 开关写入 State 并执行 Main Graph。Graph 中断时
+     * 原子转为 WAITING_CONFIRM 并发送候选事件；到达 END 时统一收口 Memory、Checkpoint、实例终态和
+     * COMPLETE Outbox；未处理异常走幂等 FAILED 收口，不能覆盖已经提交的业务终态。
      */
     @Override
     public MainWorkflowResponse run(String workflowInstanceId,
@@ -185,7 +189,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 lifecycleProperties.getInstanceId(),
                 leaseUntil,
                 startedAt);
-        // 主工作流链路 3：原子占用 conversation，并持久化实例和步骤；双击或并发消息在数据库层被拒绝。
+        // 主工作流链路 3：在同一事务内占用 conversation 并持久化实例和步骤；双击或并发消息在数据库层被拒绝。
+        // 数据库唯一约束防止同一请求重复提交，以及同一 conversation 并发启动多个顶层工作流。
         workflowStartService.start(
                 instanceRecord,
                 workflowStepRecords(workflowInstanceId, workflowStepIds, inputJson, startedAt));
@@ -232,7 +237,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         return confirmProducts(workflowInstanceId, request, false);
     }
 
-    /** 确认产品并按调用入口指定的流式模式原子抢占、恢复 Graph。 */
+    /**
+     * 同步确认入口的完整门面：先 CAS 抢占 WAITING_CONFIRM 并取得新 fencing token，再校验/保存产品、
+     * 更新 Checkpoint State 和执行租约，最后从中断点恢复 Graph；流式开关决定恢复后的模型增量是否发布。
+     */
     @Override
     public MainWorkflowResponse confirmProducts(String workflowInstanceId,
                                                 ProductConfirmationRequest request,
@@ -243,7 +251,11 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 workflowInstanceId, request, tokenStreamingEnabled, executionFenceToken);
     }
 
-    /** 原子抢占 WAITING_CONFIRM 实例，确保并发请求只有一个能够进入恢复链路。 */
+    /**
+     * 校验实例属于当前 conversation 且处于 WAITING_CONFIRM，再以数据库 CAS 将其迁移为 CONFIRMING、
+     * 写入当前 JVM owner、短 claim lease 并递增 fencing token；随后回读并验证执行权。并发确认只有一个
+     * 请求成功，其余返回 WORKFLOW_STATE_CONFLICT，不能从同一 Checkpoint 启动重复分支。
+     */
     @Override
     public long claimProductConfirmation(String workflowInstanceId, String conversationId) {
         WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
@@ -263,7 +275,12 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         return requireOwnedFenceToken(workflowInstanceId, STATUS_CONFIRMING);
     }
 
-    /** 使用当前请求已经获得的确认权写入产品并恢复 Graph。 */
+    /**
+     * 使用调用方已取得的 confirmation fencing token 恢复工作流：回读 Checkpoint 候选和产品解析结果，
+     * 拒绝候选集合之外的选择，保存 conversation 范围内标准产品，把实例转回 RUNNING 并续 execution lease，
+     * 通过 updateState 写入确认结果/Token 开关，再 withResume 经过人工确认节点继续后续主图。END 后执行
+     * 正常事务收口；任何异常进入幂等失败收口，旧 token 无法写状态、Checkpoint 或 SSE 事件。
+     */
     @Override
     public MainWorkflowResponse confirmClaimedProducts(String workflowInstanceId,
                                                        ProductConfirmationRequest request,
@@ -316,7 +333,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         }
     }
 
-    /** 后台恢复任务未提交时将 CONFIRMING 安全退回 WAITING_CONFIRM。 */
+    /**
+     * 当 SSE 订阅或线程池提交失败时，按 workflow、conversation、owner 和 fencing token 条件把尚未消费的
+     * CONFIRMING 抢占退回 WAITING_CONFIRM；CAS 失败说明执行权已转移或恢复已开始，仅记录日志不覆盖新状态。
+     */
     @Override
     public void releaseProductConfirmationClaim(String workflowInstanceId,
                                                 String conversationId,
@@ -397,7 +417,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     }
 
     /**
-     * 将 Graph 中断快照转换为 WAITING_CONFIRM 响应，同时落库 Checkpoint 编号、候选结果和步骤状态。
+     * 将 interruptBefore 快照转换为人工确认协议。读取并校验召回决定、候选结果、步骤映射和 checkpointId，
+     * 只抽取可展示的脱敏候选构造响应，再调用暂停事务原子更新步骤/实例、延长 conversation 锁并写入
+     * HUMAN_CONFIRM Outbox。事务提交后立即从事实表 flush；实际 emitter.send 成功才关闭第一段 SSE，
+     * 失败则由数据库 Poller 或 Last-Event-ID 重连补偿，HTTP/Graph 线程无需等待用户选择。
      */
     private MainWorkflowResponse waitingConfirmResponse(StateSnapshot snapshot,
                                                         MainWorkflowRequest request,
@@ -481,7 +504,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     }
 
     /**
-     * 从 END State 组装最终响应，并依次完成最终会话记忆、工作流终态和 Checkpoint 状态收口。
+     * 从 END State 强类型读取对齐、路由、召回、计划、DAG、Summary、Review 和唯一 finalAnswer，计算
+     * SUCCESS/PARTIAL_SUCCESS/REVIEW_BLOCKED/FAILED 业务终态并组装响应。随后用 State 中固定 fencing token
+     * 调用最终收口事务，原子写实例终态、最终 Memory、步骤、Checkpoint、COMPLETE Outbox 和释放会话锁；
+     * 事务提交后立即 flush，发送失败仍可由 Poller/Last-Event-ID 补偿。重复收口只记录幂等忽略日志。
      */
     private MainWorkflowResponse complete(OverAllState finalState,
                                           String workflowInstanceId,
@@ -660,7 +686,11 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         }
     }
 
-    /** 创建 Graph 调用配置，以 workflowInstanceId 作为 Checkpoint threadId。 */
+    /**
+     * 创建可恢复 Graph 配置：workflowInstanceId 同时作为 Checkpoint threadId，项目有界线程池承担并行节点，
+     * metadata 固定携带 workflow/conversation、当前 owner 和 fencing token，使 OceanBase Saver 的每次写入
+     * 都能拒绝旧执行代次，而不是在恢复过程中重新查询并误用新 token。
+     */
     private RunnableConfig runnableConfig(String workflowInstanceId,
                                           String conversationId,
                                           long executionFenceToken) {
@@ -682,7 +712,12 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 .orElseThrow(() -> new IllegalStateException("Main workflow graph returned empty " + description));
     }
 
-    /** 统一收口未处理异常，将实例、待执行步骤和 Checkpoint 标记为失败。 */
+    /**
+     * 统一处理主图外围未捕获异常：截断数据库错误摘要，使用当前 fencing token 尝试把非终态实例、待执行
+     * 步骤和 Checkpoint 原子收口为 FAILED，并写 ERROR Outbox/释放 conversation 锁；提交成功后立即 flush。
+     * 若实例已经 SUCCESS、PARTIAL_SUCCESS 或 REVIEW_BLOCKED，则失败 CAS 返回 false，只记录迟到异常，
+     * 绝不覆盖已提交终态。
+     */
     private void fail(String workflowInstanceId, long executionFenceToken, Exception exception) {
         Instant endedAt = Instant.now();
         String errorMessage = truncateErrorMessage(exception);
@@ -701,7 +736,13 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 WORKFLOW_CODE, workflowInstanceId, exception);
     }
 
-    /** 将已脱敏的工作流生命周期数据交给 profile 对应的 SSE 发布器。 */
+    /**
+     * 发布执行期工作流事件的统一外层入口。调用 local-db Publisher 后，会在实例级并发锁内以当前 JVM
+     * owner、executionFenceToken 和未过期 lease 做数据库 CAS，原子分配工作流 sequence，将脱敏 data
+     * 序列化为带 expireAt 的 OceanBase 事件事实，再从事实表按 sequence 尝试投递本 JVM SseEmitter；
+     * 其他实例连接由定时 Poller 获取，发送失败保留数据库事实供 Poller/Last-Event-ID 重放，且不会回滚
+     * 已成功的业务 Graph。非 local-db Profile 使用 NoOp Publisher，不产生持久化或网络副作用。
+     */
     private void publishEvent(String workflowInstanceId,
                               String conversationId,
                               long executionFenceToken,

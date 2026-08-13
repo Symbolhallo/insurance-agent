@@ -78,9 +78,9 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     }
 
     /**
-     * 为尚未创建数据库实例的新运行注册实时连接。
-     *
-     * <p>调用方必须随后使用同一个 workflowInstanceId 启动 MainWorkflowService。</p>
+     * 为尚未创建数据库实例的新运行建立带配置超时的 SseEmitter，注册完成/超时/错误清理回调，并以
+     * workflowInstanceId 保存本 JVM 订阅游标。调用方必须随后使用同一编号启动 MainWorkflowService，
+     * 从而让 START 和首模型块可以在实例创建后立即通过事实表投递，避免先执行后订阅造成首事件丢失。
      */
     public SseEmitter subscribeNewRun(String workflowInstanceId) {
         SseEmitter emitter = new SseEmitter(properties.connectionTimeout().toMillis());
@@ -89,20 +89,27 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     }
 
     /**
-     * 根据 Last-Event-ID 重放持久事件，并在工作流仍运行时衔接实时事件。
+     * 根据 Last-Event-ID 校验工作流归属并定位 sequence，在实例级锁内重放尚未过期的 OceanBase 事件；
+     * 检测到保留期造成的序号缺口时返回 410。实例仍为 RUNNING/RESUMING/CONFIRMING 时，以最后成功发送
+     * sequence 注册实时游标，保证历史重放与后续数据库轮询之间无窗口；终态实例重放完即结束连接。
      */
     public SseEmitter reconnect(String workflowInstanceId, String lastEventId) {
         return subscribeExistingRun(workflowInstanceId, lastEventId, false);
     }
 
     /**
-     * 为已经原子抢占为 CONFIRMING 的实例重放遗漏事件并建立实时订阅。
+     * 为已经由上层 CAS 抢占为 CONFIRMING 的实例建立恢复连接：先补发 Last-Event-ID 后的事实事件，再
+     * 强制注册实时游标，即使恢复 Graph 尚未从 CONFIRMING 转回 RUNNING，也不会丢失后续模型和阶段事件。
      */
     public SseEmitter subscribeConfirmationResume(String workflowInstanceId, String lastEventId) {
         return subscribeExistingRun(workflowInstanceId, lastEventId, true);
     }
 
-    /** 在同一实例锁内完成历史重放和实时订阅，避免重放与新事件之间出现窗口。 */
+    /**
+     * 完成重连核心链路：解析游标、校验实例/确认抢占状态、检测过期缺口、按序发送历史事件，并依据
+     * 实例状态登记实时订阅或结束响应。全过程使用 workflowInstanceId 级锁与 SseClient 单连接锁，避免
+     * 即时 publish、定时 Poller 和重连线程交叉推进同一游标。
+     */
     private SseEmitter subscribeExistingRun(String workflowInstanceId,
                                             String lastEventId,
                                             boolean confirmationResume) {
@@ -139,7 +146,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         }
     }
 
-    /** 仅在恢复订阅仍存在时发送兜底错误并关闭连接，避免重复系统级失败事件。 */
+    /**
+     * 仅在本 JVM 仍持有恢复订阅时，用实例当前 fencing token 持久化一条脱敏 ERROR 事件并尝试投递，
+     * 随后主动清理连接；若工作流事务层已写入终态错误或连接已结束，则不再制造重复系统级事件。
+     */
     public void failSubscribedRun(String workflowInstanceId,
                                   String conversationId,
                                   String message) {
@@ -155,7 +165,12 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         completeSubscribers(workflowInstanceId);
     }
 
-    /** 在同一数据库事务中分配序号并写入事件，随后从事实表按序投递给本地订阅者。 */
+    /**
+     * 在 workflowInstanceId 级锁内发布执行期事件：事务中校验当前 owner、fencing token 和未过期 lease，
+     * 原子递增实例 sequence 并写入带 expireAt 的 OceanBase 事实记录；提交后重新从事实表按序投递，而非
+     * 直接发送内存对象。事件持久化、查询或网络发送异常仅记录日志，不反向回滚业务 Graph，后续 Poller
+     * 或 Last-Event-ID 重连继续补偿已成功落库的事件。
+     */
     @Override
     public void publish(String workflowInstanceId,
                         String conversationId,
@@ -192,7 +207,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         subscribers.keySet().forEach(this::deliverPersistedEvents);
     }
 
-    /** 从最慢客户端的游标开始读取事实表，并按 sequenceNo 顺序幂等投递。 */
+    /**
+     * 以本 JVM 最慢连接的已发送游标为查询起点，按 sequenceNo 升序读取未过期事实，再让每个 SseClient
+     * 自行跳过已发送事件。网络成功后才推进连接游标；查询/发送失败不关闭其他连接，下一轮扫描继续补偿。
+     */
     private void deliverPersistedEvents(String workflowInstanceId) {
         List<SseClient> clients = subscribers.get(workflowInstanceId);
         if (clients == null || clients.isEmpty()) {
@@ -217,7 +235,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         }
     }
 
-    /** 在独立事务连接内原子分配序号并持久化事件。 */
+    /**
+     * 在独立事务连接中通过实例行 CAS 校验执行权并分配 sequence，再写入不可变事件记录；CAS 失败表示
+     * 当前 Graph 已失去 owner、fencing token 或 lease，事件不会以旧执行代次进入事实表。
+     */
     private WorkflowSseEvent persistEvent(String workflowInstanceId,
                                           String conversationId,
                                           long executionFenceToken,
@@ -233,7 +254,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         return persistAllocatedEvent(workflowInstanceId, conversationId, type, node, data, occurredAt);
     }
 
-    /** 使用当前事务连接已经分配的 sequence 写入不可变事件事实。 */
+    /**
+     * 读取当前事务刚分配的 sequence，生成稳定 eventId={workflowInstanceId}:{sequence}，序列化脱敏载荷，
+     * 并按 eventRetention 计算 expireAt 后写入 OceanBase；返回值只用于确认持久化结果，不绕过事实表投递。
+     */
     private WorkflowSseEvent persistAllocatedEvent(String workflowInstanceId,
                                                    String conversationId,
                                                    WorkflowSseEventType type,
@@ -274,7 +298,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         persistAllocatedEvent(workflowInstanceId, conversationId, type, node, data, Instant.now());
     }
 
-    /** 在人工暂停事务内写入经过 WAITING_CONFIRM 状态和 fencing token 校验的事件。 */
+    /**
+     * 在 WorkflowPauseService 的现有事务中确认实例已进入 WAITING_CONFIRM 且 fencing token 仍匹配，
+     * 分配 sequence 并写 HUMAN_CONFIRM Outbox；网络发送必须等外层事务提交后由 flush/Poller 完成。
+     */
     @Transactional(propagation = Propagation.MANDATORY)
     public void persistWaitingConfirmEvent(String workflowInstanceId,
                                            String conversationId,
@@ -309,7 +336,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         return deleted;
     }
 
-    /** 完成并移除当前工作流的全部实时连接。 */
+    /** 完成并移除当前 JVM 上全部 SseEmitter、订阅游标和实例锁；保留数据库事实供重连与审计。 */
     @Override
     public void completeSubscribers(String workflowInstanceId) {
         List<SseClient> clients = subscribers.remove(workflowInstanceId);
@@ -319,7 +346,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         workflowLocks.remove(workflowInstanceId);
     }
 
-    /** 新运行尚未落库即提交失败时，直接终止临时连接。 */
+    /**
+     * 处理“已订阅但工作流尚未成功落库/提交线程池”的失败窗口：以原始异常结束所有临时 emitter，
+     * 移除订阅和实例锁。此时没有可靠事件事实可重放，因此不伪造数据库 ERROR 事件。
+     */
     public void failNewRun(String workflowInstanceId, Throwable error) {
         List<SseClient> clients = subscribers.remove(workflowInstanceId);
         if (clients != null) {
@@ -343,7 +373,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         client.emitter().onError(error -> remove.run());
     }
 
-    /** 串行发送单连接事件；发送失败即移除连接，后台工作流继续执行并持久化后续事件。 */
+    /**
+     * 串行调用单连接 emitter.send，并仅在成功后推进游标；HUMAN_CONFIRM/COMPLETE/ERROR 发送成功后完成
+     * 当前连接。I/O、超时或已关闭异常只移除该连接，后台 Graph 和 OceanBase 事件持久化继续运行。
+     */
     private void sendOrRemove(String workflowInstanceId, SseClient client, WorkflowSseEvent event) {
         try {
             boolean sent = client.send(event);
@@ -446,7 +479,10 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
             return lastDeliveredSequence;
         }
 
-        /** 只发送游标之后的事件，并在网络写成功后推进游标。 */
+        /**
+         * 在单连接锁内按 sequence 去重并组装标准 SSE id/name/data；只有 emitter.send 正常返回才推进
+         * lastDeliveredSequence，保证即时 flush、定时 Poller 和重连并发时不会重复或越过失败事件。
+         */
         private synchronized boolean send(WorkflowSseEvent event) throws IOException {
             if (event.sequence() <= lastDeliveredSequence) {
                 return false;

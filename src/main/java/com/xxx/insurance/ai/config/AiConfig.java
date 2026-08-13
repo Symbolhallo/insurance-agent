@@ -12,14 +12,14 @@ import org.springframework.context.annotation.Configuration;
 /**
  * AI基础配置。
  *
- * <p>当前阶段采用单模型模式：应用启动时只创建一个全局复用的{@link ChatModel} Bean。
+ * <p>当前采用单模型模式：应用启动时只创建一个全局复用的 {@link ChatModel} Bean。
  * ChatModel 是 Spring AI 对“对话模型”的统一抽象，上层业务不直接依赖具体厂商 SDK，
- * 后续 ProductAnalysisAgent 只需要依赖 ChatModel 即可完成模型调用编排。</p>
+ * 产品、知识、保单、资产、Planner、Summary 和前置结构化节点复用该模型能力。</p>
  *
  * <p>Spring AI 的典型调用链为：Agent/Service 构造 Prompt -> ChatModel.call(...) ->
  * 底层模型适配器转换为供应商 HTTP 请求 -> 模型返回 ChatResponse -> Agent/Service 解析结果。
- * 本类只负责模型 Bean 装配，不引入 Agent、Tool Calling、Workflow 或 Memory 逻辑，
- * 保持 Phase1 工程初始化边界清晰。</p>
+ * 本类只负责模型连接与 Bean 装配；Agent、Tool、Workflow、Memory 分别在领域和编排配置中组合，
+ * 因而切换兼容模型服务时不会把供应商配置扩散到业务代码。</p>
  *
  * <p>未来升级为 Agent -> Model Router -> 多模型选择时，可以保留 ChatModel 作为默认模型，
  * 并在 Router 层按业务域、成本、延迟、合规策略选择不同模型实例。ReactAgent 接入时，
@@ -32,11 +32,9 @@ public class AiConfig {
     /**
      * 创建全局对话模型 Bean。
      *
-     * <p>这里使用 Spring AI OpenAI-compatible ChatModel 作为统一入口，便于接入支持
-     * OpenAI 协议的模型服务；同时项目已引入 Spring AI Alibaba BOM、DashScope能力包
-     * 和 Agent Framework。后续切换 DashScope 原生模型或接入 Spring AI Alibaba Agent
-     * Framework 时，可以在本配置类内替换底层模型实现，而不影响 Agent 层依赖的
-     * ChatModel 抽象。</p>
+     * <p>使用 Spring AI OpenAI-compatible ChatModel 统一接入 DeepSeek、DashScope 兼容模式等服务；
+     * API Key、Base URL 和默认模型选项由 Spring 配置绑定提供。Spring AI Alibaba ReactAgent 与 Graph
+     * 节点只依赖 ChatModel 抽象，未来切换原生模型适配或引入 Model Router 时无需修改领域 Agent 合同。</p>
      *
      * @param connectionProperties Spring AI OpenAI 连接配置，读取 spring.ai.openai.* 配置项
      * @param chatProperties Spring AI OpenAI Chat 配置，读取 spring.ai.openai.chat.* 配置项

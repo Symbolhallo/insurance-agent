@@ -35,16 +35,17 @@ import java.util.UUID;
 /**
  * 产品分析业务智能体入口。
  *
- * <p>当前类是 Phase1-Task3 的业务侧骨架，负责把“产品分析智能体”这个业务概念
- * 与 Spring AI Alibaba 的 {@link ReactAgent} 实例绑定起来。这样做有两个原因：</p>
+ * <p>该类把“产品分析智能体”业务概念与 Spring AI Alibaba {@link ReactAgent} 绑定，
+ * 对外隐藏 Skill、Tool、流式执行、Memory 和调用审计细节。这样做有两个原因：</p>
  *
  * <ul>
  *     <li>业务代码只依赖 ProductAnalysisAgent，不直接散落使用 ReactAgent；</li>
- *     <li>后续接入 Tool、Memory、Formatter 时，可以保持业务入口稳定。</li>
+ *     <li>Tool、Memory、Formatter 或未来 Model Router 演进时，可以保持业务入口稳定。</li>
  * </ul>
  *
- * <p>当前阶段同时提供两个边界：一个确定性分析入口用于测试 Mock Service 和 Formatter，
- * 一个受控模型调用入口用于验证 ReactAgent、Skill 和 Tool Calling 的单 Agent 闭环。</p>
+ * <p>当前同时提供两个边界：确定性分析入口用于直接验证 Mock Service/Formatter；自然语言入口执行
+ * ReactAgent、渐进式 Skill、产品 Tool Calling、可选会话记忆、逐 Token 输出和成功/失败审计，并可被
+ * Main Workflow 动态 DAG 作为产品子智能体调用。</p>
  */
 public class ProductAnalysisAgent {
 
@@ -102,9 +103,8 @@ public class ProductAnalysisAgent {
     /**
      * 受控产品分析入口。
      *
-     * <p>该方法当前只执行确定性 Mock 数据查询和格式化，不调用 {@link ReactAgent#call(String)}。
-     * 这样可以先稳定产品域模型、Service接口和输出结构，后续再把它包装成
-     * ProductAnalysisTool 交给 ReactAgent 调用。</p>
+     * <p>该方法只执行确定性 Mock 数据查询和格式化，不调用模型；同一 ProductAnalysisService 与
+     * Formatter 已由 ProductAnalysisTool 复用，供 ReactAgent 在需要产品事实时通过 Tool Calling 获取。</p>
      */
     public ProductAnalysisResult analyze(ProductAnalysisRequest request) {
         validateRequest(request);
@@ -114,11 +114,11 @@ public class ProductAnalysisAgent {
     /**
      * 受控模型调用入口。
      *
-     * <p>这是 Phase1 单 Agent 闭环的模型调用边界。调用该方法会触发
+     * <p>这是独立单 Agent HTTP 调用边界。调用该方法会触发
      * {@link ReactAgent#call(String)}，ReactAgent 会根据 Skill 上下文决定是否读取
      * SKILL.md，并在需要产品数据时调用 product_analysis Tool。</p>
      *
-     * <p>当应用启用 local-db profile 并创建 AgentMemoryService JDBC 实现时，该方法会使用
+     * <p>当应用启用 local-db profile 并创建 MyBatis/OceanBase AgentMemoryService 实现时，该方法会使用
      * conversationId 读取历史消息，并通过 {@link ReactAgent#call(List)} 携带上下文调用模型。
      * 成功调用后，窗口记忆与长期记忆会在同一个事务内写入。默认 profile 下使用 no-op
      * 记忆服务，仍保持无记忆单轮调用。</p>
@@ -129,10 +129,10 @@ public class ProductAnalysisAgent {
     }
 
     /**
-     * Workflow 调用入口。
-     *
-     * <p>模型使用 request.message 中的标准化问题推理；记忆和调用审计使用
-     * executionContext.originalUserMessage 保存用户原话，并关联 Workflow 实例与步骤。</p>
+     * Workflow/独立调用共用的完整产品 Agent 入口。校验请求后按上下文决定是否读取 ChatMemory，以及使用
+     * call 还是单次 stream/ReAct Tool 循环；模型使用标准化问题推理，审计使用用户原话并关联 workflow、
+     * step、task。成功后检查输出合同并原子保存完整对话或仅追加 DAG 调用流水；失败时尽力保存 FAILED
+     * 审计且不让审计异常覆盖模型/Tool 原异常。
      */
     public ProductAnalysisChatResponse chat(ProductAnalysisChatRequest request,
                                             AgentExecutionContext executionContext) {
@@ -211,8 +211,8 @@ public class ProductAnalysisAgent {
     /**
      * 返回当前智能体绑定的 Skill Hook。
      *
-     * <p>保留该访问点是为了在后续阶段验证 Skill 与 Tool 的映射关系，
-     * 当前不通过它执行 Tool Calling。</p>
+     * <p>该访问点用于装配测试和 Skill 隔离验证；实际 Skill 渐进式加载与 Tool Calling 由底层
+     * ReactAgent 在 chat 执行期间完成。</p>
      */
     public SkillsAgentHook skillsAgentHook() {
         return skillsAgentHook;
@@ -259,7 +259,10 @@ public class ProductAnalysisAgent {
                 historyMessages.size());
     }
 
-    /** 根据是否启用会话记忆选择单消息或历史消息列表调用 ReactAgent。 */
+    /**
+     * 根据会话记忆和 Token 开关选择字符串/历史消息输入及 call/stream；流式路径发布模型正文并从同一次
+     * ReAct/Tool 最终 State 提取权威回答，避免为拿最终内容再次执行 Tool。
+     */
     private AssistantMessage callReactAgent(ProductAnalysisChatRequest request,
                                             MemoryCallContext memoryCallContext,
                                             AgentExecutionContext executionContext)
@@ -293,7 +296,10 @@ public class ProductAnalysisAgent {
                 AgentTokenStreamContext.PHASE_SUB_AGENT);
     }
 
-    /** 保存完整对话记忆，或在 DAG 模式下只保存成功调用审计。 */
+    /**
+     * 独立会话模式通过 AgentMemoryService 原子写窗口消息、长期 USER/ASSISTANT 历史和成功调用流水；
+     * DAG 模式禁用会话消息写入，只追加 invocation，避免并行子任务覆盖同一 conversation 窗口。
+     */
     private void saveMemory(MemoryCallContext memoryCallContext,
                             AgentInvocationRecord invocationRecord,
                             AssistantMessage assistantMessage,

@@ -162,7 +162,9 @@ public class MainWorkflowGraphConfig {
     }
 
     /**
-     * 使用统一安全门禁包装节点，强制步骤状态、Lease/Fence 与结果审计。
+     * 将真实 NodeAction 包装进强制安全门禁：节点执行前以当前 owner/fencing token/lease CAS 步骤为 RUNNING，
+     * 成功后序列化节点增量并记 SUCCESS，失败时记录截断错误并继续抛出；旧执行分支一旦失去租约或 token，
+     * 无法只依靠 GraphLifecycleListener 绕过数据库状态机继续写 State。
      */
     private NodeAction tracked(WorkflowNodeDefinition nodeDefinition,
                                NodeAction nodeAction,

@@ -25,10 +25,15 @@ public class MainWorkflowController {
 
     private final MainWorkflowService mainWorkflowService;
 
+    /** 创建同步工作流 Controller；业务状态机、Graph 和持久化均由 MainWorkflowService 统一处理。 */
     public MainWorkflowController(MainWorkflowService mainWorkflowService) {
         this.mainWorkflowService = mainWorkflowService;
     }
 
+    /**
+     * 同步执行与 SSE 相同的 Main Graph：原子创建会话锁/实例/步骤，运行至 END 或人工确认中断，
+     * 并返回最终响应或候选确认信息；该入口不输出模型 Token，也不会跨人工确认长期占用请求线程。
+     */
     @Operation(
             summary = "运行 Main Graph v1",
             description = "先解析当前会话产品线索；需要召回时返回候选并等待确认，否则执行上下文对齐、意图识别、子智能体、总结和输出审核节点。")
@@ -38,6 +43,10 @@ public class MainWorkflowController {
         return ApiResponse.success(mainWorkflowService.run(request));
     }
 
+    /**
+     * 原子抢占 WAITING_CONFIRM 实例，校验所选产品属于持久化候选，保存会话范围内标准产品，
+     * 更新 Graph State 并从 OceanBase Checkpoint 恢复，直至再次中断或完成事务收口。
+     */
     @Operation(
             summary = "确认产品候选并恢复 Main Graph",
             description = "校验用户选择属于当前工作流候选，将确认产品限定保存到当前 conversationId，随后从 Checkpoint 恢复执行。")
@@ -48,6 +57,10 @@ public class MainWorkflowController {
         return ApiResponse.success(mainWorkflowService.confirmProducts(workflowInstanceId, request));
     }
 
+    /**
+     * 对异常遗留的 RUNNING 实例执行恢复 CAS，取得新 fencing token 后读取最新 Checkpoint 继续主图；
+     * 已成功的 DAG 子任务复用各自终态 Checkpoint，避免重复调用子智能体。
+     */
     @Operation(
             summary = "从最新 Checkpoint 恢复 Main Graph",
             description = "仅恢复因进程退出等原因仍处于 RUNNING 的实例；WAITING_CONFIRM 必须使用产品确认接口。")

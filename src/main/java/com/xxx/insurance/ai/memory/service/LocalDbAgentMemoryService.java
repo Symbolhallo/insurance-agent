@@ -34,7 +34,7 @@ public class LocalDbAgentMemoryService implements AgentMemoryService {
 
     private final AgentConversationService agentConversationService;
 
-    /** 创建 local-db profile 下的记忆协调服务。 */
+    /** 创建 local-db 记忆事务门面，组合 Spring AI ChatMemory 与会话、长期记忆、调用流水 MyBatis 端口。 */
     public LocalDbAgentMemoryService(ChatMemory chatMemory,
                                      LongTermMemoryService longTermMemoryService,
                                      AgentInvocationService agentInvocationService,
@@ -57,7 +57,11 @@ public class LocalDbAgentMemoryService implements AgentMemoryService {
         return chatMemory.get(conversationId);
     }
 
-    /** 原子保存窗口消息、两条长期消息、会话主记录和成功调用流水。 */
+    /**
+     * 在调用方事务（主工作流收口）或本方法新事务中原子保存一次最终问答：先 upsert 会话主记录，按
+     * MessageWindowChatMemory 语义更新窗口消息，再分别追加 USER/ASSISTANT 长期历史，最后写 SUCCESS
+     * invocation。任一步失败整体回滚，保证短期记忆、长期历史和审计不会出现部分成功。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveSuccessfulExchange(AgentMemoryExchange exchange, AgentInvocationRecord invocationRecord) {
@@ -71,7 +75,10 @@ public class LocalDbAgentMemoryService implements AgentMemoryService {
         agentInvocationService.save(invocationRecord);
     }
 
-    /** 保存 DAG 子智能体成功调用流水，但不并发修改会话消息。 */
+    /**
+     * 原子 upsert 会话主记录并追加 DAG 子智能体成功流水；故意不写 ChatMemory/长期问答，避免多个并行
+     * 子任务基于旧窗口执行 delete+insert 时互相覆盖，最终会话仅由 Summary/Review 后的主工作流收口写入。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveSuccessfulInvocation(AgentInvocationRecord invocationRecord) {
@@ -79,7 +86,10 @@ public class LocalDbAgentMemoryService implements AgentMemoryService {
         agentInvocationService.save(invocationRecord);
     }
 
-    /** 保存失败调用流水和会话主记录，不写入不存在的助手回答。 */
+    /**
+     * 原子 upsert 会话主记录并追加 FAILED 调用流水，不向短期或长期记忆写入不存在/不可信的助手回答；
+     * 失败审计可供排障，但不会成为后续模型上下文。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveFailedInvocation(AgentInvocationRecord invocationRecord) {

@@ -13,7 +13,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * 主工作流 SSE 应用服务，负责新运行的后台提交和历史事件重连。
+ * 主工作流 SSE 应用门面。
+ *
+ * <p>负责把 HTTP 长连接建立与耗时 Graph 执行解耦：先注册 SseEmitter，再将新运行或人工确认恢复
+ * 提交到专属有界线程池；重连时从 OceanBase 事实表按 Last-Event-ID 重放，并继续跟随实时事件。
+ * Graph、Checkpoint、事务收口仍由 MainWorkflowService 负责。</p>
  */
 @Service
 @Profile("local-db")
@@ -27,7 +31,7 @@ public class WorkflowSseService {
 
     private final ThreadPoolTaskExecutor taskExecutor;
 
-    /** 创建 SSE 应用服务并注入同步工作流、事件存储和隔离线程池。 */
+    /** 创建 SSE 应用服务，组合主工作流门面、OceanBase 事件交付服务和拒绝静默排队的隔离线程池。 */
     public WorkflowSseService(MainWorkflowService mainWorkflowService,
                               LocalDbWorkflowSseEventService eventService,
                               @Qualifier(WorkflowExecutionConfig.WORKFLOW_SSE_TASK_EXECUTOR)
@@ -38,7 +42,9 @@ public class WorkflowSseService {
     }
 
     /**
-     * 先注册 SSE 连接，再使用同一 workflowInstanceId 在后台执行 Main Graph。
+     * 启动一次流式工作流：预分配 workflowInstanceId，使用该编号先注册 SseEmitter，再提交后台 Graph，
+     * 从而保证 START/首 Token 产生时连接已经存在。线程池拒绝或提交异常时立即清理临时订阅并把异常
+     * 交还 HTTP 层，不留下尚未创建实例的悬空连接。
      */
     public SseEmitter start(MainWorkflowRequest request) {
         // 主工作流链路 2：预分配实例编号并先注册连接，再把 Graph 提交到隔离线程池，避免首事件丢失。
@@ -54,13 +60,18 @@ public class WorkflowSseService {
         return emitter;
     }
 
-    /** 根据 Last-Event-ID 重放事件，并在实例仍运行时继续订阅实时事件。 */
+    /**
+     * 校验 Last-Event-ID 与 workflowInstanceId，按 sequence 重放尚未过期的 OceanBase 事件；
+     * 若实例仍可产生事件，则在同一实例锁内注册实时游标，避免历史重放与后续事件之间出现缺口。
+     */
     public SseEmitter reconnect(String workflowInstanceId, String lastEventId) {
         return eventService.reconnect(workflowInstanceId, lastEventId);
     }
 
     /**
-     * 先原子抢占 WAITING_CONFIRM 实例，再建立订阅并在后台流式恢复原 Graph。
+     * 恢复人工确认链路：先以数据库 CAS 将 WAITING_CONFIRM 抢占为 CONFIRMING 并取得新的 fencing token，
+     * 再重放遗漏事件、建立第二段 SSE 订阅，最后异步写入确认产品并从 Checkpoint 恢复 Graph。订阅或线程
+     * 提交失败时关闭连接并按 owner/token 释放抢占，使用户可以安全重试且不会从同一 Checkpoint 分叉。
      */
     public SseEmitter confirmProducts(String workflowInstanceId,
                                       ProductConfirmationRequest request,
@@ -81,7 +92,10 @@ public class WorkflowSseService {
         }
     }
 
-    /** 在 SSE 专属线程中执行原有 MainWorkflowService，复用完整 Graph 与持久化链路。 */
+    /**
+     * 在 SSE 专属线程执行完整 MainWorkflowService：创建会话锁/实例/步骤、运行可恢复 Graph、发布模型流，
+     * 并在成功、人工暂停或失败路径执行原有事务收口；这里只兜底处理实例落库前等外围异常并清理连接。
+     */
     private void execute(String workflowInstanceId, MainWorkflowRequest request) {
         try {
             mainWorkflowService.run(workflowInstanceId, request, true);
@@ -93,7 +107,10 @@ public class WorkflowSseService {
         }
     }
 
-    /** 从人工确认 Checkpoint 恢复，并保持后续前置节点、子智能体和 Summary 的模型流。 */
+    /**
+     * 使用抢占时取得的 fencing token 校验恢复权，保存标准确认产品、更新 Checkpoint State，并继续执行
+     * 上下文对齐、意图识别、Planner、DAG 和 Summary 流；失败时发布脱敏 error 并结束当前恢复连接。
+     */
     private void executeConfirmation(String workflowInstanceId,
                                      ProductConfirmationRequest request,
                                      long executionFenceToken) {

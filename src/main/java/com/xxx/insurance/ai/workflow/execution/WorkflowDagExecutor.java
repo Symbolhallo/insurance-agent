@@ -55,7 +55,11 @@ public class WorkflowDagExecutor {
     }
 
     /**
-     * 动态提交所有 READY 任务，并在任意任务完成后立即释放新后继。
+     * 执行 Planner 产生的受控依赖图。先按展示序号建立稳定任务索引并从意图路由结果生成 Agent 白名单，
+     * 然后循环传播依赖失败、计算 READY 任务、仅向每个任务注入明确上游成功结果，并提交到项目有界线程池。
+     * 任意任务完成后立即更新终态索引并重新释放后继，不等待无关并行分支；依赖失败的任务递归标记为
+     * SKIPPED_DEPENDENCY_FAILED，独立任务继续运行。任务实际 Agent 调用与 Checkpoint 由独立子图负责，
+     * 系统级子图/Checkpoint 异常才取消剩余 Future 并终止主 DAG，最终按 taskId 聚合不可变结果。
      */
     public DagExecutionResult execute(WorkflowPlan plan,
                                       IntentRoutingResult routingResult,

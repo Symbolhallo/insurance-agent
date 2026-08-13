@@ -31,7 +31,7 @@ public class LocalDbWorkflowNodeExecutionGuard implements WorkflowNodeExecutionG
 
     private final WorkflowLifecycleProperties lifecycleProperties;
 
-    /** 创建节点安全门禁。 */
+    /** 创建节点安全门禁，组合步骤状态 Mapper、结果 JSON 审计和当前 JVM execution owner 配置。 */
     public LocalDbWorkflowNodeExecutionGuard(WorkflowExecutionMapper workflowExecutionMapper,
                                              ObjectMapper objectMapper,
                                              WorkflowLifecycleProperties lifecycleProperties) {
@@ -40,7 +40,12 @@ public class LocalDbWorkflowNodeExecutionGuard implements WorkflowNodeExecutionG
         this.lifecycleProperties = lifecycleProperties;
     }
 
-    /** 在节点调用链内执行步骤状态 CAS、结果审计和 Lease/Fence 校验。 */
+    /**
+     * 在真实 NodeAction 外围实施强制执行门禁：从持久化 State 读取本次固定 fencing token，以当前 owner、
+     * token 和有效 lease 把步骤 CAS 为 RUNNING；节点成功后序列化增量结果并 CAS 为 SUCCESS，失败后尽力
+     * 写入截断错误并原样抛出。启动或成功审计 CAS 失败会立即阻止旧 Graph 分支继续写业务 State；该安全
+     * 语义不能迁移到异常会被框架隔离的 GraphLifecycleListener。
+     */
     @Override
     public Map<String, Object> execute(WorkflowNodeDefinition nodeDefinition,
                                        OverAllState state,
@@ -90,6 +95,7 @@ public class LocalDbWorkflowNodeExecutionGuard implements WorkflowNodeExecutionG
         }
     }
 
+    /** 将节点增量结果序列化为步骤审计 JSON；序列化失败按系统异常终止当前节点。 */
     private String toJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -99,6 +105,7 @@ public class LocalDbWorkflowNodeExecutionGuard implements WorkflowNodeExecutionG
         }
     }
 
+    /** 将原始异常消息限制到数据库字段长度，不把堆栈写入业务表。 */
     private String truncateErrorMessage(Exception exception) {
         if (exception == null || exception.getMessage() == null) {
             return null;

@@ -42,7 +42,7 @@ public class WorkflowFinalizationService {
 
     private final WorkflowLifecycleProperties lifecycleProperties;
 
-    /** 创建工作流收口事务服务。 */
+    /** 创建工作流收口事务服务，组合实例状态机、最终 Memory、Checkpoint、SSE Outbox 和租约配置。 */
     public WorkflowFinalizationService(WorkflowExecutionMapper workflowExecutionMapper,
                                        AgentMemoryService agentMemoryService,
                                        OceanBaseCheckpointSaver checkpointSaver,
@@ -56,7 +56,10 @@ public class WorkflowFinalizationService {
     }
 
     /**
-     * 原子提交正常业务终态。返回 false 表示其他执行者已经提交终态，本次调用不再产生副作用。
+     * 原子提交正常业务终态。先通过 owner、fencing token、有效 lease 和非终态条件更新取得唯一收口权；
+     * 成功后以稳定的 wfa-{workflowInstanceId} invocationId 写最终短期/长期记忆和调用审计，跳过剩余步骤，
+     * 将主图及任务 Checkpoint 标为完成，写入 COMPLETE Outbox 事件，并释放 conversation 锁。所有操作共享
+     * 一个 OceanBase 事务；返回 false 表示其他执行者已收口，本次不写 Memory、Checkpoint 或重复事件。
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean complete(MainWorkflowResponse response,
@@ -88,7 +91,9 @@ public class WorkflowFinalizationService {
     }
 
     /**
-     * 原子提交系统失败。终态条件更新失败时说明正常收口已经完成，迟到异常会被安全忽略。
+     * 原子提交系统失败。仅当前 owner/token 且尚未进入业务终态的实例可以变为 FAILED；取得失败收口权后
+     * 跳过待执行步骤、标记 Checkpoint 失败、写入脱敏 ERROR Outbox，并释放 conversation 锁。条件更新失败
+     * 表示正常或其他失败收口已经提交，迟到异常被幂等忽略，不能覆盖 SUCCESS/PARTIAL_SUCCESS/REVIEW_BLOCKED。
      */
     @Transactional(rollbackFor = Exception.class)
     public boolean fail(String workflowInstanceId,
@@ -112,13 +117,19 @@ public class WorkflowFinalizationService {
     }
 
     /**
-     * 事务提交后尽快投递已落库终态事件；投递异常由事件服务内部吞吐，定时 Poller 继续补偿。
+     * 在收口事务提交后立即查询 OceanBase 事实表并按 sequence 投递本机连接；COMPLETE/ERROR 发送成功后
+     * 事件服务关闭当前连接。查询或网络发送失败不会回滚已提交终态，连接游标保持不变，由定时 Poller 或
+     * 客户端 Last-Event-ID 重连继续补偿。
      */
     public void flushEvents(String workflowInstanceId) {
         sseEventService.flushPersistedEvents(workflowInstanceId);
     }
 
-    /** 将主工作流最终问答写入短期记忆、长期记忆和调用审计。 */
+    /**
+     * 使用稳定 invocationId 构造主工作流调用流水，并通过 AgentMemoryService 在当前收口事务中同时更新
+     * ChatMemory 窗口、追加 USER/ASSISTANT 长期记忆、upsert 会话主记录和写 SUCCESS 审计；未启用
+     * local-db Memory 时直接跳过，避免默认 Profile 产生伪持久化。
+     */
     private void saveFinalConversation(MainWorkflowResponse response, String modelName) {
         if (!agentMemoryService.isEnabled()) {
             return;

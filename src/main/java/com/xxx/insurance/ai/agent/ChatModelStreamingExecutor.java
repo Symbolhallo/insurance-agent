@@ -31,7 +31,7 @@ public class ChatModelStreamingExecutor {
 
     private final ObjectMapper objectMapper;
 
-    /** 创建 ChatModel 流执行器并注入统一 Token 发布端口。 */
+    /** 创建结构化模型流执行器，组合可靠 Token 发布端口和严格 JSON 边界修复所需的 ObjectMapper。 */
     public ChatModelStreamingExecutor(AgentTokenStreamSink tokenStreamSink,
                                       ObjectMapper objectMapper) {
         this.tokenStreamSink = tokenStreamSink;
@@ -39,7 +39,10 @@ public class ChatModelStreamingExecutor {
     }
 
     /**
-     * 流式调用模型，逐块发布文本，并返回可供结构化转换器解析的完整模型结果。
+     * 流式执行前置结构化模型节点。为本次调用生成 streamId，逐块提取助手文本并发布带序号 Token，同时
+     * 使用 Spring AI MessageAggregator 聚合完整 ChatResponse；拒绝空结果，只对已验证的兼容模式缺失左
+     * 花括号做受控修复，然后刷新 Token 尾批次并返回给 BeanOutputConverter。异常时 abort 当前流，不发送
+     * 正常结束标记，业务服务继续负责 JSON Schema 转换和确定性校验。
      */
     public String execute(ChatModel chatModel,
                           List<Message> messages,

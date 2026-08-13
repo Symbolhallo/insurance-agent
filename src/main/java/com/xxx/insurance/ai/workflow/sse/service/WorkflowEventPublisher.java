@@ -9,7 +9,11 @@ import java.util.Map;
  */
 public interface WorkflowEventPublisher {
 
-    /** 持久化并实时广播一个工作流事件；实现不得把发送失败传播到业务 Graph。 */
+    /**
+     * 发布一个脱敏工作流事件。local-db 实现必须先校验当前 execution owner/fencing token/lease，
+     * 在事务内分配工作流单调 sequence 并写入 OceanBase 事实表，再按 sequence 尝试投递本机连接；
+     * 其他实例连接由数据库 Poller 获取。SSE 查询或发送失败不得回滚已经成功的业务 Graph。
+     */
     void publish(String workflowInstanceId,
                  String conversationId,
                  long executionFenceToken,
@@ -17,9 +21,12 @@ public interface WorkflowEventPublisher {
                  String node,
                  Map<String, Object> data);
 
-    /** 立即从事件事实表投递当前工作流尚未发送的事件；终止事件发送成功后由实现关闭连接。 */
+    /**
+     * 事务提交后立即从事实表读取各连接游标之后的事件并投递；HUMAN_CONFIRM、COMPLETE、ERROR 实际
+     * emitter.send 成功后关闭本段连接，失败时保留游标并交给 Poller/Last-Event-ID 重放补偿。
+     */
     void flushPersistedEvents(String workflowInstanceId);
 
-    /** 关闭当前工作流全部实时订阅连接。 */
+    /** 主动完成并移除当前 JVM 上该工作流的全部订阅与实例锁；不会删除 OceanBase 事件事实。 */
     void completeSubscribers(String workflowInstanceId);
 }

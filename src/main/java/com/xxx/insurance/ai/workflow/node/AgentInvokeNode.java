@@ -39,7 +39,11 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
         this.eventPublisher = eventPublisher;
     }
 
-    /** 执行有限重试并把普通 Agent 异常收敛为 FAILED，避免终止主 Graph。 */
+    /**
+     * 从 RunnableConfig 读取当前任务最小上下文，从子图 State 读取 RUNNING/终态结果；恢复时若已是终态则
+     * 直接返回，避免重复调用 Agent，否则进入有限重试。普通模型/Tool 异常被收敛为 FAILED 任务结果并
+     * 发布任务终态事件，不终止无依赖主图分支；配置或 State 损坏仍按系统异常传播。
+     */
     @Override
     public CompletableFuture<Map<String, Object>> apply(OverAllState state, RunnableConfig config) {
         WorkflowAgentTaskContext context = config.metadata(TASK_CONTEXT_METADATA)
@@ -56,7 +60,11 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
                 WorkflowTaskStateKeys.TASK_RESULT, invokeWithRetry(context, running)));
     }
 
-    /** 在同一任务节点内执行受控重试；Checkpoint 只保存 RUNNING 和最终终态。 */
+    /**
+     * 发布 AGENT_START 后按 maxRetries+1 调用白名单子智能体，成功时记录统一响应、尝试次数和耗时并发布
+     * AGENT_COMPLETE；失败时执行短指数退避，全部耗尽后生成 FAILED 终态和截断错误。子图只在节点边界
+     * Checkpoint RUNNING 与最终结果，避免把每次瞬时重试暴露成可恢复业务状态。
+     */
     private AgentTaskExecutionResult invokeWithRetry(WorkflowAgentTaskContext context,
                                                      AgentTaskExecutionResult running) {
         Instant startedAt = running.startedAt() == null ? Instant.now() : running.startedAt();
@@ -118,7 +126,10 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
                 "durationMs", result.durationMs()));
     }
 
-    /** 调用统一 SSE 发布端口；NoOp profile 下不会产生持久化副作用。 */
+    /**
+     * 将不含客户原始问题和模型正文的任务事件交给统一发布端口；local-db 实现校验 owner/token/lease、
+     * 分配 sequence、写 OceanBase 并投递，NoOp Profile 则不产生数据库或网络副作用。
+     */
     private void publish(WorkflowAgentTaskContext context,
                          WorkflowSseEventType type,
                          Map<String, Object> data) {
