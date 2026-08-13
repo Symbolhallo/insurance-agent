@@ -1,0 +1,31 @@
+# 仅供本地断点调试使用的时间参数覆盖。
+# 不要在生产环境启用 debug-timing；IDEA 中推荐启用组合 Profile：local-debug。
+insurance:
+  ai:
+    workflow:
+      sse:
+        # 断点暂停期间保持当前 SSE 连接，避免恢复运行时浏览器连接已经超时。
+        connection-timeout: 4h
+        # 延长 Last-Event-ID 重放窗口，便于暂停后继续观察同一次工作流事件。
+        event-retention: 4h
+        # 保持实时轮询频率，断点释放后前端仍能快速收到已落库事件。
+        database-poll-interval: 500ms
+        # Token 流式体验参数保持生产语义，不因调试 Profile 降低实时性。
+        token-batch-max-delay: 80ms
+        token-batch-max-characters: 128
+      maintenance:
+        # 调试启动后4小时内不运行物理清理，避免单步查看数据库时记录被后台任务删除。
+        cleanup-initial-delay: 4h
+        cleanup-interval: 4h
+        sse-cleanup-initial-delay: 4h
+        sse-cleanup-interval: 4h
+        # 保留恢复扫描能力，但降低其在断点调试日志中的干扰。
+        recovery-interval: 5m
+      lifecycle:
+        # Suspend All 会同时暂停 heartbeat，因此执行和抢占租约均放宽到4小时。
+        execution-lease: 4h
+        claim-lease: 4h
+        # 人工确认允许跨多次本地调试继续恢复。
+        waiting-confirm-lease: 7d
+        # 正常运行时仍续租；该周期必须短于 execution-lease 和 claim-lease。
+        heartbeat-interval: 5m

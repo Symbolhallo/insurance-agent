@@ -455,4 +455,6 @@ it usually means `AI_API_KEY=...` was incorrectly placed into Active profiles.
 Correct IDEA configuration:
 
 - Put `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` under Environment variables.
-- Leave Active profiles empty unless a real Spring profile such as `dev` or `test` is needed.
+- Use `local-db` for normal OceanBase runs and `local-debug` for long breakpoint sessions.
+- `local-debug` already includes `local-db` followed by `debug-timing`; do not list both.
+- Leave Active profiles empty for stateless single-Agent verification.

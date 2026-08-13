@@ -9,6 +9,13 @@ spring:
   application:
     # Spring 应用名，用于日志、监控以及未来服务注册标识。
     name: insurance-agent
+  profiles:
+    group:
+      # IDEA 长时间断点调试组合：先启用本地数据库，再用 debug-timing 覆盖易过期参数。
+      # IDEA Active profiles 只填写 local-debug，不要把环境变量写在这里。
+      local-debug:
+        - local-db
+        - debug-timing
   # 默认 profile 不连接数据库，使模型、Agent、Skill 和 Tool 可以独立启动验证。
   # 启用 local-db profile 时，application-local-db.yml 使用空列表恢复这两项自动配置。
   autoconfigure:

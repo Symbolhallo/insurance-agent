@@ -1,5 +1,13 @@
 # 工程变更记录
 
+## 2026-08-13：增加 IDEA 长断点调试 Profile
+
+- 新增 `local-debug` Profile Group，按顺序组合 `local-db` 与 `debug-timing`；IDEA 只需在 Active profiles 填写 `local-debug`。
+- 新增 `application-debug-timing.yml`：SSE 连接与事件重放、execution lease、claim lease 放宽到4小时，人工确认租约放宽到7天，避免 `Suspend All` 暂停 heartbeat 后工作流在观察代码期间过期。
+- 数据库事件轮询仍为500ms、Token 合并仍为80ms/128字符，保证调试期间前端首响应和持续流式体验不变。
+- Checkpoint/SSE 物理清理首次执行和周期放宽到4小时，恢复扫描为5分钟；普通 `local-db` 与生产默认时间配置没有改变。
+- 新增配置绑定和 Profile Group 顺序测试，并同步 README、AGENTS 与项目理解文档。
+
 ## 2026-08-13：按业务职责整理 Workflow 包结构
 
 - 保留 `product`、`knowledge`、`policy`、`asset` 四个业务域现有的 Agent/Config/Model/Service/Tool 垂直划分；这些边界已经合理，没有为追求目录数量做无关拆分。

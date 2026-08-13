@@ -444,6 +444,7 @@ Model 文件：
 | --- | --- |
 | `application.yml` | 默认 profile：端口、模型环境变量、Actuator、Swagger 和日志；禁用数据库/Flyway自动配置。 |
 | `application-local-db.yml` | 恢复 DataSource/Flyway/MyBatis；配置 Checkpoint、SSE 轮询、Token 批次和清理周期。 |
+| `application-debug-timing.yml` | IDEA 断点调试时间覆盖；由 `local-debug` Profile Group 在 `local-db` 后加载。 |
 | `db/migration/V1...V19` | 14 张项目表、Graph/SSE、幂等与租约扩展以及工作流定义演进；V19 增加 execution fencing token。已执行脚本不能回写修改。 |
 | `skills/product-analysis/...` | 少量/批量产品分析 Skill。 |
 | `skills/knowledge-qa/...` | 保险业务知识问答 Skill。 |
@@ -473,6 +474,20 @@ ChatModel、ReactAgent、Skill 和 Tool，适合不依赖数据库的单 Agent �
 
 两份 YAML 已对每个属性添加就地注释，配置值本身未因此改变。SSE 的10分钟事件保留期与
 Checkpoint 的7天/24小时保留期是两套独立生命周期，不能混用。
+
+### 5.2 IDEA 断点调试 Profile
+
+IDEA 调试 Main Workflow 时使用 `local-debug`，它是 `application.yml` 中定义的 Profile Group：
+
+```text
+local-debug -> local-db -> debug-timing
+```
+
+`local-db` 先启用 OceanBase、Flyway、Checkpoint 和 SSE 事实表；`debug-timing` 再将 SSE
+连接/事件保留、execution lease 和 claim lease 放宽到4小时，将人工确认租约放宽到7天，
+并把物理清理首次执行推迟到4小时。数据库轮询仍为500ms、Token 合并仍为80ms/128字符，
+所以调试 Profile 不牺牲前端首响应和持续流式体验。该配置用于防止 IDEA `Suspend All`
+同时暂停 heartbeat 后，工作流在断点期间丢失 lease；它不应进入生产运行参数。
 
 ---
 

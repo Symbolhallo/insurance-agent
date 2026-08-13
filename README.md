@@ -279,6 +279,13 @@ DB_USERNAME=root
 DB_PASSWORD=你的本地数据库密码
 ```
 
+IDEA 长时间断点调试主工作流时，建议将 Run/Debug Configuration 的 `Active profiles`
+设为 `local-debug`，不要同时再填写 `local-db`。`local-debug` 会按顺序启用
+`local-db` 和 `debug-timing`：保留 OceanBase/Flyway 能力，同时把 SSE 连接与事件重放、
+execution/claim lease 延长到4小时，把人工确认租约延长到7天，并推迟后台物理清理。
+模型和数据库凭据仍放在 `Environment variables`。该 Profile 仅用于本地断点调试，
+普通运行继续使用 `local-db`，生产环境禁止启用。
+
 `local-db` profile 启动后，Flyway 会自动执行：
 
 ```text
