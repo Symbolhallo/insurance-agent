@@ -95,7 +95,7 @@ Workflow 可以调用领域 Agent；领域 Agent 不应反向依赖主 Workflow�
 | --- | --- | --- |
 | `AgentExecutionContext` | 两个便捷构造器、`standalone()`、`auditedUserMessage()` | 携带 workflowInstanceId、stepId、taskId、原始问题和流式开关；独立 Agent 调用也能创建上下文。 |
 | `AgentTokenStreamContext` | Record 字段 | 定义一次模型流的 conversationId、workflowId、taskId、agentName、phase、streamId。 |
-| `AgentTokenStreamSink` | `publishToken()`、`complete()` | 流式 Token 输出端口；Agent 执行器不直接依赖 SSE。 |
+| `AgentTokenStreamSink` | `publishToken()`、`complete()`、`abort()` | 流式 Token 输出端口；正常和异常结束都能刷新待发送正文，Agent 执行器不直接依赖 SSE。 |
 | `ReactAgentStreamingExecutor` | 四个 `execute()` 重载；内部 `handleOutput()`、`extractAssistantMessage()`、`StreamPublication` | 消费一次 `ReactAgent.stream(...)`，发布增量 Token，并从最终 State 提取 AssistantMessage；1.1.2.0 的 `streamMessages()` 会过滤最终 State，不能直接替换。 |
 | `ChatModelStreamingExecutor` | `execute()`；`publishChunk()`、`repairMissingObjectStart()` | 前置 LLM 节点直接消费 `ChatModel.stream(Prompt)`；聚合结构化输出并处理已知 DeepSeek JSON 起始边界问题。 |
 | `AuditedReactAgentExecutor` | `execute()`；`call()`、`saveFailure()`、`invocation()` | 保单和资产 Agent 的公共执行器，统一同步/流式调用、耗时统计、成功/失败审计。 |
@@ -238,8 +238,8 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `WorkflowPlannerAgentConfig` | `workflowPlannerOutputConverter()`、`workflowPlannerReactAgent()`、`workflowPlannerAgent()` | Planner 结构化输出、ReactAgent 和业务门面 Bean。 |
 | `WorkflowSummaryAgentConfig` | `workflowSummaryReactAgent()`、`workflowSummaryAgent()` | Summary ReactAgent 与门面 Bean。 |
 | `OutputReviewConfig` | `outputReviewGateway()` | 注册当前 Mock 审核网关。 |
-| `WorkflowExecutionConfig` | `workflowDagTaskExecutor()`、`workflowSseTaskExecutor()`、`createExecutor()` | 两个有界线程池、MDC 传播、优雅关闭，并启用 Scheduling。 |
-| `WorkflowSseProperties` | Record 字段与默认校验 | SSE 连接超时、事件保留期和数据库轮询周期。 |
+| `WorkflowExecutionConfig` | `workflowDagTaskExecutor()`、`workflowSseTaskExecutor()`、`workflowTokenFlushScheduler()`、`workflowMaintenanceTaskScheduler()`、`createExecutor()` | DAG/SSE 有界线程池；SSE 执行器采用零容量直接交付，最多8路立即运行、满载快速拒绝，不允许已连接请求静默排队；Token 批次刷新和 Spring `@Scheduled` 数据库轮询/清理/租约任务使用相互隔离的调度器；同时负责 MDC 传播、优雅关闭并启用 Scheduling。 |
+| `WorkflowSseProperties` | Record 字段与默认校验 | SSE 连接超时、事件保留期、数据库轮询周期，以及 Token 批次最大延迟/字符数。最大延迟被限制在1秒以内。 |
 | `WorkflowLifecycleProperties` | 租约 Getter/Setter、`validate()` | 配置实例 owner、执行/抢占/等待确认租约和 heartbeat 周期，并保证续租周期短于最短执行租约。 |
 
 ### `workflow.controller`
@@ -303,7 +303,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `LocalDbWorkflowSseEventService` | subscribe/reconnect/publish/poll/deliver/purge/complete；`SseClient.send()` | OceanBase 是事件事实源；每个连接按 sequenceNo 重放、跨实例轮询和幂等推送。 |
 | `NoOpWorkflowEventPublisher` | 空发布 | 非 local-db 替代。 |
 | `WorkflowSseService` | `start()`、`reconnect()`、`confirmProducts()`、后台 execute 函数 | 先建立或抢占 SSE，再把 Graph 放入有界线程池。 |
-| `WorkflowAgentTokenStreamSink` | `publishToken()`、`complete()`、事件映射函数 | 将 Agent/前置模型 Token 转换为持久化 `agent_stream` 事件。 |
+| `WorkflowAgentTokenStreamSink` | `publishToken()`、`complete()`、`abort()`、定时/阈值刷新函数 | 首个 Agent/前置模型块立即发布；后续小块按80ms或128字符合并为持久化 `agent_stream` 事件，结束前强制刷新。 |
 
 ### `workflow.model`
 
@@ -422,7 +422,7 @@ Model 文件：
 | 文件/目录 | 作用 |
 | --- | --- |
 | `application.yml` | 默认 profile：端口、模型环境变量、Actuator、Swagger 和日志；禁用数据库/Flyway自动配置。 |
-| `application-local-db.yml` | 恢复 DataSource/Flyway/MyBatis；配置 Checkpoint、SSE 轮询和清理周期。 |
+| `application-local-db.yml` | 恢复 DataSource/Flyway/MyBatis；配置 Checkpoint、SSE 轮询、Token 批次和清理周期。 |
 | `db/migration/V1...V19` | 14 张项目表、Graph/SSE、幂等与租约扩展以及工作流定义演进；V19 增加 execution fencing token。已执行脚本不能回写修改。 |
 | `skills/product-analysis/...` | 少量/批量产品分析 Skill。 |
 | `skills/knowledge-qa/...` | 保险业务知识问答 Skill。 |
@@ -501,7 +501,7 @@ Checkpoint 的7天/24小时保留期是两套独立生命周期，不能混用�
 | `ai_workflow_instance` | `workflow_instance_id` | 一次工作流运行、请求幂等号、输入输出、owner/lease、执行 fencing token、状态版本和 SSE 最大序号。 | conversationId、workflowCode。 |
 | `ai_conversation_workflow_lock` | `conversation_id` | 同一会话只允许一个顶层工作流；运行中由 heartbeat 与实例租约同步续期，终态释放，过期且不再有效/可恢复时物理回收。 | workflowInstanceId、requestId。 |
 | `ai_workflow_step` | `workflow_step_id` | 主图各业务节点开始、结束、输入输出和错误。 | workflowInstanceId → 实例。 |
-| `ai_workflow_sse_event` | `event_id` | SSE 事实源、顺序重放和跨实例同步；workflow 内 sequenceNo 唯一。 | workflowInstanceId、conversationId、nodeCode。 |
+| `ai_workflow_sse_event` | `event_id` | SSE 事实源、顺序重放和跨实例同步；workflow 内 sequenceNo 唯一。模型正文按低延迟可见批次保存，不按底层单 Token 保存。 | workflowInstanceId、conversationId、nodeCode。 |
 | `ai_conversation_confirmed_product` | `confirmation_id` | conversationId 内有效的标准产品确认结果。 | conversationId、workflowInstanceId、retrievalCallId。 |
 
 `ai_workflow_instance.status` 当前包括：

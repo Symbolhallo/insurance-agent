@@ -146,7 +146,7 @@ ChatMemory 与长期历史保持当前事务一致性；Checkpoint 不替代长�
 
 ## 8. 统一 SSE 协议
 
-事件类型：`start`、`stage`、`human_confirm`、`agent_start`、`agent_stream`、`agent_complete`、`summary`、`review`、`complete`、`error`。当前项目没有独立 `tool_start/tool_result` 前端协议事件；Tool 过程只通过 Agent 模型流和调用审计体现。`agent_stream` 采用 `LIVE_MODEL_STREAM`：产品线索解析、上下文对齐和意图识别通过 Spring AI `ChatModel.stream(Prompt)` 发布结构化 JSON 增量；Planner、子智能体和 Summary 通过 Spring AI Alibaba Agent 流发布模型增量。并行 Agent 使用 `streamId + taskId` 隔离。Summary 完成后再执行输出审核，因此流式正文属于临时展示，客户端必须以 `complete.finalAnswer` 覆盖为最终结果。
+事件类型：`start`、`stage`、`human_confirm`、`agent_start`、`agent_stream`、`agent_complete`、`summary`、`review`、`complete`、`error`。当前项目没有独立 `tool_start/tool_result` 前端协议事件；Tool 过程只通过 Agent 模型流和调用审计体现。`agent_stream` 采用 `LIVE_MODEL_STREAM`：产品线索解析、上下文对齐和意图识别通过 Spring AI `ChatModel.stream(Prompt)` 发布结构化 JSON 增量；Planner、子智能体和 Summary 通过 Spring AI Alibaba Agent 流发布模型增量。并行 Agent 使用 `streamId + taskId` 隔离。当前交付层不会逐个底层模型块开启数据库事务：每个 stream 首块同步发布，后续正文按 `token-batch-max-delay`（默认80ms）或 `token-batch-max-characters`（默认128）刷新，完成和异常路径都会先刷新剩余正文。合并事件的 `chunkIndex` 是该批次最后一个原始块序号，另带 `firstChunkIndex` 和 `sourceChunkCount` 供观测；现有前端仍按 `streamId + chunkIndex` 去重和拼接。Summary 完成后再执行输出审核，因此流式正文属于临时展示，客户端必须以 `complete.finalAnswer` 覆盖为最终结果。
 
 人工确认是一次显式的流连接分段：初始 `/runs/stream` 在 `human_confirm` 后结束；前端提交候选时调用 `/runs/{workflowInstanceId}/product-confirmations/stream` 并携带最后处理的 `Last-Event-ID`。后端先完成重放和订阅，再恢复 OceanBase Checkpoint，避免恢复事件先于新连接建立。
 

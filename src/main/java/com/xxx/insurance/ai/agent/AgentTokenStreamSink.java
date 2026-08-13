@@ -13,4 +13,9 @@ public interface AgentTokenStreamSink {
     void complete(AgentTokenStreamContext context,
                   String streamId,
                   long chunkCount);
+
+    /** 模型流异常结束时刷新已接收正文并释放该流的临时资源。 */
+    default void abort(AgentTokenStreamContext context, String streamId) {
+        // Stateless sinks do not need explicit cleanup.
+    }
 }

@@ -13,10 +13,12 @@ import reactor.core.publisher.Flux;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -58,6 +60,27 @@ class ChatModelStreamingExecutorTests {
 
         assertThat(result).isEqualTo(
                 "{\"confirmedInformation\":{},\"rewrittenQuestion\":\"测试\"}");
+    }
+
+    @Test
+    void abortsBufferedDeliveryWhenModelStreamFails() {
+        ChatModel chatModel = mock(ChatModel.class);
+        AgentTokenStreamSink sink = mock(AgentTokenStreamSink.class);
+        AgentTokenStreamContext context = new AgentTokenStreamContext(
+                "wfi-001", "conversation-001", null,
+                "context-alignment-model", AgentTokenStreamContext.PHASE_CONTEXT_ALIGNMENT);
+        when(chatModel.stream(any(Prompt.class))).thenReturn(Flux.concat(
+                Flux.just(response("部分正文")),
+                Flux.error(new IllegalStateException("upstream failed"))));
+
+        assertThatThrownBy(() -> new ChatModelStreamingExecutor(sink, new ObjectMapper())
+                .execute(chatModel, List.of(new UserMessage("测试")), context))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("upstream failed");
+
+        verify(sink).publishToken(eq(context), anyString(), eq(1L), eq("部分正文"));
+        verify(sink).abort(eq(context), anyString());
+        verify(sink, never()).complete(eq(context), anyString(), org.mockito.ArgumentMatchers.anyLong());
     }
 
     private ChatResponse response(String content) {

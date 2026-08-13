@@ -1,5 +1,30 @@
 # 工程变更记录
 
+## 2026-08-13：SSE Token 低延迟合并落库
+
+- 保留 Spring AI / Spring AI Alibaba 的真实增量模型流；每个 `streamId` 的首块仍在模型回调线程同步持久化并发送，前端首字响应不等待批处理窗口。
+- `WorkflowAgentTokenStreamSink` 对后续小块按“默认最多80毫秒或累计128字符”双阈值合并，达到任一条件立即写入 `ai_workflow_sse_event` 并推送；流结束强制刷新尾部正文。
+- `agent_stream.chunkIndex` 继续表示本批次最后一个原始块序号，新增 `firstChunkIndex`、`sourceChunkCount` 供观测；`streamId + chunkIndex` 去重、Last-Event-ID、OceanBase事实表和多实例Poller协议不变，现有测试页面无需修改。
+- 新增独立 `workflow-token-flush-*` 调度器，Token 定时刷新不占用Lease心跳和通用`@Scheduled`任务线程；模型异常时刷新已生成正文并释放批次，但不发送正常结束标记。
+- 新增首块即时发布、时间阈值、字符阈值、尾部刷新、并行流隔离、异常清理和1,000个小块压缩测试；量化用例将1,000个单字符块压缩为10个发布事件且正文长度保持1,000。
+- 真实压测发现 Spring 会把唯一的 `ScheduledExecutorService` 自动用作全局 `@Scheduled` 调度器；新增显式 `taskScheduler`，将 SSE 数据库轮询、清理和租约任务固定到 `workflow-maintenance-*`，确保 `workflow-token-flush-*` 只负责低延迟模型流刷新。
+- 使用真实 DeepSeek `deepseek-chat` 与本机 OceanBase 完成端到端测量：单路首 SSE 事件80毫秒、首模型正文1.538秒、总耗时13.045秒，747个原始模型块合并为62条 `agent_stream` 事件，Token事件写入减少约91.7%。
+- 初次严格5路并发压测发现 SSE 执行器虽配置 `maxPoolSize=8`，但64容量队列使其长期只使用2个核心线程，后三路首事件排队约10秒/10秒/20秒。将 SSE 执行器改为零容量直接交付：最多8路立即启动，容量耗尽时快速拒绝，避免连接建立后静默排队；该问题与Token合并算法无关。
+- 修复后使用同一进程严格同时发起5路请求：首 SSE 事件全部为108毫秒，首模型正文为1.689～1.902秒，5路均以 `SUCCESS/complete` 收口；2,092个原始模型块合并为202条流事件，Token事件写入减少约90.3%，OceanBase全事件写入峰值43条/秒、`agent_stream`峰值33条/秒。
+- `./gradlew clean test` 全量163项测试通过，0失败、0错误、0跳过；覆盖Token合并器、SSE立即扩容与满载拒绝、调度线程隔离、配置绑定、ReactAgent/ChatModel流式执行器、SSE事件服务及完整Spring上下文。
+- 项目仍以 Java 21 为编译目标；本机当前仅安装 Java 25/26，本次真实压测 JVM 为 Java 26.0.1。正式环境性能基线需在 Java 21 Runtime 再复测一次。
+
+## 2026-08-12：DeepSeek 与 OceanBase 真实链路验收
+
+- 使用进程级环境变量接入 DeepSeek `deepseek-chat`，密钥未写入代码、配置文件、日志或本文档。
+- 产品分析接口真实调用成功：模型先调用 `read_skill` 和 `product_analysis`，再生成结构化分析结果；`modelInvoked=true`、输出格式校验通过。
+- 知识问答接口真实调用成功：模型先调用 `read_skill` 和 `insurance_knowledge_search`，再生成知识回答；两次 Agent 调用均未触发8次模型调用上限。
+- `local-db` Profile 连接 OceanBase 成功，Flyway 校验19个迁移，Schema V19 无待执行脚本。
+- 同步 Main Workflow 真实执行知识、保单、资产三个无依赖子任务，动态 DAG 并行调度成功，Summary 真实调用模型，审核结果为 `PASS`，工作流最终为 `SUCCESS`。
+- SSE 人工确认链路真实执行成功：首段事件从1递增到98并以 `human_confirm` 结束；选择 `PA-001` 后从99连续恢复到1137，共收到1022个 `agent_stream` Token 事件，最后依次收到 `summary`、`review`、`complete`。
+- OceanBase 一致性核验通过：两个 Graph Thread 均为 `COMPLETED`，Checkpoint 分别保留8和11个版本；确认产品仅写入当前 `conversationId`；短期和长期记忆均保存一问一答，长期记忆使用 `wfa-{workflowInstanceId}` 稳定幂等键。
+- 工作流终态后 `execution_owner` 与 `lease_until` 均已释放；SSE 事件按10分钟配置生成 `expire_at`，继续由现有清理任务物理删除。
+
 ## 2026-08-12：Spring AI Alibaba 1.1.2.0 原生能力优化
 
 ### 已采用

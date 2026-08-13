@@ -46,11 +46,18 @@ public class ReactAgentStreamingExecutor {
                                     AgentTokenStreamContext streamContext) throws Exception {
         AtomicReference<OverAllState> lastState = new AtomicReference<>();
         StreamPublication publication = new StreamPublication(streamContext);
-        reactAgent.stream(input)
-                .doOnNext(output -> handleOutput(output, lastState, publication))
-                .blockLast();
-        publication.complete();
-        return validateFinalMessage(extractAssistantMessage(lastState.get()));
+        try {
+            reactAgent.stream(input)
+                    .doOnNext(output -> handleOutput(output, lastState, publication))
+                    .blockLast();
+            AssistantMessage finalMessage = validateFinalMessage(extractAssistantMessage(lastState.get()));
+            publication.complete();
+            return finalMessage;
+        }
+        catch (Exception ex) {
+            publication.abort();
+            throw ex;
+        }
     }
 
     /** 使用历史消息列表执行 ReactAgent 流，并返回最终助手消息。 */
@@ -64,11 +71,18 @@ public class ReactAgentStreamingExecutor {
                                     AgentTokenStreamContext streamContext) throws Exception {
         AtomicReference<OverAllState> lastState = new AtomicReference<>();
         StreamPublication publication = new StreamPublication(streamContext);
-        reactAgent.stream(input)
-                .doOnNext(output -> handleOutput(output, lastState, publication))
-                .blockLast();
-        publication.complete();
-        return validateFinalMessage(extractAssistantMessage(lastState.get()));
+        try {
+            reactAgent.stream(input)
+                    .doOnNext(output -> handleOutput(output, lastState, publication))
+                    .blockLast();
+            AssistantMessage finalMessage = validateFinalMessage(extractAssistantMessage(lastState.get()));
+            publication.complete();
+            return finalMessage;
+        }
+        catch (Exception ex) {
+            publication.abort();
+            throw ex;
+        }
     }
 
     /** 同时维护最终 State，并严格过滤可向前端发布的模型增量事件。 */
@@ -80,7 +94,8 @@ public class ReactAgentStreamingExecutor {
                 || streamingOutput.getOutputType() != OutputType.AGENT_MODEL_STREAMING
                 || !(streamingOutput.message() instanceof AssistantMessage message)
                 || message.hasToolCalls()
-                || !StringUtils.hasText(message.getText())) {
+                || message.getText() == null
+                || message.getText().isEmpty()) {
             return;
         }
         publication.publish(message.getText());
@@ -141,6 +156,12 @@ public class ReactAgentStreamingExecutor {
         private void complete() {
             if (context != null) {
                 tokenStreamSink.complete(context, streamId, chunkIndex.get());
+            }
+        }
+
+        private void abort() {
+            if (context != null) {
+                tokenStreamSink.abort(context, streamId);
             }
         }
     }

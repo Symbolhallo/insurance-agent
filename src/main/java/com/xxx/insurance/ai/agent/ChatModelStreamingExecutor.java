@@ -48,18 +48,25 @@ public class ChatModelStreamingExecutor {
         AtomicLong chunkIndex = new AtomicLong();
         AtomicReference<ChatResponse> aggregatedResponse = new AtomicReference<>();
 
-        Flux<ChatResponse> responseFlux = chatModel.stream(new Prompt(messages))
-                .doOnNext(response -> publishChunk(response, streamContext, streamId, chunkIndex));
-        new MessageAggregator()
-                .aggregate(responseFlux, aggregatedResponse::set)
-                .blockLast();
+        try {
+            Flux<ChatResponse> responseFlux = chatModel.stream(new Prompt(messages))
+                    .doOnNext(response -> publishChunk(response, streamContext, streamId, chunkIndex));
+            new MessageAggregator()
+                    .aggregate(responseFlux, aggregatedResponse::set)
+                    .blockLast();
 
-        tokenStreamSink.complete(streamContext, streamId, chunkIndex.get());
-        String completeContent = text(aggregatedResponse.get());
-        if (!StringUtils.hasText(completeContent)) {
-            throw new IllegalStateException("ChatModel stream returned blank content");
+            String completeContent = text(aggregatedResponse.get());
+            if (!StringUtils.hasText(completeContent)) {
+                throw new IllegalStateException("ChatModel stream returned blank content");
+            }
+            String normalizedContent = repairMissingObjectStart(completeContent);
+            tokenStreamSink.complete(streamContext, streamId, chunkIndex.get());
+            return normalizedContent;
         }
-        return repairMissingObjectStart(completeContent);
+        catch (RuntimeException ex) {
+            tokenStreamSink.abort(streamContext, streamId);
+            throw ex;
+        }
     }
 
     /** 发布当前增量块，完整结果由 Spring AI MessageAggregator 独立聚合。 */
@@ -68,7 +75,7 @@ public class ChatModelStreamingExecutor {
                               String streamId,
                               AtomicLong chunkIndex) {
         String content = text(response);
-        if (StringUtils.hasText(content)) {
+        if (content != null && !content.isEmpty()) {
             tokenStreamSink.publishToken(
                     streamContext, streamId, chunkIndex.incrementAndGet(), content);
         }

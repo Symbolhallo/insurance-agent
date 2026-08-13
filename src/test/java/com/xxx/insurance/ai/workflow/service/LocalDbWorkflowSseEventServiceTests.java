@@ -36,7 +36,7 @@ class LocalDbWorkflowSseEventServiceTests {
 
     @Test
     void defaultsReplayRetentionToTenMinutes() {
-        WorkflowSseProperties properties = new WorkflowSseProperties(null, null, null);
+        WorkflowSseProperties properties = new WorkflowSseProperties(null, null, null, null, 0);
 
         assertThat(properties.eventRetention()).isEqualTo(Duration.ofMinutes(10));
     }
@@ -214,7 +214,8 @@ class LocalDbWorkflowSseEventServiceTests {
                 eventMapper,
                 executionMapper,
                 new ObjectMapper().findAndRegisterModules(),
-                new WorkflowSseProperties(Duration.ofMinutes(5), Duration.ofMinutes(10), Duration.ofMillis(500)),
+                new WorkflowSseProperties(
+                        Duration.ofMinutes(5), Duration.ofMinutes(10), Duration.ofMillis(500), null, 0),
                 new WorkflowLifecycleProperties(),
                 transactionManager);
     }

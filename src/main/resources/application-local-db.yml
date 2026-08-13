@@ -53,6 +53,10 @@ insurance:
         event-retention: 10m
         # 每个实例每500毫秒扫描一次 OceanBase 事件表，将其他实例产生的事件推给本机连接。
         database-poll-interval: 500ms
+        # 每个模型流首块立即发送；后续小块最多等待80毫秒即合并落库并推送，保证持续打字效果。
+        token-batch-max-delay: 80ms
+        # 待发送正文达到128个字符时不再等待时间窗口，立即刷新一个SSE事件。
+        token-batch-max-characters: 128
       # 数据物理清理及过期执行权恢复任务的调度周期。
       maintenance:
         # 应用启动1分钟后首次执行 Checkpoint 清理和租约恢复扫描。

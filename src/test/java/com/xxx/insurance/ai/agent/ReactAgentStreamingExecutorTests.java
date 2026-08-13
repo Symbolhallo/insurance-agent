@@ -14,7 +14,10 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -56,6 +59,9 @@ class ReactAgentStreamingExecutorTests {
     @Test
     void rejectsFrameworkWrappedStreamingModelException() throws Exception {
         ReactAgent reactAgent = mock(ReactAgent.class);
+        AgentTokenStreamSink sink = mock(AgentTokenStreamSink.class);
+        AgentTokenStreamContext context = new AgentTokenStreamContext(
+                "wfi-001", "conversation-001", "task-1", "test-agent", "SUB_AGENT");
         AssistantMessage wrappedError = AssistantMessage.builder()
                 .content("Exception: upstream credential and request details")
                 .build();
@@ -63,10 +69,12 @@ class ReactAgentStreamingExecutorTests {
         when(reactAgent.stream("问题")).thenReturn(Flux.just(new StreamingOutput<>(
                 wrappedError, "done", "test-agent", finalState, OutputType.AGENT_MODEL_FINISHED)));
 
-        assertThatThrownBy(() -> new ReactAgentStreamingExecutor(mock(AgentTokenStreamSink.class))
-                .execute(reactAgent, "问题"))
+        assertThatThrownBy(() -> new ReactAgentStreamingExecutor(sink)
+                .execute(reactAgent, "问题", context))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("ReactAgent streaming model call failed");
+        verify(sink).abort(eq(context), anyString());
+        verify(sink, never()).complete(eq(context), anyString(), org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test
