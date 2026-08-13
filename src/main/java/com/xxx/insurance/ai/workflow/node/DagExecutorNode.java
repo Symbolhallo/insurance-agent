@@ -9,7 +9,7 @@ import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
 import com.xxx.insurance.ai.workflow.model.WorkflowNodeDefinition;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
-import com.xxx.insurance.ai.workflow.service.WorkflowDagExecutor;
+import com.xxx.insurance.ai.workflow.execution.WorkflowDagExecutor;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;

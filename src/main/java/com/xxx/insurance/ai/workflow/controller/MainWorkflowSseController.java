@@ -1,7 +1,7 @@
 package com.xxx.insurance.ai.workflow.controller;
 
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
-import com.xxx.insurance.ai.workflow.service.WorkflowSseService;
+import com.xxx.insurance.ai.workflow.sse.service.WorkflowSseService;
 import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;

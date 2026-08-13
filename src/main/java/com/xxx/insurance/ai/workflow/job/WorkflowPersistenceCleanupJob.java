@@ -1,7 +1,7 @@
 package com.xxx.insurance.ai.workflow.job;
 
 import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
-import com.xxx.insurance.ai.workflow.service.LocalDbWorkflowSseEventService;
+import com.xxx.insurance.ai.workflow.sse.service.LocalDbWorkflowSseEventService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;

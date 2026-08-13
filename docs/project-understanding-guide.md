@@ -158,7 +158,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | 文件 | 主要函数 | 作用 |
 | --- | --- | --- |
 | `AgentMemoryService` | `isEnabled()`、`getHistory()`、`saveSuccessfulExchange()`、`saveSuccessfulInvocation()`、`saveFailedInvocation()` | Agent 记忆与审计总端口。 |
-| `JdbcAgentMemoryService` | 实现上述函数；`toConversationRecord()`、`toLongTermMemoryRecord()` | local-db 事务协调器；一次最终对话同时写窗口记忆、长期记忆、会话和调用流水。 |
+| `LocalDbAgentMemoryService` | 实现上述函数；`toConversationRecord()`、`toLongTermMemoryRecord()` | local-db 事务协调器；一次最终对话同时写窗口记忆、长期记忆、会话和调用流水。类名强调运行 Profile 和职责，不再误导为直接使用 JdbcTemplate。 |
 | `NoOpAgentMemoryService` | 同接口空实现 | 非 local-db profile 保持 Agent 可运行但不持久化。 |
 | `AgentConversationService` / `MyBatisAgentConversationService` | `upsertActiveConversation()` | 会话主记录端口与实现。 |
 | `AgentInvocationService` / `MyBatisAgentInvocationService` | `save()` | 调用审计端口与 MyBatis 实现；转换缺失章节 JSON 和布尔值。 |
@@ -239,7 +239,6 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `WorkflowSummaryAgentConfig` | `workflowSummaryReactAgent()`、`workflowSummaryAgent()` | Summary ReactAgent 与门面 Bean。 |
 | `OutputReviewConfig` | `outputReviewGateway()` | 注册当前 Mock 审核网关。 |
 | `WorkflowExecutionConfig` | `workflowDagTaskExecutor()`、`workflowSseTaskExecutor()`、`workflowTokenFlushScheduler()`、`workflowMaintenanceTaskScheduler()`、`createExecutor()` | DAG/SSE 有界线程池；SSE 执行器采用零容量直接交付，最多8路立即运行、满载快速拒绝，不允许已连接请求静默排队；Token 批次刷新和 Spring `@Scheduled` 数据库轮询/清理/租约任务使用相互隔离的调度器；同时负责 MDC 传播、优雅关闭并启用 Scheduling。 |
-| `WorkflowSseProperties` | Record 字段与默认校验 | SSE 连接超时、事件保留期、数据库轮询周期，以及 Token 批次最大延迟/字符数。最大延迟被限制在1秒以内。 |
 | `WorkflowLifecycleProperties` | 租约 Getter/Setter、`validate()` | 配置实例 owner、执行/抢占/等待确认租约和 heartbeat 周期，并保证续租周期短于最短执行租约。 |
 
 ### `workflow.controller`
@@ -261,7 +260,6 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | 文件 | 方法 | 作用 |
 | --- | --- | --- |
 | `WorkflowExecutionMapper` | 实例/步骤 CRUD、确认与恢复 claim、`renewOwnedExecutionLeases()`、过期会话锁删除 | 工作流执行持久化；claim 递增 fencing token，执行期写入校验 owner、token 和未过期 lease，heartbeat 不改变 token。 |
-| `WorkflowSseEventMapper` | 执行期/暂停/终态 sequence 分配、`lastAllocatedSequence()`、`insert()`、`findReplayEvents()`、`findHighWatermark()`、`deleteExpiredEvents()` | 分配工作流内 SSE 序号、持久化、重放和清理；事件写入按阶段校验 owner、fencing token、lease 或终态。人工确认事务提交后立即 flush，`human_confirm` 实际发送成功后才关闭本段连接。 |
 
 ### `workflow.node`
 
@@ -285,20 +283,45 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | --- | --- | --- |
 | `MainWorkflowService` | run/confirm/claim/resume 接口族 | 主工作流应用端口。 |
 | `LocalDbMainWorkflowService` | `run()`、`confirmProducts()`、`claimProductConfirmation()`、`confirmClaimedProducts()`、`releaseProductConfirmationClaim()`、`resume()`、`waitingConfirmResponse()`、`complete()`、`fail()` | 创建实例/步骤、调用 Graph、中断响应、原子确认恢复、最终记忆和状态收口。 |
-| `WorkflowStartService` | `start()` | 单事务内先条件清理当前 conversation 的过期失效锁，再插入会话锁、实例和步骤；主键冲突是多实例启动互斥的最终防线。 |
-| `WorkflowFinalizationService` | `complete()`、`fail()`、内部 `finalize()` | 单事务收口实例终态、最终 Memory、步骤、Checkpoint、SSE Outbox 和 conversation 锁。 |
-| `WorkflowPauseService` | `pauseForProductConfirmation()` | 单事务写入步骤暂停、WAITING_CONFIRM、会话锁续期和 human_confirm 事实事件。 |
 | `NoOpMainWorkflowService` | 同接口禁用响应 | 非 local-db profile 的可启动替代。 |
 | `ContextAlignmentService` | `align()` 重载、Prompt 拼装和确定性校验函数 | 加载会话快照，调用模型完成话题判断、指代消解、问题改写和确认信息合并。 |
 | `IntentRecognitionService` | `recognize()` 重载、`validateAndMap()` | 结构化识别意图，并只允许四个白名单 Agent。 |
 | `ProductReferenceResolutionService` | `resolve()` 重载、Prompt 与校验函数 | 当前问题先行产品实体判断，输出召回决定和历史产品映射。 |
+
+### `workflow.execution`
+
+动态任务执行子域。这里负责 Planner 计划的确定性校验和运行时 DAG 调度，不负责主工作流生命周期或 SSE 交付。
+
+| 文件 | 核心函数 | 作用 |
+| --- | --- | --- |
 | `WorkflowPlanValidator` | `validate()`、`validateTask()`、`validateDependencies()`、`validateAcyclic()` | 校验 taskId、agentType、query、dependsOn、自依赖和环。 |
 | `WorkflowDagExecutor` | `execute()`、就绪判断、失败传播、完成等待函数 | 依据 dependsOn 动态提交任务；A 完成即可释放只依赖 A 的 B，无需等待无关 C。 |
 | `WorkflowTaskGraphRunner` | `execute()`、`runnableConfig()`、`pending()` | 为每个任务生成独立 threadId，恢复 SUCCESS Checkpoint，执行任务子图。 |
 | `WorkflowSubAgentRouter` | `invoke()`、`buildAgentQuery()`、结果转换函数 | 将受控 agentType 路由到产品、知识、保单、资产 Agent，只传最小任务上下文。 |
+
+### `workflow.lifecycle`
+
+工作流运行安全与状态机子域。事务开始、暂停、收口和节点执行门禁集中在此；这些类不能被普通 Graph 观测逻辑替代。
+
+| 文件 | 核心函数 | 作用 |
+| --- | --- | --- |
+| `WorkflowStartService` | `start()` | 单事务内先条件清理当前 conversation 的过期失效锁，再插入会话锁、实例和步骤；主键冲突是多实例启动互斥的最终防线。 |
+| `WorkflowFinalizationService` | `complete()`、`fail()`、内部 `finalize()` | 单事务收口实例终态、最终 Memory、步骤、Checkpoint、SSE Outbox 和 conversation 锁。 |
+| `WorkflowPauseService` | `pauseForProductConfirmation()` | 单事务写入步骤暂停、WAITING_CONFIRM、会话锁续期和 human_confirm 事实事件。 |
 | `WorkflowNodeExecutionGuard` / `LocalDbWorkflowNodeExecutionGuard` | `execute()`；Lease/Fence 与步骤状态辅助函数 | 装饰主图 Node，强制步骤状态 CAS、Lease/Fence 门禁及结果审计；安全异常必须传播给 Graph。 |
 | `NoOpWorkflowNodeExecutionGuard` | `execute()` 直接执行 | 非 local-db 替代。 |
 | `MainWorkflowLifecycleListener` | `onStart()`、`before()`、`after()`、`onError()`、`onComplete()` | Spring AI Alibaba 原生 Graph Listener；负责 Graph/Node 日志、耗时和脱敏 Stage SSE，不承担安全门禁。 |
+
+### `workflow.sse`
+
+可靠流式交付子域，内部按 `config/mapper/model/service` 分层。OceanBase 事件表是事实源，内存中的 `SseEmitter` 只代表当前 JVM 的连接。
+
+| 文件 | 核心函数 | 作用 |
+| --- | --- | --- |
+| `sse.config.WorkflowSseProperties` | Record 字段与默认校验 | SSE 连接超时、10分钟事件保留、数据库轮询周期，以及 Token 批次最大延迟/字符数；最大延迟限制在1秒以内。 |
+| `sse.mapper.WorkflowSseEventMapper` | sequence 分配、`insert()`、`findReplayEvents()`、`deleteExpiredEvents()` | 按工作流分配事件序号、持久化、重放和清理；执行期写入按阶段校验 owner、fencing token、lease 或终态。 |
+| `sse.model.WorkflowSseEventType` | `eventName()` | 定义 start、stage、human_confirm、agent_stream、complete、error 等协议事件。 |
+| `sse.model.WorkflowSseEvent` / `WorkflowSseEventRecord` | Record 字段 | 前端事件与数据库事件记录。 |
 | `WorkflowEventPublisher` | `publish()`、`completeSubscribers()` | Workflow 事件输出端口。 |
 | `LocalDbWorkflowSseEventService` | subscribe/reconnect/publish/poll/deliver/purge/complete；`SseClient.send()` | OceanBase 是事件事实源；每个连接按 sequenceNo 重放、跨实例轮询和幂等推送。 |
 | `NoOpWorkflowEventPublisher` | 空发布 | 非 local-db 替代。 |
@@ -340,8 +363,6 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `WorkflowNodeDefinition` | 主图节点枚举；`code()`、`nodeName()`、`type()`、`target()`。 |
 | `WorkflowInstanceRecord` / `WorkflowInstanceExecutionView` | 实例写入记录和状态查询视图。 |
 | `WorkflowStepRecord` | 步骤写入记录。 |
-| `WorkflowSseEventType` | start/stage/human_confirm/agent_start/agent_stream/agent_complete/summary/review/complete/error；`eventName()`。 |
-| `WorkflowSseEvent` / `WorkflowSseEventRecord` | 前端事件和数据库事件记录。 |
 
 ## 4.7 `com.xxx.insurance.product`
 
@@ -468,7 +489,10 @@ Checkpoint 的7天/24小时保留期是两套独立生命周期，不能混用�
 | `ai/workflow/checkpoint/*Tests` | State Codec、乐观锁 Saver、恢复与清理。 |
 | `ai/workflow/config/MainWorkflowHumanConfirmGraphTests` | Human Confirm 中断和恢复拓扑。 |
 | `ai/workflow/node/*Tests` | AgentInvoke、HumanConfirm、Summary、OutputReview。 |
-| `ai/workflow/service/*Tests` | 前置模型、DAG、SSE、确认并发、任务子图和校验器。 |
+| `ai/workflow/service/*Tests` | 主工作流应用编排、前置模型和确认并发。 |
+| `ai/workflow/execution/*Tests` | 计划校验、动态 DAG、任务子图和子智能体路由。 |
+| `ai/workflow/lifecycle/*Tests` | Lease/Fence 执行门禁、生命周期观测、启动和事务收口。 |
+| `ai/workflow/sse/{config,mapper,service}/*Tests` | SSE 配置、事件写入围栏、重放、多实例轮询和 Token 合并。 |
 | `ai/workflow/job/WorkflowPersistenceCleanupJobTests` | Checkpoint/SSE 定时清理及失败隔离。 |
 | `ai/workflow/job/WorkflowLeaseRecoveryJobTests` | 当前 owner heartbeat 续租参数、瞬时状态恢复和过期 conversation 锁回收。 |
 | `ai/workflow/mapper/WorkflowExecutionMapperLeaseSqlTests` | 锁回收、联合续租、恢复 claim 和确认 claim 的数据库 CAS 条件。 |

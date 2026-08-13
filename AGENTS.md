@@ -127,13 +127,26 @@ Current package layout:
 ```text
 ai
 ├── agent
+├── config
 ├── controller
-├── skill
-├── tool
-├── memory
 ├── model
 ├── service
-└── config
+├── memory
+├── retrieval
+└── workflow
+    ├── agent
+    ├── checkpoint
+    ├── client
+    ├── config
+    ├── controller
+    ├── execution
+    ├── job
+    ├── lifecycle
+    ├── mapper
+    ├── model
+    ├── node
+    ├── service
+    └── sse
 
 product
 ├── agent
@@ -143,7 +156,16 @@ product
 ├── tool
 ├── service
 ├── formatter
+├── mapper
 └── model
+
+knowledge / policy / asset
+├── agent
+├── config
+├── controller (only when the domain exposes a direct API)
+├── model
+├── service
+└── tool
 
 common
 ├── config
@@ -151,6 +173,11 @@ common
 ├── result
 └── util
 ```
+
+Within `ai.workflow`, keep package ownership explicit: `service` owns top-level application
+orchestration, `execution` owns dynamic DAG scheduling, `lifecycle` owns transactional
+state transitions and Lease/Fence guards, and `sse` owns reliable event delivery. Do not
+move these responsibilities back into a generic service package.
 
 ## Spring AI Alibaba Verified Classes
 

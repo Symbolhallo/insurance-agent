@@ -4,7 +4,7 @@ import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.workflow.agent.WorkflowPlannerAgent;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
-import com.xxx.insurance.ai.workflow.service.WorkflowPlanValidator;
+import com.xxx.insurance.ai.workflow.execution.WorkflowPlanValidator;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.template.NoOpTemplateRenderer;

@@ -1,5 +1,15 @@
 # 工程变更记录
 
+## 2026-08-13：按业务职责整理 Workflow 包结构
+
+- 保留 `product`、`knowledge`、`policy`、`asset` 四个业务域现有的 Agent/Config/Model/Service/Tool 垂直划分；这些边界已经合理，没有为追求目录数量做无关拆分。
+- 将动态计划校验、DAG 调度、任务子图执行和子智能体路由从通用 `ai.workflow.service` 收敛到 `ai.workflow.execution`。
+- 将工作流启动、暂停、事务收口、Lease/Fence 节点门禁和 Graph 生命周期观测收敛到 `ai.workflow.lifecycle`。
+- 将 SSE 配置、事件 Mapper、事件模型、可靠投递服务收敛到 `ai.workflow.sse`，内部继续按 `config/mapper/model/service` 分层；OceanBase 事实表、Last-Event-ID、多实例轮询和 Token 合并行为不变。
+- `ai.workflow.service` 只保留主工作流应用编排、上下文对齐、意图识别和产品引用解析；`controller/node/job/checkpoint` 继续维持清晰的技术职责。
+- 将没有直接使用 JDBC 的 `JdbcAgentMemoryService` 更名为 `LocalDbAgentMemoryService`，准确表达它是 local-db Profile 下协调 Spring AI ChatMemory 与 MyBatis 服务的事务门面。
+- 测试包同步镜像生产目录，更新 `AGENTS.md` 与 `docs/project-understanding-guide.md`；本次未改变 Bean 名称、HTTP/SSE API、Graph 拓扑、数据库表或业务行为。
+
 ## 2026-08-13：SSE Token 低延迟合并落库
 
 - 保留 Spring AI / Spring AI Alibaba 的真实增量模型流；每个 `streamId` 的首块仍在模型回调线程同步持久化并发送，前端首字响应不等待批处理窗口。

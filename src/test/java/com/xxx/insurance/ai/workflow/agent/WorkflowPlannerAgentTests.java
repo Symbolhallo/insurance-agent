@@ -9,7 +9,7 @@ import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.ProductRecallDecision;
 import com.xxx.insurance.ai.workflow.model.ProductRecallTrigger;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
-import com.xxx.insurance.ai.workflow.service.WorkflowPlanValidator;
+import com.xxx.insurance.ai.workflow.execution.WorkflowPlanValidator;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;

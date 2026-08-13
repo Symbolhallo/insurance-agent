@@ -7,10 +7,10 @@ import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
 import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowAgentTaskContext;
-import com.xxx.insurance.ai.workflow.model.WorkflowSseEventType;
+import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseEventType;
 import com.xxx.insurance.ai.workflow.model.WorkflowTaskStateKeys;
-import com.xxx.insurance.ai.workflow.service.WorkflowEventPublisher;
-import com.xxx.insurance.ai.workflow.service.WorkflowSubAgentRouter;
+import com.xxx.insurance.ai.workflow.sse.service.WorkflowEventPublisher;
+import com.xxx.insurance.ai.workflow.execution.WorkflowSubAgentRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

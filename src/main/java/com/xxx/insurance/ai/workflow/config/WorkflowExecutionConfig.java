@@ -1,5 +1,6 @@
 package com.xxx.insurance.ai.workflow.config;
 
+import com.xxx.insurance.ai.workflow.sse.config.WorkflowSseProperties;
 import org.slf4j.MDC;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

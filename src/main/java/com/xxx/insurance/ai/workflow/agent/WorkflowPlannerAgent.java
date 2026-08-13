@@ -7,7 +7,7 @@ import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.IntentRoute;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
-import com.xxx.insurance.ai.workflow.service.WorkflowPlanValidator;
+import com.xxx.insurance.ai.workflow.execution.WorkflowPlanValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.converter.BeanOutputConverter;

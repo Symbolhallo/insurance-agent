@@ -8,8 +8,8 @@ import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowAgentTaskContext;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlanTask;
 import com.xxx.insurance.ai.workflow.model.WorkflowTaskStateKeys;
-import com.xxx.insurance.ai.workflow.service.NoOpWorkflowEventPublisher;
-import com.xxx.insurance.ai.workflow.service.WorkflowSubAgentRouter;
+import com.xxx.insurance.ai.workflow.sse.service.NoOpWorkflowEventPublisher;
+import com.xxx.insurance.ai.workflow.execution.WorkflowSubAgentRouter;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import org.junit.jupiter.api.Test;
 
