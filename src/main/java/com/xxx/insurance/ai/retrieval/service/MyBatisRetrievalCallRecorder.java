@@ -14,10 +14,12 @@ public class MyBatisRetrievalCallRecorder implements RetrievalCallRecorder {
 
     private final RetrievalCallMapper retrievalCallMapper;
 
+    /** 创建召回调用审计记录器。 */
     public MyBatisRetrievalCallRecorder(RetrievalCallMapper retrievalCallMapper) {
         this.retrievalCallMapper = retrievalCallMapper;
     }
 
+    /** 追加保存一次召回调用的输入、输出、耗时和状态，不参与召回结果决策。 */
     @Override
     public void record(RetrievalCallRecord record) {
         retrievalCallMapper.insert(record);

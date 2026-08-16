@@ -10,6 +10,10 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface LongTermMemoryMapper {
 
+    /**
+     * 追加一条永久历史记忆。长期记忆采用 append-only 语义，不覆盖 ChatMemory 当前窗口；
+     * memoryId 主键是当前数据库唯一性边界，invocationId 仅用于关联查询，不承担数据库幂等约束。
+     */
     @Insert("""
             insert into ai_long_term_memory (
                 memory_id,
@@ -55,6 +59,7 @@ public interface LongTermMemoryMapper {
             String metadataJson,
             java.time.Instant occurredAt) {
 
+        /** 将包含枚举等领域类型的记录转换为数据库可直接绑定的标量结构。 */
         public static LongTermMemoryWriteRecord from(LongTermMemoryRecord record) {
             return new LongTermMemoryWriteRecord(
                     record.memoryId(),

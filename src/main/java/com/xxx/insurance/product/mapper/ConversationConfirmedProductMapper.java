@@ -17,6 +17,10 @@ import java.util.List;
 @Mapper
 public interface ConversationConfirmedProductMapper {
 
+    /**
+     * 读取当前 conversationId 内仍有效的确认产品，并按最近使用和确认时间排序。
+     * 不跨会话查询，保证历史确认结果只在当前会话上下文中生效。
+     */
     @Select("""
             select conversation_id,
                    product_code,
@@ -45,6 +49,10 @@ public interface ConversationConfirmedProductMapper {
     })
     List<ConfirmedProduct> findActiveByConversationId(@Param("conversationId") String conversationId);
 
+    /**
+     * 按 conversationId + productCode 幂等保存用户确认结果。重复确认会更新标准产品信息、
+     * 召回来源和最近使用时间，并重新激活曾失效的同一产品记录。
+     */
     @Insert("""
             insert into ai_conversation_confirmed_product (
                 confirmation_id,

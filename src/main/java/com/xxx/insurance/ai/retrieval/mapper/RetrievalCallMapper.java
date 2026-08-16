@@ -10,6 +10,10 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface RetrievalCallMapper {
 
+    /**
+     * 追加一次外部产品/知识召回审计，完整记录查询条件、结果、耗时和失败原因；
+     * 该表用于业务追踪，不作为向量召回结果的主存储。
+     */
     @Insert("""
             insert into ai_retrieval_call (
                 retrieval_call_id,

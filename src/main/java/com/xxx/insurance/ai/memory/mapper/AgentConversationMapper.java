@@ -10,6 +10,10 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface AgentConversationMapper {
 
+    /**
+     * 幂等创建或激活会话主记录。重复 conversationId 会刷新身份、Agent 和更新时间，但保留已有标题，
+     * 防止后续调用用自动标题覆盖人工维护结果。
+     */
     @Insert("""
             insert into ai_conversation (
                 conversation_id,

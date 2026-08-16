@@ -24,6 +24,11 @@ import java.util.List;
 @Mapper
 public interface AgentMemoryQueryMapper {
 
+    /**
+     * 查询会话主数据及最近更新时间，供管理接口展示会话归属和生命周期状态。
+     *
+     * @return 会话不存在时返回 {@code null}
+     */
     @Select("""
             select conversation_id,
                    user_id,
@@ -50,6 +55,7 @@ public interface AgentMemoryQueryMapper {
     })
     AgentConversationRecord findConversation(@Param("conversationId") String conversationId);
 
+    /** 按模型消费顺序读取当前短期记忆窗口，包含消息元数据和落库时间。 */
     @Select("""
             select message_id,
                    conversation_id,
@@ -73,6 +79,9 @@ public interface AgentMemoryQueryMapper {
     })
     List<ChatMemoryMessageView> findChatMessages(@Param("conversationId") String conversationId);
 
+    /**
+     * 按时间倒序分页读取长期记忆，包括已归档数据，供历史审计和 Swagger 查询。
+     */
     @Select("""
             select memory_id,
                    conversation_id,
@@ -112,6 +121,9 @@ public interface AgentMemoryQueryMapper {
     List<LongTermMemoryView> findLongTermMemories(@Param("conversationId") String conversationId,
                                                   @Param("limit") int limit);
 
+    /**
+     * 按时间正序读取未归档长期记忆，供总结模型构建连续历史；limit 限制单次模型上下文规模。
+     */
     @Select("""
             select memory_id,
                    conversation_id,
@@ -152,6 +164,7 @@ public interface AgentMemoryQueryMapper {
     List<LongTermMemoryView> findLongTermMemoriesForSummary(@Param("conversationId") String conversationId,
                                                             @Param("limit") int limit);
 
+    /** 按生成时间倒序读取会话摘要，供观测接口和后续上下文压缩使用。 */
     @Select("""
             select summary_id,
                    conversation_id,
@@ -177,6 +190,7 @@ public interface AgentMemoryQueryMapper {
     List<ConversationSummaryView> findSummaries(@Param("conversationId") String conversationId,
                                                 @Param("limit") int limit);
 
+    /** 按调用时间倒序读取 Agent 调用审计，包含模型、耗时、格式校验及错误信息。 */
     @Select("""
             select invocation_id,
                    conversation_id,

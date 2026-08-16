@@ -44,11 +44,13 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
         this.objectMapper = objectMapper;
     }
 
+    /** 返回当前短期窗口表中的全部会话标识。 */
     @Override
     public List<String> findConversationIds() {
         return chatMemoryMapper.findConversationIds();
     }
 
+    /** 从数据库按顺序恢复消息，并还原为 Spring AI 对应的 Message 子类型。 */
     @Override
     public List<Message> findByConversationId(String conversationId) {
         return chatMemoryMapper.findByConversationId(conversationId).stream()
@@ -56,6 +58,10 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
                 .toList();
     }
 
+    /**
+     * 事务性覆盖保存一个会话的完整窗口：先删除旧窗口，再按新列表顺序写入。
+     * 任意序列化或插入异常都会回滚删除，避免数据库只留下半个上下文窗口。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void saveAll(String conversationId, List<Message> messages) {
@@ -72,6 +78,7 @@ public class MyBatisChatMemoryRepository implements ChatMemoryRepository {
         }
     }
 
+    /** 删除会话短期窗口；长期记忆和调用审计不受影响。 */
     @Override
     public void deleteByConversationId(String conversationId) {
         chatMemoryMapper.deleteByConversationId(conversationId);

@@ -753,6 +753,9 @@ API Key 不能写入代码、YAML、数据库事件或日志。
 7. 涉及 conversationId、workflowInstanceId、threadId 时分别遵守：会话边界、执行边界、Checkpoint 边界。
 8. 中间模型 Token 仅用于过程展示；最终业务答案只能使用审核后的 `complete.finalAnswer`。
 9. 所有新增行为都要同步测试目录和 `change.md`，并更新本文相应章节。
+10. MyBatis Mapper 注释不能只复述增删改查；工作流、Checkpoint、SSE SQL 要说明 owner、Lease、
+    fencing token、状态机、乐观锁、幂等和保留条件，CAS 方法必须明确返回 0 的业务含义。
+11. Memory Mapper 注释必须区分短期窗口覆盖、长期历史追加、调用审计和只读观测，避免混淆数据语义。
 
 ---
 

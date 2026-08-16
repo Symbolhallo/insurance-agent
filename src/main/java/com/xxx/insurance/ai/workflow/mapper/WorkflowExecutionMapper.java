@@ -18,6 +18,11 @@ import org.apache.ibatis.annotations.Update;
 @Mapper
 public interface WorkflowExecutionMapper {
 
+    /**
+     * 读取工作流实例当前的状态、执行租约和 fencing token，供恢复、确认和写入权限判断使用。
+     *
+     * @return 实例不存在时返回 {@code null}
+     */
     @Select("""
             select workflow_instance_id,
                    conversation_id,
@@ -40,6 +45,10 @@ public interface WorkflowExecutionMapper {
     })
     WorkflowInstanceExecutionView findInstance(@Param("workflowInstanceId") String workflowInstanceId);
 
+    /**
+     * 创建顶层工作流实例，并将初始 owner、租约、fencing token 和状态版本一并落库。
+     * workflowInstanceId 及 conversationId/requestId 的唯一约束同时承担执行幂等保护。
+     */
     @Insert("""
             insert into ai_workflow_instance (
                 workflow_instance_id,
@@ -74,7 +83,10 @@ public interface WorkflowExecutionMapper {
     void insertInstance(WorkflowInstanceRecord record);
 
     /**
-     * 原子写入正常业务终态。终态保护条件保证重复收口或迟到异常不能覆盖既有结果。
+     * 原子写入正常业务终态并释放执行租约。只有仍持有有效 owner、fencing token 和租约的执行者
+     * 可以收口；终态保护条件保证重复收口或迟到异常不能覆盖既有结果。
+     *
+     * @return 1 表示成功收口；0 表示执行权已失效或实例已经进入终态
      */
     @Update("""
             update ai_workflow_instance
@@ -99,7 +111,12 @@ public interface WorkflowExecutionMapper {
                          @Param("executionFenceToken") long executionFenceToken,
                          @Param("endedAt") java.time.Instant endedAt);
 
-    /** 仅允许非终态实例迁移为 FAILED，避免外层迟到 catch 覆盖已提交业务终态。 */
+    /**
+     * 在当前执行者仍持有有效租约时将非终态实例收口为 FAILED，并释放执行权。
+     * SUCCESS、PARTIAL_SUCCESS、REVIEW_BLOCKED 等终态不会被迟到异常覆盖。
+     *
+     * @return 1 表示失败终态已写入；0 表示执行权已失效或实例已经是终态
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'FAILED',
@@ -121,6 +138,12 @@ public interface WorkflowExecutionMapper {
                                   @Param("executionFenceToken") long executionFenceToken,
                                   @Param("endedAt") java.time.Instant endedAt);
 
+    /**
+     * 在 owner、fencing token 和租约校验通过后更新实例状态，并释放当前执行权。
+     * 该方法用于受控的非标准状态迁移；调用方必须检查返回值，0 表示当前执行者无权写入。
+     *
+     * @return 实际更新的实例行数
+     */
     @Update("""
             update ai_workflow_instance
             set status = #{status},
@@ -142,7 +165,12 @@ public interface WorkflowExecutionMapper {
                              @Param("executionFenceToken") long executionFenceToken,
                              @Param("updatedAt") java.time.Instant updatedAt);
 
-    /** 原子抢占等待产品确认的实例，防止多个确认请求从同一 Checkpoint 重复恢复。 */
+    /**
+     * 将 WAITING_CONFIRM 原子抢占为 CONFIRMING，并生成新一代 fencing token。
+     * conversation lock 仍有效才允许抢占，从数据库层阻止并发确认请求恢复同一 Checkpoint。
+     *
+     * @return 1 表示抢占成功；0 表示状态、会话锁或并发条件不满足
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'CONFIRMING',
@@ -169,7 +197,12 @@ public interface WorkflowExecutionMapper {
                                  @Param("leaseUntil") java.time.Instant leaseUntil,
                                  @Param("updatedAt") java.time.Instant updatedAt);
 
-    /** 后台任务尚未提交时释放确认抢占，允许用户重新提交。 */
+    /**
+     * 后台恢复任务尚未提交时，将当前 owner 抢占的 CONFIRMING 回退为 WAITING_CONFIRM。
+     * owner 与 fencing token 条件可防止旧请求释放新执行者的确认权。
+     *
+     * @return 1 表示释放成功；0 表示抢占权已变化
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'WAITING_CONFIRM',
@@ -189,6 +222,12 @@ public interface WorkflowExecutionMapper {
                                         @Param("executionFenceToken") long executionFenceToken,
                                         @Param("updatedAt") java.time.Instant updatedAt);
 
+    /**
+     * 原子抢占无人持有或租约已过期的 RUNNING 实例，将其切换为 RESUMING 并递增 fencing token。
+     * 仍要求 conversation lock 存在，避免恢复一个已经脱离顶层会话互斥边界的实例。
+     *
+     * @return 1 表示取得恢复权；0 表示实例不可恢复或已被其他执行者抢占
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'RESUMING',
@@ -215,7 +254,11 @@ public interface WorkflowExecutionMapper {
                     @Param("leaseUntil") java.time.Instant leaseUntil,
                     @Param("updatedAt") java.time.Instant updatedAt);
 
-    /** 主动恢复取得 Checkpoint 后退出 RESUMING 瞬时态，再执行可能耗时较长的 Graph。 */
+    /**
+     * 当前恢复者取得 Checkpoint 后将 RESUMING 切回 RUNNING，并续长租约后执行 Graph。
+     *
+     * @return 1 表示迁移成功；0 表示 owner、fencing token 或租约已失效
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'RUNNING',
@@ -234,7 +277,11 @@ public interface WorkflowExecutionMapper {
                                @Param("leaseUntil") java.time.Instant leaseUntil,
                                @Param("updatedAt") java.time.Instant updatedAt);
 
-    /** 将已确认实例交还给当前执行者继续运行，并刷新执行租约。 */
+    /**
+     * 产品确认数据保存完成后，将当前 owner 的 CONFIRMING 实例切回 RUNNING 并刷新租约。
+     *
+     * @return 1 表示迁移成功；0 表示确认执行权已失效
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'RUNNING',
@@ -254,7 +301,12 @@ public interface WorkflowExecutionMapper {
                                      @Param("leaseUntil") java.time.Instant leaseUntil,
                                      @Param("updatedAt") java.time.Instant updatedAt);
 
-    /** 释放已过期但未真正恢复的产品确认抢占。 */
+    /**
+     * 批量回收租约已过期的 CONFIRMING 瞬时态，使用户可以重新提交产品确认。
+     * 未过期记录不会被修改，多实例可依赖数据库 UPDATE 的行锁安全并发执行。
+     *
+     * @return 本次回收的实例数
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'WAITING_CONFIRM',
@@ -268,7 +320,11 @@ public interface WorkflowExecutionMapper {
             """)
     int recoverExpiredConfirming(@Param("now") java.time.Instant now);
 
-    /** 释放已过期但未开始执行的主动恢复抢占，允许再次从 Checkpoint 恢复。 */
+    /**
+     * 批量回收租约已过期的 RESUMING 瞬时态，清除 owner 后允许其他实例再次恢复。
+     *
+     * @return 本次回收的实例数
+     */
     @Update("""
             update ai_workflow_instance
             set status = 'RUNNING',
@@ -285,6 +341,8 @@ public interface WorkflowExecutionMapper {
     /**
      * 在一条数据库语句内同时刷新实例和 conversation lock。只有租约尚未过期的当前 owner
      * 可以续租，旧 owner 或已失去执行权的状态不会产生更新。
+     *
+     * @return 本次成功续租的工作流数量；0 表示该 owner 当前没有可续租实例
      */
     @Update("""
             update ai_workflow_instance i
@@ -305,7 +363,10 @@ public interface WorkflowExecutionMapper {
                                   @Param("leaseUntil") java.time.Instant leaseUntil,
                                   @Param("now") java.time.Instant now);
 
-    /** 同一 conversation 的顶层工作流锁；主键冲突即表示前一轮仍未收口。 */
+    /**
+     * 创建同一 conversation 的顶层工作流互斥锁。conversationId 主键冲突表示前一轮仍未收口，
+     * requestId 唯一约束同时阻止网关重试或用户重复提交创建第二个实例。
+     */
     @Insert("""
             insert into ai_conversation_workflow_lock (
                 conversation_id, workflow_instance_id, request_id, lease_until, created_at, updated_at
@@ -322,6 +383,8 @@ public interface WorkflowExecutionMapper {
     /**
      * 启动新工作流前，仅回收当前 conversation 已过期且不再由有效执行或可恢复 Checkpoint
      * 保护的锁。WAITING_CONFIRM 的锁以自身 lease_until 作为确认有效期。
+     *
+     * @return 删除的锁行数，通常为 0 或 1
      */
     @Delete("""
             delete l
@@ -348,7 +411,12 @@ public interface WorkflowExecutionMapper {
     int deleteExpiredInvalidConversationLock(@Param("conversationId") String conversationId,
                                              @Param("now") java.time.Instant now);
 
-    /** 定时批量物理删除所有已过期且失效的 conversation workflow lock。 */
+    /**
+     * 定时物理删除所有已过期且失效的 conversation workflow lock。有效执行租约或尚未过期的
+     * Graph Thread 会阻止删除，保证清理任务不会释放仍可运行或恢复的会话。
+     *
+     * @return 本次删除的锁数量
+     */
     @Delete("""
             delete l
             from ai_conversation_workflow_lock l
@@ -372,7 +440,12 @@ public interface WorkflowExecutionMapper {
             """)
     int deleteExpiredInvalidConversationLocks(@Param("now") java.time.Instant now);
 
-    /** 等待人工确认时延长会话独占，避免下一轮覆盖尚未完成的 Memory 上下文。 */
+    /**
+     * 工作流进入 WAITING_CONFIRM 后按当前 fencing token 延长 conversation lock，避免人工等待期间
+     * 新一轮工作流覆盖尚未完成的 Memory 上下文。
+     *
+     * @return 1 表示续期成功；0 表示实例已离开等待态或 token 已变化
+     */
     @Update("""
             update ai_conversation_workflow_lock
             set lease_until = #{leaseUntil},
@@ -390,13 +463,20 @@ public interface WorkflowExecutionMapper {
                               @Param("leaseUntil") java.time.Instant leaseUntil,
                               @Param("updatedAt") java.time.Instant updatedAt);
 
-    /** 仅由持有者在终态事务内释放 conversation 顶层执行权。 */
+    /**
+     * 在工作流终态事务内按 workflowInstanceId 释放 conversation 顶层执行权。
+     *
+     * @return 删除的锁行数；幂等重试时可能为 0
+     */
     @Delete("""
             delete from ai_conversation_workflow_lock
             where workflow_instance_id = #{workflowInstanceId}
             """)
     int deleteConversationLock(@Param("workflowInstanceId") String workflowInstanceId);
 
+    /**
+     * 创建一个工作流节点执行记录，保存节点输入及初始状态，供审计和故障排查使用。
+     */
     @Insert("""
             insert into ai_workflow_step (
                 workflow_step_id,
@@ -426,6 +506,12 @@ public interface WorkflowExecutionMapper {
             """)
     void insertStep(WorkflowStepRecord record);
 
+    /**
+     * 将步骤切换为 RUNNING。EXISTS 子查询同时校验父实例的 owner、fencing token、租约和运行状态，
+     * 防止已经失去执行权的旧 Graph 继续写步骤审计。
+     *
+     * @return 1 表示步骤开始状态已写入；0 表示步骤不存在或父实例执行权已失效
+     */
     @Update("""
             update ai_workflow_step
             set status = 'RUNNING',
@@ -446,6 +532,11 @@ public interface WorkflowExecutionMapper {
                           @Param("executionFenceToken") long executionFenceToken,
                           @Param("startedAt") java.time.Instant startedAt);
 
+    /**
+     * 保存步骤终态、输出或错误信息。写入前通过父实例校验当前执行者的 Lease/Fence 权限。
+     *
+     * @return 1 表示结果已写入；0 表示步骤不存在或当前执行者已被 fencing
+     */
     @Update("""
             update ai_workflow_step
             set status = #{status},
@@ -471,6 +562,13 @@ public interface WorkflowExecutionMapper {
                          @Param("executionFenceToken") long executionFenceToken,
                          @Param("endedAt") java.time.Instant endedAt);
 
+    /**
+     * 将人工确认节点切换为 WAITING_CONFIRM 并保存候选产品等暂停输出。
+     * EXISTS 子查询把步骤写入绑定到父工作流当前有效的 owner、fencing token 和租约；返回 0 时
+     * 调用方必须终止暂停流程，不能继续写 Checkpoint 或发送确认事件。
+     *
+     * @return 1 表示等待确认状态已写入；0 表示步骤不存在或父实例执行权已失效
+     */
     @Update("""
             update ai_workflow_step
             set status = 'WAITING_CONFIRM',
@@ -492,6 +590,10 @@ public interface WorkflowExecutionMapper {
                                  @Param("executionFenceToken") long executionFenceToken,
                                  @Param("updatedAt") java.time.Instant updatedAt);
 
+    /**
+     * 工作流收口时将仍为 PENDING 的未执行步骤批量标记为 SKIPPED，保留完整执行历史。
+     * 已经运行或已有结果的步骤不会被覆盖。
+     */
     @Update("""
             update ai_workflow_step
             set status = 'SKIPPED',

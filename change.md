@@ -526,8 +526,8 @@ insurance.ai.workflow.maintenance.recovery-interval: 30s
 ### Checkpoint 与 SSE 清理
 
 - 新增 `WorkflowPersistenceCleanupJob`，`local-db` profile 下默认启动一分钟后执行，之后每小时执行一次。
-- Checkpoint 清理复用 `OceanBaseCheckpointSaver.purgeExpired()`：完成实例默认保留 30 天，活动或失败实例默认保留 90 天。
-- SSE 清理删除 `expire_at` 已到期的事件，默认保留 7 天。
+- Checkpoint 清理复用 `OceanBaseCheckpointSaver.purgeExpired()`：当前完成实例默认保留 24 小时，活动或失败实例默认保留 7 天。
+- SSE 清理删除 `expire_at` 已到期的事件，当前默认保留 10 分钟并每 30 秒扫描一次。
 - 两类清理独立捕获异常和记录日志，一类失败不会阻塞另一类。
 - 长期对话记忆、ChatMemory 和业务审计数据不在本次清理范围内。
 
@@ -550,3 +550,12 @@ insurance:
 - `./gradlew test` 全量测试通过。
 - `local-db` profile 在 18080 端口启动成功，Flyway 成功校验 16 个迁移并将 OceanBase schema 从 V15 升级到 V16。
 - 未执行 Git 提交或推送。
+
+## 2026-08-13：数据库操作说明补全
+
+- 扫描全部 MyBatis Mapper、OceanBase Checkpoint/SSE 持久化、ChatMemory Repository 和清理任务。
+- 为工作流状态机 SQL 补充 owner、Lease、fencing token、CAS、终态保护及返回 0 的处理语义。
+- 为 Checkpoint 补充 Thread 乐观锁、不可变快照、恢复可读条件和先删快照后删 Thread 的清理顺序。
+- 为 SSE 补充原子序号、同事务 `last_insert_id()`、Outbox、Last-Event-ID 重放及物理过期清理说明。
+- 为短期记忆、长期记忆、调用审计、召回审计和会话确认产品补充覆盖/追加/幂等边界说明。
+- 仅优化注释和项目文档，不修改 SQL、事务边界或业务执行逻辑。

@@ -10,6 +10,9 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface ConversationSummaryMapper {
 
+    /**
+     * 追加一条由模型生成的会话摘要，并记录其覆盖的起止消息，便于后续追溯摘要来源。
+     */
     @Insert("""
             insert into ai_conversation_summary (
                 summary_id,

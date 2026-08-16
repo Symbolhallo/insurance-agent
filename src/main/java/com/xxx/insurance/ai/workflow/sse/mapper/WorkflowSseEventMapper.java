@@ -19,7 +19,12 @@ import java.util.List;
 @Mapper
 public interface WorkflowSseEventMapper {
 
-    /** 只有持有当前有效 execution lease 的执行者才能分配执行期事件序号。 */
+    /**
+     * 通过工作流实例行原子递增执行期 SSE 序号，并用 {@code last_insert_id} 将新序号绑定到当前连接。
+     * 只有持有当前 owner、fencing token 和有效租约的执行者可以分配。
+     *
+     * @return 1 表示分配成功；0 表示执行权已失效
+     */
     @Update("""
             update ai_workflow_instance
             set event_sequence = last_insert_id(event_sequence + 1),
@@ -35,7 +40,11 @@ public interface WorkflowSseEventMapper {
                                   @Param("executionFenceToken") long executionFenceToken,
                                   @Param("now") Instant now);
 
-    /** 收口事务获得终态写入权后，按同一 fencing token 分配最终事件序号。 */
+    /**
+     * 收口事务写入终态后按同一 fencing token 原子分配 COMPLETE/ERROR 等最终事件序号。
+     *
+     * @return 1 表示分配成功；0 表示终态或 token 不匹配
+     */
     @Update("""
             update ai_workflow_instance
             set event_sequence = last_insert_id(event_sequence + 1),
@@ -47,7 +56,11 @@ public interface WorkflowSseEventMapper {
     int allocateTerminalSequence(@Param("workflowInstanceId") String workflowInstanceId,
                                  @Param("executionFenceToken") long executionFenceToken);
 
-    /** 人工暂停事务完成状态切换后，仍以本次执行 token 分配确认事件序号。 */
+    /**
+     * 人工暂停事务清除 owner 并进入 WAITING_CONFIRM 后，按本次 fencing token 分配确认事件序号。
+     *
+     * @return 1 表示分配成功；0 表示实例未正确暂停或 token 不匹配
+     */
     @Update("""
             update ai_workflow_instance
             set event_sequence = last_insert_id(event_sequence + 1),
@@ -60,11 +73,16 @@ public interface WorkflowSseEventMapper {
     int allocateWaitingConfirmSequence(@Param("workflowInstanceId") String workflowInstanceId,
                                        @Param("executionFenceToken") long executionFenceToken);
 
-    /** 读取当前事务连接刚刚分配的工作流事件序号。 */
+    /**
+     * 读取当前数据库连接由前一条序号分配 UPDATE 写入的 {@code last_insert_id}。
+     * 必须与分配语句在同一事务和连接中执行，不能单独调用。
+     */
     @Select("select last_insert_id()")
     long lastAllocatedSequence();
 
-    /** 写入一条可重放 SSE 事件。 */
+    /**
+     * 将已分配序号的 SSE 事件写入 OceanBase Outbox，作为多实例投递和 Last-Event-ID 重放的事实来源。
+     */
     @Insert("""
             insert into ai_workflow_sse_event (
                 event_id, workflow_instance_id, conversation_id, sequence_no, event_type,
@@ -76,7 +94,9 @@ public interface WorkflowSseEventMapper {
             """)
     void insert(WorkflowSseEventRecord record);
 
-    /** 按序号升序读取尚未过期的重放事件。 */
+    /**
+     * 从指定序号之后按序读取尚未过期的事件，供首次订阅、断线重连和数据库 Poller 增量投递。
+     */
     @Select("""
             select event_id, workflow_instance_id, conversation_id, sequence_no, event_type,
                    node_code, payload_json, created_at, expire_at
@@ -101,7 +121,11 @@ public interface WorkflowSseEventMapper {
                                                   @Param("afterSequence") long afterSequence,
                                                   @Param("now") Instant now);
 
-    /** 查询当前实例已经分配的最高事件序号。 */
+    /**
+     * 查询实例已分配的最高事件序号，用于判断订阅者是否追平数据库事件水位。
+     *
+     * @return 实例不存在时返回 {@code null}
+     */
     @Select("""
             select event_sequence
             from ai_workflow_instance
@@ -109,7 +133,11 @@ public interface WorkflowSseEventMapper {
             """)
     Long findHighWatermark(@Param("workflowInstanceId") String workflowInstanceId);
 
-    /** 删除已超过重放保留期的 SSE 事件。 */
+    /**
+     * 物理删除已超过 expire_at 的 SSE 事件；未过期事件继续支持实时投递和 Last-Event-ID 重放。
+     *
+     * @return 本次删除的事件数量
+     */
     @Delete("delete from ai_workflow_sse_event where expire_at <= #{now}")
     int deleteExpiredEvents(@Param("now") Instant now);
 }

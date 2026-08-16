@@ -10,6 +10,10 @@ import org.apache.ibatis.annotations.Mapper;
 @Mapper
 public interface AgentInvocationMapper {
 
+    /**
+     * 追加一条 Agent 调用审计，记录输入输出、模型、耗时、格式校验和错误信息。
+     * invocationId 是幂等键；主工作流最终调用使用确定性 ID，防止收口重试重复写入。
+     */
     @Insert("""
             insert into ai_agent_invocation (
                 invocation_id,
@@ -82,6 +86,7 @@ public interface AgentInvocationMapper {
             String errorMessage,
             java.time.Instant createdAt) {
 
+        /** 将领域记录转换为适合 MyBatis/JDBC 标量绑定的写入结构。 */
         public static AgentInvocationWriteRecord from(AgentInvocationRecord record,
                                                       Integer outputFormatValid,
                                                       String missingSectionsJson) {
