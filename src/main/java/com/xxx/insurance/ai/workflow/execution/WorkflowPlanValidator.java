@@ -36,11 +36,16 @@ public class WorkflowPlanValidator {
         if (!StringUtils.hasText(plan.objective())) {
             throw new IllegalArgumentException("Workflow plan objective must not be blank");
         }
-        if (routingResult.routes() == null || routingResult.routes().isEmpty()
-                || routingResult.routes().size() > 4) {
+        if (routingResult.routes() == null || routingResult.routes().isEmpty()) {
             throw new IllegalArgumentException("Workflow requires one to four intent routes");
         }
-        if (plan.tasks() == null || plan.tasks().isEmpty() || plan.tasks().size() > MAX_TASK_COUNT) {
+        if (routingResult.routes().size() > 4) {
+            throw new IllegalArgumentException("Workflow requires one to four intent routes");
+        }
+        if (plan.tasks() == null || plan.tasks().isEmpty()) {
+            throw new IllegalArgumentException("Workflow plan requires one to twelve tasks");
+        }
+        if (plan.tasks().size() > MAX_TASK_COUNT) {
             throw new IllegalArgumentException("Workflow plan requires one to twelve tasks");
         }
 
@@ -71,17 +76,33 @@ public class WorkflowPlanValidator {
                               Set<String> allowedAgents,
                               Set<String> taskIds,
                               Set<Integer> sequences) {
-        if (task == null || !StringUtils.hasText(task.taskId()) || !taskIds.add(task.taskId())) {
+        if (task == null) {
             throw new IllegalArgumentException("Workflow taskId must be non-blank and unique");
         }
-        if (task.sequence() <= 0 || !sequences.add(task.sequence())) {
+        if (!StringUtils.hasText(task.taskId())) {
+            throw new IllegalArgumentException("Workflow taskId must be non-blank and unique");
+        }
+        if (!taskIds.add(task.taskId())) {
+            throw new IllegalArgumentException("Workflow taskId must be non-blank and unique");
+        }
+        if (task.sequence() <= 0) {
             throw new IllegalArgumentException("Workflow task sequence must be positive and unique");
         }
-        if (!StringUtils.hasText(task.agentType()) || !allowedAgents.contains(task.agentType())) {
+        if (!sequences.add(task.sequence())) {
+            throw new IllegalArgumentException("Workflow task sequence must be positive and unique");
+        }
+        if (!StringUtils.hasText(task.agentType())) {
             throw new IllegalArgumentException("Workflow task agentType is outside intent whitelist: "
                     + task.agentType());
         }
-        if (!StringUtils.hasText(task.query()) || task.query().length() > MAX_QUERY_LENGTH) {
+        if (!allowedAgents.contains(task.agentType())) {
+            throw new IllegalArgumentException("Workflow task agentType is outside intent whitelist: "
+                    + task.agentType());
+        }
+        if (!StringUtils.hasText(task.query())) {
+            throw new IllegalArgumentException("Workflow task query must be non-blank and at most 2000 characters");
+        }
+        if (task.query().length() > MAX_QUERY_LENGTH) {
             throw new IllegalArgumentException("Workflow task query must be non-blank and at most 2000 characters");
         }
         if (task.maxRetries() < 0 || task.maxRetries() > MAX_RETRIES) {

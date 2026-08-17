@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
-import java.util.Arrays;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,12 +61,14 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
      */
     @Override
     public void before(String nodeId, Map<String, Object> state, RunnableConfig config, Long curTime) {
-        nodeDefinition(nodeId).ifPresent(definition -> {
-            nodeStartedNanos.put(executionKey(state, nodeId), System.nanoTime());
-            publishStage(definition, state, "RUNNING", null);
-            log.info("[Workflow] action=node-start node={} workflowInstanceId={}",
-                    nodeId, workflowInstanceId(state));
-        });
+        WorkflowNodeDefinition definition = nodeDefinition(nodeId);
+        if (definition == null) {
+            return;
+        }
+        nodeStartedNanos.put(executionKey(state, nodeId), System.nanoTime());
+        publishStage(definition, state, "RUNNING", null);
+        log.info("[Workflow] action=node-start node={} workflowInstanceId={}",
+                nodeId, workflowInstanceId(state));
     }
 
     /**
@@ -76,12 +77,14 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
      */
     @Override
     public void after(String nodeId, Map<String, Object> state, RunnableConfig config, Long curTime) {
-        nodeDefinition(nodeId).ifPresent(definition -> {
-            long elapsedMillis = elapsedMillis(state, nodeId);
-            publishStage(definition, state, "SUCCESS", null);
-            log.info("[Workflow] action=node-complete status=success node={} workflowInstanceId={} durationMs={}",
-                    nodeId, workflowInstanceId(state), elapsedMillis);
-        });
+        WorkflowNodeDefinition definition = nodeDefinition(nodeId);
+        if (definition == null) {
+            return;
+        }
+        long elapsedMillis = elapsedMillis(state, nodeId);
+        publishStage(definition, state, "SUCCESS", null);
+        log.info("[Workflow] action=node-complete status=success node={} workflowInstanceId={} durationMs={}",
+                nodeId, workflowInstanceId(state), elapsedMillis);
     }
 
     /**
@@ -90,12 +93,14 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
      */
     @Override
     public void onError(String nodeId, Map<String, Object> state, Throwable ex, RunnableConfig config) {
-        nodeDefinition(nodeId).ifPresent(definition -> {
-            long elapsedMillis = elapsedMillis(state, nodeId);
-            publishStage(definition, state, "FAILED", frontendErrorMessage(definition));
-            log.warn("[Workflow] action=node-complete status=failed node={} workflowInstanceId={} durationMs={}",
-                    nodeId, workflowInstanceId(state), elapsedMillis, ex);
-        });
+        WorkflowNodeDefinition definition = nodeDefinition(nodeId);
+        if (definition == null) {
+            return;
+        }
+        long elapsedMillis = elapsedMillis(state, nodeId);
+        publishStage(definition, state, "FAILED", frontendErrorMessage(definition));
+        log.warn("[Workflow] action=node-complete status=failed node={} workflowInstanceId={} durationMs={}",
+                nodeId, workflowInstanceId(state), elapsedMillis, ex);
     }
 
     /** 记录 Graph 到达 END 的观测日志；最终 Memory、Checkpoint、实例状态和 COMPLETE 事件另行事务收口。 */
@@ -133,10 +138,13 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
     }
 
     /** 只观测主图已登记节点，忽略框架内部节点和未知扩展节点。 */
-    private Optional<WorkflowNodeDefinition> nodeDefinition(String nodeId) {
-        return Arrays.stream(WorkflowNodeDefinition.values())
-                .filter(definition -> definition.code().equals(nodeId))
-                .findFirst();
+    private WorkflowNodeDefinition nodeDefinition(String nodeId) {
+        for (WorkflowNodeDefinition definition : WorkflowNodeDefinition.values()) {
+            if (definition.code().equals(nodeId)) {
+                return definition;
+            }
+        }
+        return null;
     }
 
     private String workflowInstanceId(Map<String, Object> state) {
@@ -145,14 +153,23 @@ public class MainWorkflowLifecycleListener implements GraphLifecycleListener {
 
     /** 按请求、对齐上下文、实例表的优先级解析会话，兼容节点执行前后 State 内容不同。 */
     private String conversationId(Map<String, Object> state, String workflowInstanceId) {
-        return value(state, MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class)
-                .map(MainWorkflowRequest::conversationId)
-                .or(() -> value(state, MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class)
-                        .map(AlignedWorkflowContext::conversationId))
-                .or(() -> Optional.ofNullable(workflowInstanceId)
-                        .map(workflowExecutionMapper::findInstance)
-                        .map(instance -> instance.conversationId()))
-                .orElse(null);
+        Optional<MainWorkflowRequest> request = value(
+                state, MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class);
+        if (request.isPresent()) {
+            return request.get().conversationId();
+        }
+
+        Optional<AlignedWorkflowContext> alignedContext = value(
+                state, MainWorkflowStateKeys.ALIGNED_CONTEXT, AlignedWorkflowContext.class);
+        if (alignedContext.isPresent()) {
+            return alignedContext.get().conversationId();
+        }
+
+        if (workflowInstanceId == null) {
+            return null;
+        }
+        var workflowInstance = workflowExecutionMapper.findInstance(workflowInstanceId);
+        return workflowInstance == null ? null : workflowInstance.conversationId();
     }
 
     /** 删除本次节点计时记录并返回耗时；缺少 before 回调时返回 -1，避免残留并发状态。 */

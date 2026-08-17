@@ -76,16 +76,22 @@ public class WorkflowAgentTokenStreamSink implements AgentTokenStreamSink {
             }
 
             batch.append(chunkIndex, content);
-            boolean maxDelayReached = System.nanoTime() - batch.pendingSinceNanos
-                    >= properties.tokenBatchMaxDelay().toNanos();
-            if (batch.pendingContent.length() >= properties.tokenBatchMaxCharacters() || maxDelayReached) {
+            if (shouldFlushImmediately(batch)) {
                 cancelScheduledFlush(batch);
                 flushPending(batch);
             }
-            else if (batch.scheduledFlush == null) {
+            else if (!batch.hasScheduledFlush()) {
                 scheduleFlush(key, batch);
             }
         }
+    }
+
+    /** 判断当前批次是否已达到字符阈值或最大等待时间。 */
+    private boolean shouldFlushImmediately(TokenBatch batch) {
+        boolean characterLimitReached = batch.pendingContent.length() >= properties.tokenBatchMaxCharacters();
+        long pendingNanos = System.nanoTime() - batch.pendingSinceNanos;
+        boolean maxDelayReached = pendingNanos >= properties.tokenBatchMaxDelay().toNanos();
+        return characterLimitReached || maxDelayReached;
     }
 
     /** 刷新最后一个合并批次，再发布空正文结束标记。 */
@@ -303,6 +309,10 @@ public class WorkflowAgentTokenStreamSink implements AgentTokenStreamSink {
             pendingLastChunkIndex = 0L;
             pendingChunkCount = 0;
             pendingSinceNanos = 0L;
+        }
+
+        private boolean hasScheduledFlush() {
+            return scheduledFlush != null;
         }
     }
 }

@@ -3,6 +3,7 @@ package com.xxx.insurance.ai.workflow.execution;
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.state.StateSnapshot;
 import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
 import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
@@ -49,29 +50,37 @@ public class WorkflowTaskGraphRunner {
      */
     public AgentTaskExecutionResult execute(WorkflowAgentTaskContext context) {
         RunnableConfig config = runnableConfig(context);
-        AgentTaskExecutionResult recovered = taskGraph.stateOf(config)
-                .flatMap(snapshot -> snapshot.state()
-                        .value(WorkflowTaskStateKeys.TASK_RESULT, AgentTaskExecutionResult.class))
-                .orElse(null);
-        if (recovered != null && recovered.terminal()) {
-            return recovered;
+        AgentTaskExecutionResult recoveredResult = recoveredResult(config);
+        if (recoveredResult != null && recoveredResult.terminal()) {
+            return recoveredResult;
         }
 
-        Map<String, Object> input = recovered == null
+        Map<String, Object> graphInput = recoveredResult == null
                 ? Map.of(WorkflowTaskStateKeys.TASK_RESULT, pending(context))
                 : Map.of();
-        NodeOutput output = taskGraph.invokeAndGetOutput(input, config)
+        NodeOutput graphOutput = taskGraph.invokeAndGetOutput(graphInput, config)
                 .orElseThrow(() -> new IllegalStateException("Task graph returned empty output"));
-        if (!output.isEND()) {
+        if (!graphOutput.isEND()) {
             throw new IllegalStateException("Task graph stopped before END");
         }
-        AgentTaskExecutionResult result = output.state()
+        AgentTaskExecutionResult taskResult = graphOutput.state()
                 .value(WorkflowTaskStateKeys.TASK_RESULT, AgentTaskExecutionResult.class)
                 .orElseThrow(() -> new IllegalStateException("Task graph returned no task result"));
-        if (!result.terminal()) {
-            throw new IllegalStateException("Task graph returned non-terminal task result: " + result.status());
+        if (!taskResult.terminal()) {
+            throw new IllegalStateException("Task graph returned non-terminal task result: " + taskResult.status());
         }
-        return result;
+        return taskResult;
+    }
+
+    /** 读取任务子图最新 Checkpoint 中的结果；首次执行或旧快照无结果时返回 null。 */
+    private AgentTaskExecutionResult recoveredResult(RunnableConfig config) {
+        StateSnapshot snapshot = taskGraph.stateOf(config).orElse(null);
+        if (snapshot == null) {
+            return null;
+        }
+        return snapshot.state()
+                .value(WorkflowTaskStateKeys.TASK_RESULT, AgentTaskExecutionResult.class)
+                .orElse(null);
     }
 
     /** 创建任务专属 threadId，并通过 RunnableConfig 提供最小上下文和受控 Executor。 */

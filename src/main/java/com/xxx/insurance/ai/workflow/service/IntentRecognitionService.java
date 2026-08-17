@@ -19,9 +19,10 @@ import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.util.Map;
-import java.util.List;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -90,19 +91,18 @@ public class IntentRecognitionService {
                 ? chatModel.call(systemMessage, userMessage)
                 : streamingExecutor.execute(chatModel, List.of(systemMessage, userMessage), streamContext);
         IntentRecognitionModelOutput output = outputConverter.convert(modelOutput);
-        if (output == null || output.intentions() == null || output.intentions().isEmpty()
-                || output.intentions().size() > 4 || !StringUtils.hasText(output.reason())) {
-            throw new IllegalStateException("Intent recognition model returned unsupported output");
-        }
+        validateModelOutput(output);
+
         Set<String> uniqueIntents = new HashSet<>();
-        List<IntentRoute> routes = output.intentions().stream()
-                .map(this::validateAndMap)
-                .peek(route -> {
-                    if (!uniqueIntents.add(route.intent())) {
-                        throw new IllegalStateException("Intent recognition model returned duplicate intent");
-                    }
-                })
-                .toList();
+        List<IntentRoute> routes = new ArrayList<>();
+        for (RecognizedIntent recognizedIntent : output.intentions()) {
+            IntentRoute route = validateAndMap(recognizedIntent);
+            if (!uniqueIntents.add(route.intent())) {
+                throw new IllegalStateException("Intent recognition model returned duplicate intent");
+            }
+            routes.add(route);
+        }
+
         if (routes.size() == 1) {
             IntentRoute route = routes.getFirst();
             return new IntentRoutingResult(route.intent(), route.targetAgent(), output.reason().trim(), routes);
@@ -114,11 +114,33 @@ public class IntentRecognitionService {
                 routes);
     }
 
+    /** 校验模型顶层输出合同，避免后续路由代码同时处理 null、数量和业务字段约束。 */
+    private void validateModelOutput(IntentRecognitionModelOutput output) {
+        if (output == null) {
+            throw new IllegalStateException("Intent recognition model returned unsupported output");
+        }
+        if (output.intentions() == null || output.intentions().isEmpty()) {
+            throw new IllegalStateException("Intent recognition model returned unsupported output");
+        }
+        if (output.intentions().size() > 4) {
+            throw new IllegalStateException("Intent recognition model returned unsupported output");
+        }
+        if (!StringUtils.hasText(output.reason())) {
+            throw new IllegalStateException("Intent recognition model returned unsupported output");
+        }
+    }
+
     private IntentRoute validateAndMap(RecognizedIntent recognizedIntent) {
-        if (recognizedIntent == null
-                || !TARGET_AGENTS.containsKey(recognizedIntent.intent())
-                || !StringUtils.hasText(recognizedIntent.intentionQuery())
-                || !StringUtils.hasText(recognizedIntent.reason())) {
+        if (recognizedIntent == null) {
+            throw new IllegalStateException("Intent recognition model returned invalid intention");
+        }
+        if (!TARGET_AGENTS.containsKey(recognizedIntent.intent())) {
+            throw new IllegalStateException("Intent recognition model returned invalid intention");
+        }
+        if (!StringUtils.hasText(recognizedIntent.intentionQuery())) {
+            throw new IllegalStateException("Intent recognition model returned invalid intention");
+        }
+        if (!StringUtils.hasText(recognizedIntent.reason())) {
             throw new IllegalStateException("Intent recognition model returned invalid intention");
         }
         return new IntentRoute(

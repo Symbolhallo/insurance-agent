@@ -86,7 +86,13 @@ public class ChatModelStreamingExecutor {
 
     /** 从 Spring AI ChatResponse 安全提取当前增量助手文本。 */
     private String text(ChatResponse response) {
-        if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+        if (response == null) {
+            return "";
+        }
+        if (response.getResult() == null) {
+            return "";
+        }
+        if (response.getResult().getOutput() == null) {
             return "";
         }
         return response.getResult().getOutput().getText();

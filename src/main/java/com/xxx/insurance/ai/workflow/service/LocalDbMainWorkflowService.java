@@ -201,28 +201,37 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
         try {
             // 主工作流链路 4：发布 start 后，以实例 ID 作为 threadId 启动可持久化、可恢复的 Main Graph。
-            RunnableConfig config = runnableConfig(
+            RunnableConfig graphConfig = runnableConfig(
                     workflowInstanceId, request.conversationId(), executionFenceToken);
-            NodeOutput output = mainWorkflowGraph.invokeAndGetOutput(
-                            Map.of(
-                                    MainWorkflowStateKeys.REQUEST, request,
-                                    MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, workflowInstanceId,
-                                    MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, executionFenceToken,
-                                    MainWorkflowStateKeys.WORKFLOW_STEP_IDS, workflowStepIds,
-                                    MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, tokenStreamingEnabled),
-                            config)
+            Map<String, Object> initialState = initialWorkflowState(
+                    request, workflowInstanceId, executionFenceToken, workflowStepIds, tokenStreamingEnabled);
+            NodeOutput graphOutput = mainWorkflowGraph.invokeAndGetOutput(initialState, graphConfig)
                     .orElseThrow(() -> new IllegalStateException("Main workflow graph returned empty output"));
-            if (!output.isEND()) {
-                StateSnapshot snapshot = mainWorkflowGraph.getState(config);
+            if (!graphOutput.isEND()) {
+                StateSnapshot snapshot = mainWorkflowGraph.getState(graphConfig);
                 return waitingConfirmResponse(
                         snapshot, request, workflowInstanceId, executionFenceToken, startedAt);
             }
-            return complete(output.state(), workflowInstanceId, startedAt);
+            return complete(graphOutput.state(), workflowInstanceId, startedAt);
         }
         catch (Exception ex) {
             fail(workflowInstanceId, executionFenceToken, ex);
             throw new IllegalStateException("Main workflow execution failed", ex);
         }
+    }
+
+    /** 构造 Main Graph 首次执行所需的最小 State，所有执行代次标识在启动时固定。 */
+    private Map<String, Object> initialWorkflowState(MainWorkflowRequest request,
+                                                     String workflowInstanceId,
+                                                     long executionFenceToken,
+                                                     Map<String, String> workflowStepIds,
+                                                     boolean tokenStreamingEnabled) {
+        return Map.of(
+                MainWorkflowStateKeys.REQUEST, request,
+                MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, workflowInstanceId,
+                MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, executionFenceToken,
+                MainWorkflowStateKeys.WORKFLOW_STEP_IDS, workflowStepIds,
+                MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, tokenStreamingEnabled);
     }
 
     /**
@@ -756,11 +765,16 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     /** 读取本次抢占后数据库生成的 fencing token，并确认执行权仍属于当前实例。 */
     private long requireOwnedFenceToken(String workflowInstanceId, String expectedStatus) {
         WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
-        if (instance == null
-                || !expectedStatus.equals(instance.status())
-                || !lifecycleProperties.getInstanceId().equals(instance.executionOwner())
-                || instance.leaseUntil() == null
-                || !instance.leaseUntil().isAfter(Instant.now())) {
+        if (instance == null) {
+            throw new IllegalStateException("Workflow execution lease was lost after claim");
+        }
+        if (!expectedStatus.equals(instance.status())) {
+            throw new IllegalStateException("Workflow execution lease was lost after claim");
+        }
+        if (!lifecycleProperties.getInstanceId().equals(instance.executionOwner())) {
+            throw new IllegalStateException("Workflow execution lease was lost after claim");
+        }
+        if (instance.leaseUntil() == null || !instance.leaseUntil().isAfter(Instant.now())) {
             throw new IllegalStateException("Workflow execution lease was lost after claim");
         }
         return instance.executionFenceToken();
@@ -768,10 +782,13 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
     /** 防止旧确认请求误用同 JVM 后续抢占得到的新执行权。 */
     private void requireExpectedFence(WorkflowInstanceExecutionView instance, long executionFenceToken) {
-        if (instance.executionFenceToken() != executionFenceToken
-                || !lifecycleProperties.getInstanceId().equals(instance.executionOwner())
-                || instance.leaseUntil() == null
-                || !instance.leaseUntil().isAfter(Instant.now())) {
+        if (instance.executionFenceToken() != executionFenceToken) {
+            throw new IllegalStateException("Workflow execution fencing token is stale");
+        }
+        if (!lifecycleProperties.getInstanceId().equals(instance.executionOwner())) {
+            throw new IllegalStateException("Workflow execution fencing token is stale");
+        }
+        if (instance.leaseUntil() == null || !instance.leaseUntil().isAfter(Instant.now())) {
             throw new IllegalStateException("Workflow execution fencing token is stale");
         }
     }

@@ -22,10 +22,12 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.Future;
+import java.util.stream.Collectors;
 
 /**
  * 按 dependsOn 执行任意无环子智能体任务图。
@@ -73,30 +75,18 @@ public class WorkflowDagExecutor {
         Map<Future<AgentTaskExecutionResult>, WorkflowPlanTask> running = new HashMap<>();
         CompletionService<AgentTaskExecutionResult> completions =
                 new ExecutorCompletionService<>(taskExecutor.getThreadPoolExecutor());
-        var allowedAgents = routingResult.routes().stream()
+        Set<String> allowedAgents = routingResult.routes().stream()
                 .map(route -> route.targetAgent())
-                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                .collect(Collectors.toUnmodifiableSet());
 
         while (!pending.isEmpty() || !running.isEmpty()) {
             propagateDependencyFailures(pending, completed);
-            List<WorkflowPlanTask> readyTasks = pending.values().stream()
-                    .filter(task -> dependenciesSucceeded(task, completed))
-                    .toList();
+            List<WorkflowPlanTask> readyTasks = readyTasks(pending, completed);
             for (WorkflowPlanTask task : readyTasks) {
-                if (!allowedAgents.contains(task.agentType())) {
-                    throw new IllegalStateException("Task agent is outside routing whitelist: " + task.agentType());
-                }
-                List<AgentTaskExecutionResult> dependencyResults = dependencyResults(task, completed);
-                WorkflowAgentTaskContext taskContext = new WorkflowAgentTaskContext(
-                        task,
-                        context.conversationId(),
-                        workflowInstanceId,
-                        executionFenceToken,
-                        workflowStepId,
-                        context.originalQuestion(),
-                        context.resolvedProducts(),
-                        dependencyResults,
-                        tokenStreamingEnabled);
+                requireAllowedAgent(task, allowedAgents);
+                WorkflowAgentTaskContext taskContext = taskContext(
+                        task, completed, context, workflowInstanceId,
+                        executionFenceToken, workflowStepId, tokenStreamingEnabled);
                 Future<AgentTaskExecutionResult> future = completions.submit(
                         () -> taskGraphRunner.execute(taskContext));
                 running.put(future, task);
@@ -119,12 +109,53 @@ public class WorkflowDagExecutor {
         return DagExecutionResult.from(new ArrayList<>(completed.values()));
     }
 
+    /** 按 Planner 顺序返回当前依赖已经全部成功的任务。 */
+    private List<WorkflowPlanTask> readyTasks(Map<String, WorkflowPlanTask> pending,
+                                              Map<String, AgentTaskExecutionResult> completed) {
+        List<WorkflowPlanTask> readyTasks = new ArrayList<>();
+        for (WorkflowPlanTask task : pending.values()) {
+            if (dependenciesSucceeded(task, completed)) {
+                readyTasks.add(task);
+            }
+        }
+        return List.copyOf(readyTasks);
+    }
+
+    /** Planner 计划即使已校验，执行前仍按本次意图路由结果防御性确认 Agent 白名单。 */
+    private void requireAllowedAgent(WorkflowPlanTask task, Set<String> allowedAgents) {
+        if (!allowedAgents.contains(task.agentType())) {
+            throw new IllegalStateException("Task agent is outside routing whitelist: " + task.agentType());
+        }
+    }
+
+    /** 为单个就绪任务构造最小执行上下文，只注入它明确依赖的上游结果。 */
+    private WorkflowAgentTaskContext taskContext(WorkflowPlanTask task,
+                                                 Map<String, AgentTaskExecutionResult> completed,
+                                                 AlignedWorkflowContext alignedContext,
+                                                 String workflowInstanceId,
+                                                 long executionFenceToken,
+                                                 String workflowStepId,
+                                                 boolean tokenStreamingEnabled) {
+        return new WorkflowAgentTaskContext(
+                task,
+                alignedContext.conversationId(),
+                workflowInstanceId,
+                executionFenceToken,
+                workflowStepId,
+                alignedContext.originalQuestion(),
+                alignedContext.resolvedProducts(),
+                dependencyResults(task, completed),
+                tokenStreamingEnabled);
+    }
+
     /** 按展示序号建立稳定的待执行索引；执行顺序不依赖此排序。 */
     private Map<String, WorkflowPlanTask> orderedTasks(WorkflowPlan plan) {
+        List<WorkflowPlanTask> orderedPlanTasks = new ArrayList<>(plan.tasks());
+        orderedPlanTasks.sort(Comparator.comparingInt(WorkflowPlanTask::sequence));
         Map<String, WorkflowPlanTask> tasks = new LinkedHashMap<>();
-        plan.tasks().stream()
-                .sorted(Comparator.comparingInt(WorkflowPlanTask::sequence))
-                .forEach(task -> tasks.put(task.taskId(), task));
+        for (WorkflowPlanTask task : orderedPlanTasks) {
+            tasks.put(task.taskId(), task);
+        }
         return tasks;
     }
 
@@ -175,24 +206,35 @@ public class WorkflowDagExecutor {
     /** 判断全部明确依赖是否成功；无依赖任务立即 READY。 */
     private boolean dependenciesSucceeded(WorkflowPlanTask task,
                                           Map<String, AgentTaskExecutionResult> completed) {
-        return task.dependsOn().stream().allMatch(dependency -> {
-            AgentTaskExecutionResult result = completed.get(dependency);
-            return result != null && result.status() == AgentTaskStatus.SUCCESS;
-        });
+        for (String dependency : task.dependsOn()) {
+            AgentTaskExecutionResult dependencyResult = completed.get(dependency);
+            if (dependencyResult == null || dependencyResult.status() != AgentTaskStatus.SUCCESS) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 判断是否已有任一明确依赖进入失败或跳过终态。 */
     private boolean dependenciesFailed(WorkflowPlanTask task,
                                        Map<String, AgentTaskExecutionResult> completed) {
-        return task.dependsOn().stream()
-                .map(completed::get)
-                .anyMatch(result -> result != null && result.status() != AgentTaskStatus.SUCCESS);
+        for (String dependency : task.dependsOn()) {
+            AgentTaskExecutionResult dependencyResult = completed.get(dependency);
+            if (dependencyResult != null && dependencyResult.status() != AgentTaskStatus.SUCCESS) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 仅按 dependsOn 顺序提供成功上游结果，不泄露其他并行分支数据。 */
     private List<AgentTaskExecutionResult> dependencyResults(
             WorkflowPlanTask task,
             Map<String, AgentTaskExecutionResult> completed) {
-        return task.dependsOn().stream().map(completed::get).toList();
+        List<AgentTaskExecutionResult> dependencyResults = new ArrayList<>();
+        for (String dependency : task.dependsOn()) {
+            dependencyResults.add(completed.get(dependency));
+        }
+        return List.copyOf(dependencyResults);
     }
 }

@@ -76,12 +76,22 @@ public class OutputReviewNode implements NodeAction {
     /** 校验行内响应与请求关联一致，并确保存在唯一可发布文本。 */
     private void validateResult(String reviewRequestId, OutputReviewResult result) {
         Objects.requireNonNull(result, "Output review result must not be null");
-        if (!reviewRequestId.equals(result.reviewRequestId())
-                || result.decision() == null
-                || !StringUtils.hasText(result.publishableAnswer())
-                || result.reasons() == null
-                || result.durationMs() < 0
-                || result.reviewedAt() == null) {
+        if (!reviewRequestId.equals(result.reviewRequestId())) {
+            throw new IllegalStateException("Output review gateway returned invalid result");
+        }
+        if (result.decision() == null) {
+            throw new IllegalStateException("Output review gateway returned invalid result");
+        }
+        if (!StringUtils.hasText(result.publishableAnswer())) {
+            throw new IllegalStateException("Output review gateway returned invalid result");
+        }
+        if (result.reasons() == null) {
+            throw new IllegalStateException("Output review gateway returned invalid result");
+        }
+        if (result.durationMs() < 0) {
+            throw new IllegalStateException("Output review gateway returned invalid result");
+        }
+        if (result.reviewedAt() == null) {
             throw new IllegalStateException("Output review gateway returned invalid result");
         }
     }

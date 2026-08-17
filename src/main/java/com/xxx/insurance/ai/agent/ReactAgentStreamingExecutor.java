@@ -15,6 +15,8 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import reactor.core.publisher.Flux;
+
 /**
  * Spring AI Alibaba ReactAgent 流式执行适配器。
  *
@@ -48,20 +50,7 @@ public class ReactAgentStreamingExecutor {
     public AssistantMessage execute(ReactAgent reactAgent,
                                     String input,
                                     AgentTokenStreamContext streamContext) throws Exception {
-        AtomicReference<OverAllState> lastState = new AtomicReference<>();
-        StreamPublication publication = new StreamPublication(streamContext);
-        try {
-            reactAgent.stream(input)
-                    .doOnNext(output -> handleOutput(output, lastState, publication))
-                    .blockLast();
-            AssistantMessage finalMessage = validateFinalMessage(extractAssistantMessage(lastState.get()));
-            publication.complete();
-            return finalMessage;
-        }
-        catch (Exception ex) {
-            publication.abort();
-            throw ex;
-        }
+        return executeStream(reactAgent.stream(input), streamContext);
     }
 
     /** 使用历史消息列表执行 ReactAgent 流，并返回最终助手消息。 */
@@ -76,10 +65,16 @@ public class ReactAgentStreamingExecutor {
     public AssistantMessage execute(ReactAgent reactAgent,
                                     List<Message> input,
                                     AgentTokenStreamContext streamContext) throws Exception {
+        return executeStream(reactAgent.stream(input), streamContext);
+    }
+
+    /** 统一处理不同输入形式产生的同一类 ReactAgent 输出流，确保成功与异常收口逻辑只有一份。 */
+    private AssistantMessage executeStream(Flux<NodeOutput> outputStream,
+                                           AgentTokenStreamContext streamContext) throws Exception {
         AtomicReference<OverAllState> lastState = new AtomicReference<>();
         StreamPublication publication = new StreamPublication(streamContext);
         try {
-            reactAgent.stream(input)
+            outputStream
                     .doOnNext(output -> handleOutput(output, lastState, publication))
                     .blockLast();
             AssistantMessage finalMessage = validateFinalMessage(extractAssistantMessage(lastState.get()));
@@ -100,22 +95,38 @@ public class ReactAgentStreamingExecutor {
                               AtomicReference<OverAllState> lastState,
                               StreamPublication publication) {
         rememberState(output, lastState);
-        if (!(output instanceof StreamingOutput<?> streamingOutput)
-                || streamingOutput.getOutputType() != OutputType.AGENT_MODEL_STREAMING
-                || !(streamingOutput.message() instanceof AssistantMessage message)
-                || message.hasToolCalls()
-                || message.getText() == null
-                || message.getText().isEmpty()) {
+        if (!(output instanceof StreamingOutput<?> streamingOutput)) {
             return;
         }
-        publication.publish(message.getText());
+        if (streamingOutput.getOutputType() != OutputType.AGENT_MODEL_STREAMING) {
+            return;
+        }
+
+        Object rawMessage = streamingOutput.message();
+        if (!(rawMessage instanceof AssistantMessage assistantMessage)) {
+            return;
+        }
+        if (assistantMessage.hasToolCalls()) {
+            return;
+        }
+
+        String text = assistantMessage.getText();
+        if (text == null || text.isEmpty()) {
+            return;
+        }
+        publication.publish(text);
     }
 
     /** 保存每个 NodeOutput 携带的最新 State，最终 END State 包含完整消息列表。 */
     private void rememberState(NodeOutput output, AtomicReference<OverAllState> lastState) {
-        if (output != null && output.state() != null) {
-            lastState.set(output.state());
+        if (output == null) {
+            return;
         }
+        OverAllState outputState = output.state();
+        if (outputState == null) {
+            return;
+        }
+        lastState.set(outputState);
     }
 
     /** 按 ReactAgent.call 的同等语义提取消息列表中最后一个 AssistantMessage。 */
@@ -123,13 +134,16 @@ public class ReactAgentStreamingExecutor {
         if (state == null) {
             throw new IllegalStateException("ReactAgent stream returned no graph state");
         }
-        return state.value("messages")
-                .stream()
-                .flatMap(messages -> ((List<?>) messages).stream())
-                .filter(AssistantMessage.class::isInstance)
-                .map(AssistantMessage.class::cast)
-                .reduce((first, second) -> second)
-                .orElseThrow(() -> new IllegalStateException("ReactAgent stream returned no AssistantMessage"));
+        Object rawMessages = state.value("messages")
+                .orElseThrow(() -> new IllegalStateException("ReactAgent stream returned no messages"));
+        List<?> messages = (List<?>) rawMessages;
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            Object message = messages.get(index);
+            if (message instanceof AssistantMessage assistantMessage) {
+                return assistantMessage;
+            }
+        }
+        throw new IllegalStateException("ReactAgent stream returned no AssistantMessage");
     }
 
     /**
@@ -161,21 +175,24 @@ public class ReactAgentStreamingExecutor {
         }
 
         private void publish(String content) {
-            if (context != null) {
-                tokenStreamSink.publishToken(context, streamId, chunkIndex.incrementAndGet(), content);
+            if (context == null) {
+                return;
             }
+            tokenStreamSink.publishToken(context, streamId, chunkIndex.incrementAndGet(), content);
         }
 
         private void complete() {
-            if (context != null) {
-                tokenStreamSink.complete(context, streamId, chunkIndex.get());
+            if (context == null) {
+                return;
             }
+            tokenStreamSink.complete(context, streamId, chunkIndex.get());
         }
 
         private void abort() {
-            if (context != null) {
-                tokenStreamSink.abort(context, streamId);
+            if (context == null) {
+                return;
             }
+            tokenStreamSink.abort(context, streamId);
         }
     }
 }

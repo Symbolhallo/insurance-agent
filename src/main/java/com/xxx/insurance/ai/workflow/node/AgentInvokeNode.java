@@ -46,18 +46,28 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
      */
     @Override
     public CompletableFuture<Map<String, Object>> apply(OverAllState state, RunnableConfig config) {
-        WorkflowAgentTaskContext context = config.metadata(TASK_CONTEXT_METADATA)
-                .filter(WorkflowAgentTaskContext.class::isInstance)
-                .map(WorkflowAgentTaskContext.class::cast)
-                .orElseThrow(() -> new IllegalStateException("RunnableConfig has no workflow task context"));
-        AgentTaskExecutionResult running = state
+        WorkflowAgentTaskContext context = taskContext(config);
+        AgentTaskExecutionResult currentResult = state
                 .value(WorkflowTaskStateKeys.TASK_RESULT, AgentTaskExecutionResult.class)
                 .orElseThrow(() -> new IllegalStateException("Task graph state has no running result"));
-        if (running.terminal()) {
-            return CompletableFuture.completedFuture(Map.of(WorkflowTaskStateKeys.TASK_RESULT, running));
+        if (currentResult.terminal()) {
+            return completedState(currentResult);
         }
-        return CompletableFuture.completedFuture(Map.of(
-                WorkflowTaskStateKeys.TASK_RESULT, invokeWithRetry(context, running)));
+        return completedState(invokeWithRetry(context, currentResult));
+    }
+
+    /** 从 RunnableConfig 元数据读取调度器为当前任务注入的最小执行上下文。 */
+    private WorkflowAgentTaskContext taskContext(RunnableConfig config) {
+        Object metadata = config.metadata(TASK_CONTEXT_METADATA).orElse(null);
+        if (!(metadata instanceof WorkflowAgentTaskContext taskContext)) {
+            throw new IllegalStateException("RunnableConfig has no workflow task context");
+        }
+        return taskContext;
+    }
+
+    /** 将任务结果包装为异步节点要求的已完成 State 增量。 */
+    private CompletableFuture<Map<String, Object>> completedState(AgentTaskExecutionResult taskResult) {
+        return CompletableFuture.completedFuture(Map.of(WorkflowTaskStateKeys.TASK_RESULT, taskResult));
     }
 
     /**
@@ -78,11 +88,7 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 SubAgentExecutionResult response = subAgentRouter.invoke(context);
-                Instant endedAt = Instant.now();
-                AgentTaskExecutionResult success = new AgentTaskExecutionResult(
-                        context.task().taskId(), context.task().sequence(), context.task().agentType(),
-                        AgentTaskStatus.SUCCESS, response, null, null, startedAt, endedAt,
-                        Duration.between(startedAt, endedAt).toMillis(), attempt);
+                AgentTaskExecutionResult success = successfulResult(context, response, startedAt, attempt);
                 publishTerminal(context, success);
                 return success;
             }
@@ -96,13 +102,31 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
             }
         }
 
-        Instant endedAt = Instant.now();
-        AgentTaskExecutionResult failed = new AgentTaskExecutionResult(
-                context.task().taskId(), context.task().sequence(), context.task().agentType(),
-                AgentTaskStatus.FAILED, null, ERROR_AGENT_INVOKE_FAILED, truncate(lastFailure),
-                startedAt, endedAt, Duration.between(startedAt, endedAt).toMillis(), maxAttempts);
+        AgentTaskExecutionResult failed = failedResult(context, startedAt, maxAttempts, lastFailure);
         publishTerminal(context, failed);
         return failed;
+    }
+
+    private AgentTaskExecutionResult successfulResult(WorkflowAgentTaskContext context,
+                                                      SubAgentExecutionResult response,
+                                                      Instant startedAt,
+                                                      int attempt) {
+        Instant endedAt = Instant.now();
+        return new AgentTaskExecutionResult(
+                context.task().taskId(), context.task().sequence(), context.task().agentType(),
+                AgentTaskStatus.SUCCESS, response, null, null, startedAt, endedAt,
+                Duration.between(startedAt, endedAt).toMillis(), attempt);
+    }
+
+    private AgentTaskExecutionResult failedResult(WorkflowAgentTaskContext context,
+                                                  Instant startedAt,
+                                                  int attempts,
+                                                  Exception lastFailure) {
+        Instant endedAt = Instant.now();
+        return new AgentTaskExecutionResult(
+                context.task().taskId(), context.task().sequence(), context.task().agentType(),
+                AgentTaskStatus.FAILED, null, ERROR_AGENT_INVOKE_FAILED, truncate(lastFailure),
+                startedAt, endedAt, Duration.between(startedAt, endedAt).toMillis(), attempts);
     }
 
     /** 使用短指数退避避免瞬时故障时无间隔重放外部请求。 */

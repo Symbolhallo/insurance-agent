@@ -29,6 +29,10 @@
 属于即时 flush、数据库 Poller 或 Last-Event-ID 重放，不能把“事件已落库”描述成“前端已收到”。简单
 getter、纯转换和显而易见委托保持短注释，避免注释重复代码本身。
 
+当前代码阅读约定：复合类型/状态校验优先使用 Guard Clause；主流程使用具有业务含义的局部变量和私有方法；
+仅在集合转换本身足够直观时使用 Stream/Optional 链。涉及 Graph Checkpoint、事务、Lease、Fence、CAS、
+SSE sequence 或动态 DAG 并发的代码，优先保持协议完整性，不以减少行数为目标。
+
 ---
 
 ## 2. 先看整体分层
@@ -756,6 +760,8 @@ API Key 不能写入代码、YAML、数据库事件或日志。
 10. MyBatis Mapper 注释不能只复述增删改查；工作流、Checkpoint、SSE SQL 要说明 owner、Lease、
     fencing token、状态机、乐观锁、幂等和保留条件，CAS 方法必须明确返回 0 的业务含义。
 11. Memory Mapper 注释必须区分短期窗口覆盖、长期历史追加、调用审计和只读观测，避免混淆数据语义。
+12. 新增复合判断时优先逐项 Guard Clause；方法同时承担解析、执行和收口时，应按稳定业务阶段提取具名私有方法，
+    但不能借可读性重构改变 Graph 拓扑、事务边界、Checkpoint、Retry、SSE 或 Lease/Fence/CAS 语义。
 
 ---
 

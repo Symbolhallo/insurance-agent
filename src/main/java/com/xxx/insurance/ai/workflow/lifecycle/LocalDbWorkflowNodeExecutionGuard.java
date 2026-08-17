@@ -53,32 +53,58 @@ public class LocalDbWorkflowNodeExecutionGuard implements WorkflowNodeExecutionG
         String workflowStepId = MainWorkflowGraphConfig.workflowStepIds(state).get(nodeDefinition.code());
         long executionFenceToken = executionFenceToken(state);
         Instant startedAt = Instant.now();
-        if (workflowStepId != null) {
-            requireLeaseWrite(workflowExecutionMapper.updateStepStarted(
-                    workflowStepId, lifecycleProperties.getInstanceId(), executionFenceToken, startedAt));
-        }
+        recordStepStarted(workflowStepId, executionFenceToken, startedAt);
         try {
-            Map<String, Object> result = nodeExecution.call();
-            if (workflowStepId != null) {
-                requireLeaseWrite(workflowExecutionMapper.updateStepResult(
-                        workflowStepId, "SUCCESS", toJson(result), null,
-                        lifecycleProperties.getInstanceId(), executionFenceToken, Instant.now()));
-            }
-            return result;
+            Map<String, Object> nodeResult = nodeExecution.call();
+            recordStepSucceeded(workflowStepId, executionFenceToken, nodeResult);
+            return nodeResult;
         }
         catch (Exception ex) {
-            if (workflowStepId != null) {
-                workflowExecutionMapper.updateStepResult(
-                        workflowStepId,
-                        "FAILED",
-                        null,
-                        truncateErrorMessage(ex),
-                        lifecycleProperties.getInstanceId(),
-                        executionFenceToken,
-                        Instant.now());
-            }
+            recordStepFailed(workflowStepId, executionFenceToken, ex);
             throw ex;
         }
+    }
+
+    /** 有步骤审计记录时，先以 Lease/Fence CAS 取得该节点的执行权。 */
+    private void recordStepStarted(String workflowStepId,
+                                   long executionFenceToken,
+                                   Instant startedAt) {
+        if (workflowStepId == null) {
+            return;
+        }
+        int updated = workflowExecutionMapper.updateStepStarted(
+                workflowStepId, lifecycleProperties.getInstanceId(), executionFenceToken, startedAt);
+        requireLeaseWrite(updated);
+    }
+
+    /** 节点成功后持久化增量结果；CAS 失败时拒绝旧 Graph 把结果写回主 State。 */
+    private void recordStepSucceeded(String workflowStepId,
+                                     long executionFenceToken,
+                                     Map<String, Object> nodeResult) {
+        if (workflowStepId == null) {
+            return;
+        }
+        int updated = workflowExecutionMapper.updateStepResult(
+                workflowStepId, "SUCCESS", toJson(nodeResult), null,
+                lifecycleProperties.getInstanceId(), executionFenceToken, Instant.now());
+        requireLeaseWrite(updated);
+    }
+
+    /** 节点失败时尽力记录错误；原异常仍由 Graph 调用链继续传播。 */
+    private void recordStepFailed(String workflowStepId,
+                                  long executionFenceToken,
+                                  Exception exception) {
+        if (workflowStepId == null) {
+            return;
+        }
+        workflowExecutionMapper.updateStepResult(
+                workflowStepId,
+                "FAILED",
+                null,
+                truncateErrorMessage(exception),
+                lifecycleProperties.getInstanceId(),
+                executionFenceToken,
+                Instant.now());
     }
 
     /** 从持久化 Graph State 获取本次执行固定的 fencing token。 */

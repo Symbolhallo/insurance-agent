@@ -10,6 +10,7 @@ import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.ConversationTopicRelation;
 import com.xxx.insurance.ai.workflow.model.ContextAlignmentModelOutput;
+import com.xxx.insurance.ai.workflow.model.WorkflowEntity;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
 import com.xxx.insurance.common.util.TraceIdUtil;
@@ -249,7 +250,10 @@ public class ContextAlignmentService {
     }
 
     private void validate(ContextAlignmentModelOutput aligned) {
-        if (aligned == null || !StringUtils.hasText(aligned.rewrittenQuestion())) {
+        if (aligned == null) {
+            throw new IllegalStateException("Context alignment model returned blank rewritten question");
+        }
+        if (!StringUtils.hasText(aligned.rewrittenQuestion())) {
             throw new IllegalStateException("Context alignment model returned blank rewritten question");
         }
         if (aligned.rewrittenQuestion().length() > MAX_REWRITTEN_QUESTION_LENGTH) {
@@ -265,34 +269,52 @@ public class ContextAlignmentService {
         if (aligned.entities().size() > MAX_ENTITY_COUNT) {
             throw new IllegalStateException("Context alignment model returned too many entities");
         }
-        aligned.entities().forEach(entity -> {
-            if (entity == null
-                    || !ALLOWED_ENTITY_TYPES.contains(entity.type())
-                    || !ALLOWED_ENTITY_SOURCES.contains(entity.source())
-                    || !StringUtils.hasText(entity.value())) {
-                throw new IllegalStateException("Context alignment model returned an invalid entity");
-            }
-        });
+        for (var entity : aligned.entities()) {
+            validateEntity(entity);
+        }
+    }
+
+    /** 校验单个模型实体，保持类型、来源和实体值错误都在对齐边界被拒绝。 */
+    private void validateEntity(WorkflowEntity entity) {
+        if (entity == null) {
+            throw new IllegalStateException("Context alignment model returned an invalid entity");
+        }
+        if (!ALLOWED_ENTITY_TYPES.contains(entity.type())) {
+            throw new IllegalStateException("Context alignment model returned an invalid entity");
+        }
+        if (!ALLOWED_ENTITY_SOURCES.contains(entity.source())) {
+            throw new IllegalStateException("Context alignment model returned an invalid entity");
+        }
+        if (!StringUtils.hasText(entity.value())) {
+            throw new IllegalStateException("Context alignment model returned an invalid entity");
+        }
     }
 
     private void validateConfirmedInformation(Map<String, List<String>> confirmedInformation) {
         if (confirmedInformation == null) {
             throw new IllegalStateException("Context alignment model returned null confirmed information");
         }
-        int valueCount = confirmedInformation.values().stream()
-                .mapToInt(values -> values == null ? 0 : values.size())
-                .sum();
-        if (confirmedInformation.size() > MAX_CONFIRMED_INFORMATION_COUNT
-                || valueCount > MAX_CONFIRMED_INFORMATION_COUNT) {
+        if (confirmedInformation.size() > MAX_CONFIRMED_INFORMATION_COUNT) {
             throw new IllegalStateException("Context alignment model returned too much confirmed information");
         }
-        confirmedInformation.forEach((key, values) -> {
-            if (!StringUtils.hasText(key)
-                    || values == null
-                    || values.stream().anyMatch(value -> !StringUtils.hasText(value))) {
+
+        int valueCount = 0;
+        for (Map.Entry<String, List<String>> entry : confirmedInformation.entrySet()) {
+            String key = entry.getKey();
+            List<String> values = entry.getValue();
+            if (!StringUtils.hasText(key) || values == null) {
                 throw new IllegalStateException("Context alignment model returned invalid confirmed information");
             }
-        });
+            for (String value : values) {
+                if (!StringUtils.hasText(value)) {
+                    throw new IllegalStateException("Context alignment model returned invalid confirmed information");
+                }
+            }
+            valueCount += values.size();
+        }
+        if (valueCount > MAX_CONFIRMED_INFORMATION_COUNT) {
+            throw new IllegalStateException("Context alignment model returned too much confirmed information");
+        }
     }
 
     private boolean hasConversationHistory(ConversationMemorySnapshot snapshot) {

@@ -1,5 +1,17 @@
 # 工程变更记录
 
+## 2026-08-17：全项目高收益可读性重构
+
+- 在 `simplify` 分支按“流式输出 → 主工作流与安全门禁 → 动态 DAG 与 Agent → 模型输出校验”的顺序整理高复杂度代码，并在每组修改后运行对应测试。
+- `ReactAgentStreamingExecutor` 合并字符串/消息列表两套重复流处理，模型增量过滤改为逐步 Guard Clause，最终 AssistantMessage 改为从最新 Graph State 反向查找；仍只执行一次 ReactAgent 流，不改变 Tool Calling 或最终答案来源。
+- `WorkflowAgentTokenStreamSink` 将字符阈值和最大延迟提取为具名判断；首块即时投递、80ms/128字符批次、chunkIndex、异常 abort 和尾部 flush 语义保持不变。
+- `LocalDbWorkflowSseEventService` 将实例校验、重放缺口判断和历史事件发送拆成明确阶段，实时事件继续以 OceanBase 为事实源，并保持 sequence、Last-Event-ID、多实例 Poller 和终止事件关闭规则。
+- `LocalDbMainWorkflowService` 明确 `graphConfig`、`initialState`、`graphOutput` 三个执行阶段；Lifecycle Listener、Node Guard 和 Lease/Fence 校验改用靠左主路径与逐项条件检查，数据库 CAS 和事务边界未调整。
+- `WorkflowDagExecutor`、`WorkflowTaskGraphRunner`、`AgentInvokeNode` 明确就绪任务、最小任务上下文、Checkpoint 恢复、重试成功/失败结果的构造步骤；动态 dependsOn 调度、并行释放后继、失败传播和成功任务恢复去重不变。
+- 意图识别、上下文对齐和输出审核的模型合同校验改为逐字段 Guard Clause，错误类型和业务拒绝边界保持一致。
+- 有意保留 `GraphCheckpointConfig` 的版本化序列化、`OceanBaseCheckpointSaver` 的事务/乐观锁、Mapper SQL 的 Lease/Fence/CAS 条件，以及 `WorkflowFinalizationService` 的单事务收口结构；这些复杂度属于生产可靠性协议，不做表面简化。
+- 未修改 API、Graph 拓扑、数据库表与 SQL、配置值、Prompt、Skill、Tool、Memory 写入边界、SSE 协议或最终审核答案语义。
+
 ## 2026-08-13：主工作流关键方法注释与真实链路对齐
 
 - 重新审阅主工作流 HTTP/SSE 入口、应用门面、生命周期 Listener、启动/暂停/收口事务、节点安全门禁和 OceanBase SSE 事件服务的关键复合方法。

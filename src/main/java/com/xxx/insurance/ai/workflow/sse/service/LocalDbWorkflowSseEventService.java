@@ -116,33 +116,61 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         long afterSequence = parseLastSequence(workflowInstanceId, lastEventId);
         Object lock = workflowLocks.computeIfAbsent(workflowInstanceId, ignored -> new Object());
         synchronized (lock) {
-            WorkflowInstanceExecutionView instance = executionMapper.findInstance(workflowInstanceId);
-            if (instance == null) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow instance not found");
-            }
-            if (confirmationResume && !"CONFIRMING".equals(instance.status())) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT, "Workflow instance confirmation has not been claimed");
-            }
+            WorkflowInstanceExecutionView workflowInstance = requireSubscribableInstance(
+                    workflowInstanceId, confirmationResume);
             Long highWatermark = eventMapper.findHighWatermark(workflowInstanceId);
             List<WorkflowSseEventRecord> replayEvents = eventMapper.findReplayEvents(
                     workflowInstanceId, afterSequence, Instant.now());
-            if (highWatermark != null && highWatermark > afterSequence
-                    && (replayEvents.isEmpty() || replayEvents.getFirst().sequenceNo() > afterSequence + 1)) {
-                throw new ResponseStatusException(HttpStatus.GONE, "Workflow SSE replay events have expired");
-            }
+            rejectExpiredReplayGap(highWatermark, afterSequence, replayEvents);
 
             SseEmitter emitter = new SseEmitter(properties.connectionTimeout().toMillis());
             SseClient client = new SseClient(emitter, afterSequence);
             configureCallbacks(workflowInstanceId, client);
-            replayEvents.forEach(record -> sendOrRemove(workflowInstanceId, client, toEvent(record)));
-            if (confirmationResume || isOpenStatus(instance.status())) {
+            sendReplayEvents(workflowInstanceId, client, replayEvents);
+            if (confirmationResume || isOpenStatus(workflowInstance.status())) {
                 subscribers.computeIfAbsent(workflowInstanceId, ignored -> new CopyOnWriteArrayList<>()).add(client);
             }
             else {
                 emitter.complete();
             }
             return emitter;
+        }
+    }
+
+    /** 读取工作流实例，并校验当前入口是否允许建立普通重连或确认恢复订阅。 */
+    private WorkflowInstanceExecutionView requireSubscribableInstance(String workflowInstanceId,
+                                                                      boolean confirmationResume) {
+        WorkflowInstanceExecutionView workflowInstance = executionMapper.findInstance(workflowInstanceId);
+        if (workflowInstance == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow instance not found");
+        }
+        if (confirmationResume && !"CONFIRMING".equals(workflowInstance.status())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT, "Workflow instance confirmation has not been claimed");
+        }
+        return workflowInstance;
+    }
+
+    /** 当 Last-Event-ID 与当前水位之间的数据已超过保留期时拒绝不完整重放。 */
+    private void rejectExpiredReplayGap(Long highWatermark,
+                                        long afterSequence,
+                                        List<WorkflowSseEventRecord> replayEvents) {
+        if (highWatermark == null || highWatermark <= afterSequence) {
+            return;
+        }
+        boolean firstExpectedEventAvailable = !replayEvents.isEmpty()
+                && replayEvents.getFirst().sequenceNo() == afterSequence + 1;
+        if (!firstExpectedEventAvailable) {
+            throw new ResponseStatusException(HttpStatus.GONE, "Workflow SSE replay events have expired");
+        }
+    }
+
+    /** 按数据库序号逐条投递历史事件，SseClient 负责连接内去重和游标推进。 */
+    private void sendReplayEvents(String workflowInstanceId,
+                                  SseClient client,
+                                  List<WorkflowSseEventRecord> replayEvents) {
+        for (WorkflowSseEventRecord replayEvent : replayEvents) {
+            sendOrRemove(workflowInstanceId, client, toEvent(replayEvent));
         }
     }
 
@@ -216,17 +244,19 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         if (clients == null || clients.isEmpty()) {
             return;
         }
-        long afterSequence = clients.stream()
+        long earliestDeliveredSequence = clients.stream()
                 .mapToLong(SseClient::lastDeliveredSequence)
                 .min()
                 .orElse(0L);
         try {
-            List<WorkflowSseEventRecord> records = eventMapper.findReplayEvents(
-                    workflowInstanceId, afterSequence, Instant.now());
-            records.stream()
-                    .map(this::toEvent)
-                    .forEach(event -> clients.forEach(client ->
-                            sendOrRemove(workflowInstanceId, client, event)));
+            List<WorkflowSseEventRecord> persistedEvents = eventMapper.findReplayEvents(
+                    workflowInstanceId, earliestDeliveredSequence, Instant.now());
+            for (WorkflowSseEventRecord persistedEvent : persistedEvents) {
+                WorkflowSseEvent event = toEvent(persistedEvent);
+                for (SseClient client : clients) {
+                    sendOrRemove(workflowInstanceId, client, event);
+                }
+            }
         }
         catch (Exception ex) {
             // 短暂查询失败不关闭连接，下一轮仍从客户端最后成功序号继续补偿。
@@ -426,7 +456,13 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
 
     /** 判断实例是否仍可能产生实时事件。 */
     private boolean isOpenStatus(String status) {
-        return "RUNNING".equals(status) || "RESUMING".equals(status) || "CONFIRMING".equals(status);
+        if (status == null) {
+            return false;
+        }
+        return switch (status) {
+            case "RUNNING", "RESUMING", "CONFIRMING" -> true;
+            default -> false;
+        };
     }
 
     /** 判断事件是否结束当前这一次 SSE 连接；人工确认后可通过独立恢复接口建立新连接。 */

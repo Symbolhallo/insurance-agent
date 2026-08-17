@@ -56,43 +56,13 @@ public class AuditedReactAgentExecutor {
                                            AgentExecutionContext executionContext) {
         Objects.requireNonNull(reactAgent, "ReactAgent must not be null");
         Objects.requireNonNull(executionContext, "Agent execution context must not be null");
-        if (!StringUtils.hasText(query)) {
-            throw new IllegalArgumentException("query must not be blank");
-        }
-        if (query.length() > 4000) {
-            throw new IllegalArgumentException("query length must be less than or equal to 4000");
-        }
+        validateQuery(query);
         String invocationId = invocationPrefix + UUID.randomUUID().toString().replace("-", "");
         long startedNanos = System.nanoTime();
         try {
-            log.info("[Agent] name={} action=query status=start invocationId={} conversationId={}",
-                    agentName, invocationId, conversationId);
-            AssistantMessage message = call(
-                    reactAgent, agentName, query, conversationId, executionContext);
-            if (!StringUtils.hasText(message.getText())) {
-                throw new IllegalStateException("ReactAgent returned blank answer");
-            }
-            long durationMs = elapsedMillis(startedNanos);
-            Instant answeredAt = Instant.now();
-            AgentInvocationRecord invocation = invocation(
-                    agentName, invocationId, query, conversationId, executionContext,
-                    message.getText(), durationMs, "SUCCESS", null, null, answeredAt);
-            if (agentMemoryService.isEnabled() && StringUtils.hasText(conversationId)) {
-                agentMemoryService.saveSuccessfulInvocation(invocation);
-            }
-            log.info("[Agent] name={} action=query status=success invocationId={} durationMs={}",
-                    agentName, invocationId, durationMs);
-            return new SubAgentExecutionResult(
-                    agentName,
-                    conversationId,
-                    invocationId,
-                    message.getText(),
-                    true,
-                    durationMs,
-                    answeredAt,
-                    message.getText().length(),
-                    false,
-                    0);
+            return executeAndRecordSuccess(
+                    reactAgent, agentName, query, conversationId,
+                    executionContext, invocationId, startedNanos);
         }
         catch (Exception ex) {
             long durationMs = elapsedMillis(startedNanos);
@@ -101,6 +71,47 @@ public class AuditedReactAgentExecutor {
                     agentName, invocationId, durationMs, ex);
             throw new IllegalStateException(agentName + " model invocation failed", ex);
         }
+    }
+
+    private void validateQuery(String query) {
+        if (!StringUtils.hasText(query)) {
+            throw new IllegalArgumentException("query must not be blank");
+        }
+        if (query.length() > 4000) {
+            throw new IllegalArgumentException("query length must be less than or equal to 4000");
+        }
+    }
+
+    /** 执行模型调用、校验答案并保存成功审计，返回统一子智能体结果。 */
+    private SubAgentExecutionResult executeAndRecordSuccess(ReactAgent reactAgent,
+                                                            String agentName,
+                                                            String query,
+                                                            String conversationId,
+                                                            AgentExecutionContext executionContext,
+                                                            String invocationId,
+                                                            long startedNanos) throws Exception {
+        log.info("[Agent] name={} action=query status=start invocationId={} conversationId={}",
+                agentName, invocationId, conversationId);
+        AssistantMessage assistantMessage = call(
+                reactAgent, agentName, query, conversationId, executionContext);
+        String answer = assistantMessage.getText();
+        if (!StringUtils.hasText(answer)) {
+            throw new IllegalStateException("ReactAgent returned blank answer");
+        }
+
+        long durationMs = elapsedMillis(startedNanos);
+        Instant answeredAt = Instant.now();
+        AgentInvocationRecord invocationRecord = invocation(
+                agentName, invocationId, query, conversationId, executionContext,
+                answer, durationMs, "SUCCESS", null, null, answeredAt);
+        if (agentMemoryService.isEnabled() && StringUtils.hasText(conversationId)) {
+            agentMemoryService.saveSuccessfulInvocation(invocationRecord);
+        }
+        log.info("[Agent] name={} action=query status=success invocationId={} durationMs={}",
+                agentName, invocationId, durationMs);
+        return new SubAgentExecutionResult(
+                agentName, conversationId, invocationId, answer, true,
+                durationMs, answeredAt, answer.length(), false, 0);
     }
 
     /**
