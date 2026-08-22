@@ -5,6 +5,7 @@ import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,13 +44,21 @@ public class WorkflowLeaseRecoveryJob {
             fixedDelayString = "${insurance.ai.workflow.lifecycle.heartbeat-interval:1m}")
     public void renewOwnedLeases() {
         Instant now = Instant.now();
-        int renewed = workflowExecutionMapper.renewOwnedExecutionLeases(
-                lifecycleProperties.getInstanceId(),
-                now.plus(lifecycleProperties.getExecutionLease()),
-                now);
-        if (renewed > 0) {
-            log.debug("[Workflow] action=lease-heartbeat status=success owner={} renewedCount={}",
-                    lifecycleProperties.getInstanceId(), renewed);
+        try {
+            int renewed = workflowExecutionMapper.renewOwnedExecutionLeases(
+                    lifecycleProperties.getInstanceId(),
+                    now.plus(lifecycleProperties.getExecutionLease()),
+                    now);
+            if (renewed > 0) {
+                log.debug("[Workflow] action=lease-heartbeat status=success owner={} renewedCount={}",
+                        lifecycleProperties.getInstanceId(), renewed);
+            }
+        }
+        catch (CannotAcquireLockException ex) {
+            // 断点或并发收口事务可能暂时持有实例行。放弃本轮续租，下一周期仍按 owner 条件重试；
+            // 其他数据库异常继续抛出，避免把连接、SQL 或 Schema 故障误判成可恢复锁竞争。
+            log.warn("[Workflow] action=lease-heartbeat status=deferred reason=database-lock-contention owner={}",
+                    lifecycleProperties.getInstanceId());
         }
     }
 

@@ -33,7 +33,7 @@ class LocalDebugConfigurationTests {
         assertThat(lifecycle.getExecutionLease()).isEqualTo(Duration.ofHours(4));
         assertThat(lifecycle.getClaimLease()).isEqualTo(Duration.ofHours(4));
         assertThat(lifecycle.getWaitingConfirmLease()).isEqualTo(Duration.ofDays(7));
-        assertThat(lifecycle.getHeartbeatInterval()).isEqualTo(Duration.ofMinutes(5));
+        assertThat(lifecycle.getHeartbeatInterval()).isEqualTo(Duration.ofHours(3));
         lifecycle.validate();
     }
 

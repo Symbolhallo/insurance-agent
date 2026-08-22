@@ -19,6 +19,8 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class AgentInvokeNodeTests {
@@ -50,6 +52,21 @@ class AgentInvokeNodeTests {
         assertThat(result.status()).isEqualTo(AgentTaskStatus.FAILED);
         assertThat(result.attempts()).isEqualTo(2);
         assertThat(result.errorMessage()).contains("unavailable");
+    }
+
+    @Test
+    void doesNotRetryDeterministicRequestValidationFailure() {
+        WorkflowSubAgentRouter router = mock(WorkflowSubAgentRouter.class);
+        WorkflowAgentTaskContext context = context(3);
+        when(router.invoke(context)).thenThrow(new IllegalArgumentException("message is too long"));
+        AgentInvokeNode node = new AgentInvokeNode(router, new NoOpWorkflowEventPublisher());
+
+        AgentTaskExecutionResult result = result(node, context);
+
+        assertThat(result.status()).isEqualTo(AgentTaskStatus.FAILED);
+        assertThat(result.attempts()).isEqualTo(1);
+        assertThat(result.errorMessage()).contains("message is too long");
+        verify(router, times(1)).invoke(context);
     }
 
     private AgentTaskExecutionResult result(AgentInvokeNode node, WorkflowAgentTaskContext context) {

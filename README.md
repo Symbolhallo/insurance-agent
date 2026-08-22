@@ -260,7 +260,7 @@ ai_long_term_memory
 
 当前 Workflow 已接入 Main Graph v1：通过 Spring AI Alibaba Graph 定义 `START -> resolve-product-reference -> (retrieve-product-candidates -> human-confirm-product) -> context-alignment -> intent-recognition -> planner-agent -> dag-executor -> summary -> output-review -> END`。
 
-`resolve-product-reference` 只读取当前 `conversationId` 已确认产品并识别本轮产品线索。首次具体产品、模糊产品名和无法映射的产品追问进入 Mock 候选召回，并在 `human-confirm-product` 前持久化中断；确认接口把标准产品写入 State 后从 OceanBase Checkpoint 恢复。纯条件筛选或唯一映射到当前会话已确认产品的追问直接进入 `context-alignment`。上下文对齐随后读取历史记忆、判断话题延续/切换并完成五步问题改写。意图节点可拆分产品分析、知识问答、保单查询和资产查询，Planner 生成带 `dependsOn` 的受控任务图。`dag-executor` 按单个任务完成事件立即释放后继，不等待无关并行任务；每个任务使用独立 Spring AI Alibaba 子图和 OceanBase Checkpoint thread，恢复时不会重复执行已成功任务。四个领域 Agent 均真实调用全局 ChatModel，并且只能通过各自隔离 Tool 获取 Mock 业务事实。`summary` 对单任务结果直接透传，对多个成功、失败和跳过结果调用独立 ReactAgent 汇总；`output-review` 再通过 `OutputReviewGateway.review(...)` 审核唯一候选答案。
+`resolve-product-reference` 只读取当前 `conversationId` 已确认产品并识别本轮产品线索。首次具体产品、模糊产品名和无法映射的产品追问进入 Mock 候选召回，并在 `human-confirm-product` 前持久化中断；确认接口把标准产品写入 State 后从 OceanBase Checkpoint 恢复。纯条件筛选或唯一映射到当前会话已确认产品的追问直接进入 `context-alignment`。上下文对齐随后读取历史记忆、判断话题延续/切换并完成五步问题改写。意图节点可拆分产品分析、知识问答、保单查询和资产查询，Planner 生成带 `dependsOn` 的受控任务图。`dag-executor` 按单个任务完成事件立即释放后继，不等待无关并行任务；每个任务使用独立 Spring AI Alibaba 子图和 OceanBase Checkpoint thread，恢复时不会重复执行已成功任务。路由器把任务原始问题、已确认产品和明确上游结果限制在2000字符共同预算内，并公平截断多个超长依赖答案；参数校验等确定性错误不重试，其他调用异常继续使用 Planner 重试预算。四个领域 Agent 均真实调用全局 ChatModel，并且只能通过各自隔离 Tool 获取 Mock 业务事实。`summary` 对单任务结果直接透传，对多个成功、失败和跳过结果调用独立 ReactAgent 汇总；`output-review` 再通过 `OutputReviewGateway.review(...)` 审核唯一候选答案。
 
 Workflow 调用子智能体时，模型使用 Planner 拆分后的任务指令；子智能体并行阶段只写 `ai_agent_invocation` 审计，Summary 完成后由 Main Workflow 向 `ai_chat_memory` 和 `ai_long_term_memory` 一次性写入用户原话与最终回答，调用流水同时关联 `workflow_instance_id` 与 `workflow_step_id`。
 
@@ -283,6 +283,8 @@ IDEA 长时间断点调试主工作流时，建议将 Run/Debug Configuration �
 设为 `local-debug`，不要同时再填写 `local-db`。`local-debug` 会按顺序启用
 `local-db` 和 `debug-timing`：保留 OceanBase/Flyway 能力，同时把 SSE 连接与事件重放、
 execution/claim lease 延长到4小时，把人工确认租约延长到7天，并推迟后台物理清理。
+调试 heartbeat 推迟到3小时，避免断点停在数据库事务内时后台续租等待相同实例行；明确的
+数据库锁竞争只跳过当前续租周期，下一周期仍按 owner 条件重试。
 模型和数据库凭据仍放在 `Environment variables`。该 Profile 仅用于本地断点调试，
 普通运行继续使用 `local-db`，生产环境禁止启用。
 

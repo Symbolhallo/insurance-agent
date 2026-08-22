@@ -1,5 +1,21 @@
 # 工程变更记录
 
+## 2026-08-22：动态 DAG 下游输入预算与确定性失败重试优化
+
+- 修复 Planner 原始任务问题不超过2000字符，但 `WorkflowSubAgentRouter` 追加多个上游完整答案后仍可能超过领域 Agent 输入上限的问题。
+- 子智能体任务原始问题保持最高优先级；剩余2000字符预算由已确认产品和明确依赖结果使用，多个依赖按剩余任务数公平分配，连续空白先压缩，超长回答增加 `...[truncated]` 标记。
+- 依赖注入继续只包含当前任务明确声明的 `dependsOn` 结果，不引入其他并行分支、聊天历史或完整 Graph State。
+- `AgentInvokeNode` 将直接 `IllegalArgumentException` 识别为确定性请求错误并立即失败，不再重复调用；模型或外部依赖产生的其他异常继续按 Planner `maxRetries` 重试。
+- 失败日志区分准备再次执行的 `retry/scheduled` 和不会再重试的 `attempt-failed/terminal`，任务结果中的 `attempts` 改为真实调用次数。
+- 新增多上游超长答案预算测试与参数错误不重试测试；Main Graph 拓扑、DAG dependsOn 调度、失败传播、Checkpoint 和 SSE 协议均未改变。
+
+## 2026-08-17：降低 IDEA 事务断点对 Lease Heartbeat 的干扰
+
+- 确认本地异常来自断点事务长期持有 `ai_workflow_instance`/conversation lock 行，后台联表续租等待同一行后触发 `CannotAcquireLockException`；不是 Graph、Checkpoint 或模型执行失败。
+- `WorkflowLeaseRecoveryJob` 只对明确的数据库锁竞争降级为 `WARN/deferred`，放弃当前 heartbeat 并由下一调度周期继续按 owner 条件续租；连接、SQL、Schema 等其他异常仍向外传播。
+- `local-debug` 的 heartbeat 从5分钟推迟到3小时，仍严格短于4小时 execution/claim lease，减少 IDEA 长断点期间后台续租与业务事务争抢数据库行。
+- 增加锁竞争降级测试并同步本地调试配置绑定、README 和项目理解文档；普通 `local-db` 与生产默认的15分钟租约、1分钟 heartbeat 均未改变。
+
 ## 2026-08-17：全项目高收益可读性重构
 
 - 在 `simplify` 分支按“流式输出 → 主工作流与安全门禁 → 动态 DAG 与 Agent → 模型输出校验”的顺序整理高复杂度代码，并在每组修改后运行对应测试。

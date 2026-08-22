@@ -282,7 +282,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `PlannerNode` | `apply()`、`streamContext()` | 调 Planner Agent 生成依赖计划。 |
 | `DagExecutorNode` | `apply()` | 调统一动态 DAG 执行器。 |
 | `TaskMarkRunningNode` | `apply()` | 单任务子图先生成 RUNNING 状态。 |
-| `AgentInvokeNode` | `apply()`、`invokeWithRetry()`、`backoff()`、事件发布辅助函数 | 白名单调用一个领域 Agent，处理重试和任务终态 SSE。 |
+| `AgentInvokeNode` | `apply()`、`invokeWithRetry()`、`isRetryable()`、`backoff()`、事件发布辅助函数 | 白名单调用一个领域 Agent；参数错误立即失败，其他异常按计划重试，并发布任务终态 SSE。 |
 | `SummaryNode` | `apply()` | 汇总 DAG 成功、失败和跳过结果。 |
 | `OutputReviewNode` | `apply()`、`validateResult()` | 调一个审核网关方法；只有 publishableAnswer 可写入 finalAnswer。 |
 
@@ -306,7 +306,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `WorkflowPlanValidator` | `validate()`、`validateTask()`、`validateDependencies()`、`validateAcyclic()` | 校验 taskId、agentType、query、dependsOn、自依赖和环。 |
 | `WorkflowDagExecutor` | `execute()`、就绪判断、失败传播、完成等待函数 | 依据 dependsOn 动态提交任务；A 完成即可释放只依赖 A 的 B，无需等待无关 C。 |
 | `WorkflowTaskGraphRunner` | `execute()`、`runnableConfig()`、`pending()` | 为每个任务生成独立 threadId，恢复 SUCCESS Checkpoint，执行任务子图。 |
-| `WorkflowSubAgentRouter` | `invoke()`、`buildAgentQuery()`、结果转换函数 | 将受控 agentType 路由到产品、知识、保单、资产 Agent，只传最小任务上下文。 |
+| `WorkflowSubAgentRouter` | `invoke()`、`buildAgentQuery()`、预算分配与结果转换函数 | 将受控 agentType 路由到四个领域 Agent；只传最小任务上下文，并将原始问题、产品和明确上游结果控制在2000字符预算内。 |
 
 ### `workflow.lifecycle`
 
@@ -494,9 +494,11 @@ local-debug -> local-db -> debug-timing
 
 `local-db` 先启用 OceanBase、Flyway、Checkpoint 和 SSE 事实表；`debug-timing` 再将 SSE
 连接/事件保留、execution lease 和 claim lease 放宽到4小时，将人工确认租约放宽到7天，
-并把物理清理首次执行推迟到4小时。数据库轮询仍为500ms、Token 合并仍为80ms/128字符，
+将 heartbeat 推迟到3小时，并把物理清理首次执行推迟到4小时。数据库轮询仍为500ms、Token 合并仍为80ms/128字符，
 所以调试 Profile 不牺牲前端首响应和持续流式体验。该配置用于防止 IDEA `Suspend All`
-同时暂停 heartbeat 后，工作流在断点期间丢失 lease；它不应进入生产运行参数。
+同时暂停 heartbeat 后工作流丢失 lease，也避免断点事务持有实例行时后台 heartbeat 频繁等待数据库锁。
+heartbeat 遇到明确的 `CannotAcquireLockException` 时仅跳过本轮并等待下一周期；其他数据库异常仍正常暴露。
+该 Profile 不应进入生产运行参数。
 
 ---
 
@@ -669,6 +671,10 @@ Planner 输出 WorkflowPlanTask(dependsOn)
 → 任一任务完成后立即释放自己的后继
 → 失败依赖标记 SKIPPED_DEPENDENCY_FAILED，独立任务继续
 ```
+
+`WorkflowSubAgentRouter` 不直接拼接无限长度的上游回答：任务原始 query 优先保留，剩余预算用于已确认产品和
+`dependsOn` 结果；多个依赖公平分配空间并带截断标记。`AgentInvokeNode` 只重试可能恢复的调用异常，直接
+`IllegalArgumentException` 属于确定性输入错误，首次失败后立即记录终态，避免重复消耗线程和模型调用预算。
 
 ## 8.3 人工确认
 

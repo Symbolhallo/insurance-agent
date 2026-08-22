@@ -27,5 +27,6 @@ insurance:
         claim-lease: 4h
         # 人工确认允许跨多次本地调试继续恢复。
         waiting-confirm-lease: 7d
-        # 正常运行时仍续租；该周期必须短于 execution-lease 和 claim-lease。
-        heartbeat-interval: 5m
+        # 将首次及后续 heartbeat 推迟到3小时，避免断点事务持锁时后台续租等待同一数据库行；
+        # 该周期仍严格短于4小时 execution-lease 和 claim-lease。
+        heartbeat-interval: 3h

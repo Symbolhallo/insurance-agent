@@ -84,8 +84,10 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
                 "status", AgentTaskStatus.RUNNING.name()));
 
         Exception lastFailure = null;
+        int attempts = 0;
         int maxAttempts = context.task().maxRetries() + 1;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            attempts = attempt;
             try {
                 SubAgentExecutionResult response = subAgentRouter.invoke(context);
                 AgentTaskExecutionResult success = successfulResult(context, response, startedAt, attempt);
@@ -94,17 +96,30 @@ public class AgentInvokeNode implements AsyncNodeActionWithConfig {
             }
             catch (Exception ex) {
                 lastFailure = ex;
-                log.warn("[Workflow] node=agent-invoke action=retry taskId={} agentType={} attempt={} maxAttempts={}",
-                        context.task().taskId(), context.task().agentType(), attempt, maxAttempts, ex);
-                if (attempt < maxAttempts) {
-                    backoff(attempt);
+                boolean retryable = isRetryable(ex);
+                boolean willRetry = retryable && attempt < maxAttempts;
+                if (!willRetry) {
+                    log.warn("[Workflow] node=agent-invoke action=attempt-failed status=terminal "
+                                    + "taskId={} agentType={} attempt={} maxAttempts={} retryable={}",
+                            context.task().taskId(), context.task().agentType(), attempt, maxAttempts,
+                            retryable, ex);
+                    break;
                 }
+                log.warn("[Workflow] node=agent-invoke action=retry status=scheduled "
+                                + "taskId={} agentType={} attempt={} maxAttempts={} retryable=true",
+                        context.task().taskId(), context.task().agentType(), attempt, maxAttempts, ex);
+                backoff(attempt);
             }
         }
 
-        AgentTaskExecutionResult failed = failedResult(context, startedAt, maxAttempts, lastFailure);
+        AgentTaskExecutionResult failed = failedResult(context, startedAt, attempts, lastFailure);
         publishTerminal(context, failed);
         return failed;
+    }
+
+    /** 参数和白名单错误由相同输入确定产生，重复调用不会恢复；其他调用异常沿用既有重试策略。 */
+    private boolean isRetryable(Exception exception) {
+        return !(exception instanceof IllegalArgumentException);
     }
 
     private AgentTaskExecutionResult successfulResult(WorkflowAgentTaskContext context,
