@@ -86,6 +86,7 @@ Workflow 可以调用领域 Agent；领域 Agent 不应反向依赖主 Workflow�
 | `change.md` | 按阶段记录代码变化、验证结果和兼容性。 |
 | `docs/spring-ai-alibaba/` | Spring AI Alibaba 1.1.2.0 的项目级参考文档。 |
 | `docs/project-understanding-guide.md` | 本文，负责代码、目录和数据库导航。 |
+| `frontend/workflow-test` | React 18 + Vite 流式联调页面源码；构建后输出到 Spring Boot 静态资源目录。 |
 | `src/main/java` | 生产 Java 代码。 |
 | `src/main/resources` | 配置、Flyway、Skill 和静态测试页面。 |
 | `src/test/java` | 单元、装配、Graph、Checkpoint、SSE 和回归测试。 |
@@ -137,7 +138,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | 子目录 | 内容 |
 | --- | --- |
 | `config` | Spring AI `ChatMemory` 与 Repository Bean。 |
-| `controller` | 历史会话查询和模型摘要 API。 |
+| `controller` | 历史会话列表/快照/软删除和模型摘要 API。 |
 | `mapper` | OceanBase MyBatis SQL。 |
 | `model` | 表记录、查询视图、请求与响应 DTO。 |
 | `repository` | Spring AI `ChatMemoryRepository` 适配。 |
@@ -148,7 +149,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | 文件 | Bean/函数 | 作用 |
 | --- | --- | --- |
 | `ChatMemoryConfig` | `chatMemoryRepository()`、`chatMemory()` | local-db 下创建 MyBatis Repository 和 `MessageWindowChatMemory`。 |
-| `AgentMemoryController` | `getConversationSnapshot()`、`summarizeConversation()` | 查询会话聚合视图；调用模型生成会话摘要。 |
+| `AgentMemoryController` | `listConversations()`、`getConversationSnapshot()`、`deleteConversation()`、`summarizeConversation()` | 查询历史列表和会话聚合视图、软删除空闲会话、调用模型生成摘要。 |
 | `MyBatisChatMemoryRepository` | `findConversationIds()`、`findByConversationId()`、`saveAll()`、`deleteByConversationId()` | 实现 Spring AI `ChatMemoryRepository`；处理 Message 与数据库记录/metadata JSON 转换。 |
 
 ### Mapper 文件
@@ -161,6 +162,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `AgentInvocationMapper` | `insert()`；内部 `AgentInvocationWriteRecord.from()` | `ai_agent_invocation` 调用审计。 |
 | `ConversationSummaryMapper` | `insert()` | `ai_conversation_summary`。 |
 | `AgentMemoryQueryMapper` | `findConversation()`、`findChatMessages()`、`findLongTermMemories()`、`findLongTermMemoriesForSummary()`、`findSummaries()`、`findInvocations()` | 组合查询会话完整快照。 |
+| `ConversationManagementMapper` | `findActiveConversations()`、`archiveConversation()`、`countActiveUsage()` | 列出未删除会话；通过条件 UPDATE 软删除，并拒绝仍有活跃 Workflow 或有效 conversation lease 的会话。 |
 
 ### Service 文件
 
@@ -176,6 +178,8 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `NoOpLongTermMemoryService` | `save()` 空实现 | 非 local-db 兼容。 |
 | `AgentMemoryQueryService` / `MyBatisAgentMemoryQueryService` | `getConversationSnapshot()` | 聚合窗口、长期记忆、摘要和调用记录。 |
 | `NoOpAgentMemoryQueryService` | 返回空快照 | 非 local-db 查询兼容。 |
+| `ConversationManagementService` / `MyBatisConversationManagementService` | `listConversations()`、`archiveConversation()` | 历史列表与软删除边界；删除不清理 Memory、调用流水或 Workflow 审计。 |
+| `NoOpConversationManagementService` | 返回空列表和幂等删除结果 | 非 local-db 启动兼容。 |
 | `ConversationSummaryService` | `summarize()` | 会话摘要端口。 |
 | `ModelConversationSummaryService` | `summarize()`、`buildUserPrompt()`、`normalizeMaxMemories()` | 读取长期记忆，调用 ChatModel 总结并写摘要表。 |
 | `NoOpConversationSummaryService` | 返回禁用结果 | 非 local-db 兼容。 |
@@ -196,6 +200,7 @@ AI 全局基础设施配置，不放具体业务 Tool。
 | `ConversationSummaryRecord` / `ConversationSummaryView` | 摘要写入记录与查询视图。 |
 | `ConversationSummaryRequest` / `ConversationSummaryResponse` | 摘要 API 请求与响应。 |
 | `ConversationMemorySnapshot` | 会话、窗口消息、长期记忆、摘要、调用流水的聚合快照。 |
+| `ConversationListItem` | 历史会话编号、标题、Agent、长期消息数量和最近更新时间。 |
 
 ## 4.5 `com.xxx.insurance.ai.retrieval`
 
@@ -459,11 +464,19 @@ Model 文件：
 | `skills/knowledge-qa/...` | 保险业务知识问答 Skill。 |
 | `skills/policy-query/...` | 客户保单查询 Skill。 |
 | `skills/asset-query/...` | 客户资产查询 Skill。 |
-| `static/workflow-test/index.html` | 工作流流式测试页面。 |
-| `static/workflow-test/app.js` | fetch + ReadableStream SSE 解析、Last-Event-ID、Human Confirm 和 Token 拼接。 |
-| `static/workflow-test/styles.css` | 测试页面响应式样式。 |
+| `static/workflow-test/index.html` | React 工作流流式测试页面入口，由 Vite 构建生成。 |
+| `static/workflow-test/assets/app.js` | React 生产构建产物；负责 fetch + ReadableStream SSE 解析、Last-Event-ID、Human Confirm、Token 拼接和自动滚动状态。 |
+| `static/workflow-test/assets/styles.css` | React 页面生产样式产物，包含桌面三栏和移动端单列布局。 |
 
-### 5.1 配置文件速查
+### 5.1 React 流式联调页面
+
+源码位于 `frontend/workflow-test/src`。`App.jsx` 管理历史会话列表、按需快照查询、软删除确认、工作流请求、SSE 帧消费、产品确认续流和页面状态；`styles.css` 管理左侧会话栏、稳定高度的结果面板及响应式布局。选择历史会话后，页面优先按发生时间展示最多200条永久长期记忆，长期记忆为空时回退到 ChatMemory 窗口；新建对话只生成新 conversationId，首次成功问答完成后由既有 Memory 事务写入并进入历史列表。删除只把 `ai_conversation.status` 更新为 `DELETED`，不会物理删除永久历史或审计数据。
+
+页面维护执行阶段和对话输出两个独立的自动跟随状态：内容新增时默认滚到底部；用户通过鼠标滚轮、指针按下或触摸手势干预后暂停，避免新 Token 抢走阅读位置；用户滚回底部或点击右上角恢复按钮后继续自动跟随。
+
+执行 `cd frontend/workflow-test && npm ci && npm run build` 会清空并重新生成 `src/main/resources/static/workflow-test`。后端 Gradle 构建不强制依赖 Node.js，仓库保留构建产物，确保只启动 Spring Boot 也能访问测试页。
+
+### 5.2 配置文件速查
 
 `application.yml` 是所有 profile 共用的基础配置。默认关闭 JDBC 与 Flyway，但仍装配
 ChatModel、ReactAgent、Skill 和 Tool，适合不依赖数据库的单 Agent 验证。模型连接通过
@@ -484,7 +497,7 @@ ChatModel、ReactAgent、Skill 和 Tool，适合不依赖数据库的单 Agent �
 两份 YAML 已对每个属性添加就地注释，配置值本身未因此改变。SSE 的10分钟事件保留期与
 Checkpoint 的7天/24小时保留期是两套独立生命周期，不能混用。
 
-### 5.2 IDEA 断点调试 Profile
+### 5.3 IDEA 断点调试 Profile
 
 IDEA 调试 Main Workflow 时使用 `local-debug`，它是 `application.yml` 中定义的 Profile Group：
 
@@ -522,7 +535,7 @@ heartbeat 遇到明确的 `CannotAcquireLockException` 时仅跳过本轮并等�
 | `ai/workflow/job/WorkflowPersistenceCleanupJobTests` | Checkpoint/SSE 定时清理及失败隔离。 |
 | `ai/workflow/job/WorkflowLeaseRecoveryJobTests` | 当前 owner heartbeat 续租参数、瞬时状态恢复和过期 conversation 锁回收。 |
 | `ai/workflow/mapper/WorkflowExecutionMapperLeaseSqlTests` | 锁回收、联合续租、恢复 claim 和确认 claim 的数据库 CAS 条件。 |
-| `ai/workflow/WorkflowStreamTestPageTests` | 静态流式测试页面资源和安全约束。 |
+| `ai/workflow/WorkflowStreamTestPageTests` | React 构建产物、SSE 协议、自动跟随交互和源码安全约束。 |
 | `product/knowledge/policy/asset/service/*Tests` | Mock 业务数据、过滤和客户边界。 |
 
 ---
@@ -742,6 +755,8 @@ API Key 不能写入代码、YAML、数据库事件或日志。
 | POST | `/api/v1/knowledge-qa-agent/chat` | 知识问答单 Agent。 |
 | POST | `/api/v1/products/recall` | Mock 产品候选召回。 |
 | GET | `/api/v1/ai/memory/conversations/{conversationId}` | 会话记忆快照。 |
+| GET | `/api/v1/ai/memory/conversations?limit=50` | 最近历史会话列表。 |
+| DELETE | `/api/v1/ai/memory/conversations/{conversationId}` | 软删除空闲会话；保留 Memory 和审计。 |
 | POST | `/api/v1/ai/memory/conversations/{conversationId}/summaries` | 生成会话摘要。 |
 | POST | `/api/v1/workflows/main/runs` | 同步主工作流。 |
 | POST | `/api/v1/workflows/main/runs/{id}/product-confirmations` | 同步确认并恢复。 |

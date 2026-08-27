@@ -1,5 +1,24 @@
 # 工程变更记录
 
+## 2026-08-27：React 测试台增加历史会话管理
+
+- 左侧新增历史会话栏，按 OceanBase `ai_conversation.updated_at` 倒序展示标题、长期消息数量和更新时间；选中后按需读取最多200条永久长期记忆，并按时间正序显示用户/助手消息。
+- 新建对话在浏览器生成新的 conversationId，不提前创建空数据库记录；首次成功问答仍由既有 Workflow Finalization/Memory 事务写入，完成后自动刷新历史列表和持久化消息。
+- 新增会话列表和软删除 API。删除通过数据库条件 UPDATE 将 `ai_conversation.status` 标记为 `DELETED`，聊天、长期记忆、调用流水、Checkpoint 和 Workflow 审计不做物理删除。
+- 运行中、恢复中、等待确认或仍有有效 conversation lease 的会话不能删除并返回409；不存在或已经删除的会话保持幂等。
+- 删除确认使用页面内对话框，明确提示审计保留语义；桌面使用固定左栏，移动端将会话栏收敛为顶部可滚动区域。
+- 保留当前 SSE、Last-Event-ID、Human Confirm 和自动跟随行为；历史消息与本轮模型输出共享同一阅读区域。
+- React 生产构建成功；浏览器完成桌面/390px移动端、历史切换、新建及删除确认测试；`./gradlew test` 全量174项通过，0失败、0错误、0跳过。
+
+## 2026-08-22：流式测试页面迁移 React 并增加可控自动跟随
+
+- 将 `/workflow-test/index.html` 从原生 DOM 脚本迁移为 React 18 + Vite 源码工程，继续由 Spring Boot 静态资源目录直接提供生产构建产物，不改变部署入口或后端 API。
+- 完整保留 Main Workflow 启动、fetch ReadableStream SSE 解析、`streamId + chunkIndex` 去重、产品候选确认、`Last-Event-ID` 续流和最终答案展示。
+- 执行阶段与模型输出默认自动跟随最新内容；内容溢出后，鼠标滚轮、指针或触摸干预会暂停自动滚动，用户滚回底部或点击图标按钮后恢复，避免持续 Token 输出打断历史内容阅读。
+- 页面输入上限同步后端调整为2000字符，使用 Lucide 图标和桌面三栏/移动端单列响应式布局；生产运行不依赖 CDN。
+- 增加 React 源码、固定依赖版本、静态产物、SSE 协议、自动跟随事件和危险 DOM API 的回归检查；浏览器实测默认跟随距离为0，手动干预后保持阅读位置，恢复后重新回到底部。
+- `npm audit --audit-level=moderate` 为0项漏洞；`./gradlew test` 全量168项测试通过，0失败、0错误、0跳过。
+
 ## 2026-08-22：动态 DAG 下游输入预算与确定性失败重试优化
 
 - 修复 Planner 原始任务问题不超过2000字符，但 `WorkflowSubAgentRouter` 追加多个上游完整答案后仍可能超过领域 Agent 输入上限的问题。

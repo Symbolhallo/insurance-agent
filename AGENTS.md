@@ -35,6 +35,7 @@ Current phase:
 - Phase2 Memory should follow Spring AI `ChatMemory` / `ChatMemoryRepository`; `AgentInvocation` is audit/observation, not the primary memory table.
 - ProductAnalysisAgent uses optional ChatMemory: default profile is stateless, local-db profile enables conversation history through `ReactAgent.call(List<Message>)`.
 - local-db profile writes successful ProductAnalysisAgent requests to both `ai_chat_memory` and `ai_long_term_memory`; long-term memory is append-only history.
+- The React workflow test page lists active `ai_conversation` records, loads persisted long-term messages on demand, and soft-deletes idle conversations by setting status `DELETED`; permanent Memory, invocation, and Workflow audit data must not be physically deleted by this UI operation.
 - `ai_chat_memory` and `ai_long_term_memory` must be written through `AgentMemoryService.saveSuccessfulExchange(...)` in one transaction.
 - Phase2-Task11 Spring AI Alibaba Main Graph v1 skeleton is complete.
 - Phase2-Task12 merges request loading, memory loading, and query understanding into `ContextAlignmentNode`.

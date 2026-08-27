@@ -268,7 +268,17 @@ Workflow 调用子智能体时，模型使用 Planner 拆分后的任务指令�
 
 需要产品人工确认时，初始 SSE 在 `human_confirm` 后结束。前端提交选择时调用 `POST /api/v1/workflows/main/runs/{workflowInstanceId}/product-confirmations/stream`，并建议把最后处理的事件编号放入 `Last-Event-ID` 请求头；服务会先补发遗漏事件并建立订阅，再从 OceanBase Checkpoint 恢复，后续模型和 Graph 事件继续实时返回。
 
-本地流式联调页面位于 `/workflow-test/index.html`，可直接发起 Main Workflow、查看各阶段模型增量、选择召回候选并继续人工确认后的 SSE。
+本地流式联调页面位于 `/workflow-test/index.html`，使用 React 18 + Vite 实现，可直接发起 Main Workflow、查看各阶段模型增量、选择召回候选并继续人工确认后的 SSE。左侧历史会话栏通过 OceanBase 会话主表列出最近对话，选择后按需加载永久长期记忆；可新建会话，也可把空闲会话软删除并从列表隐藏，消息、调用流水和 Workflow 审计不会被物理删除。执行阶段和对话输出默认自动跟随最新内容；用户使用鼠标滚轮、指针或触摸手势干预后会暂停跟随，滚回底部或点击“恢复自动跟随”按钮即可恢复。
+
+前端源码位于 `frontend/workflow-test`，构建产物由 Spring Boot 从 `src/main/resources/static/workflow-test` 提供：
+
+```bash
+cd frontend/workflow-test
+npm ci
+npm run build
+```
+
+构建产物提交到仓库，因此普通后端开发无需单独启动 Vite；修改 React 源码后需要重新执行上述构建命令。
 
 启用本地数据库：
 
