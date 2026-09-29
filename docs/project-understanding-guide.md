@@ -528,7 +528,9 @@ Model 文件：
 “对话结果”聚焦领域 Agent 和总结输出。人工确认面板仅在 WAITING_CONFIRM 时显示；最终审核答案单独保留。
 `workbench.css` 覆盖基础页面样式并适配手机/平板。Vite 开发服务器将 `/api` 代理到本机8080。
 
-源码位于 `frontend/workflow-test/src`。`App.jsx` 管理历史会话列表、按需快照查询、软删除确认、工作流请求、SSE 帧消费、产品确认续流和页面状态；`WorkflowProgress.jsx` 将已收到的 Stage 与 taskId 事实投影成 Graph/DAG 进度；`styles.css` 管理会话优先布局和响应式抽屉。中央区域只承载历史消息、本轮问题、实时模型输出、人工确认和最终答案，Composer 固定在独立底部网格行，因此不会被长输出挤出首屏。左侧负责历史会话，右侧“运行详情”负责 Graph 节点、动态 DAG 任务和原始事件；1180px 以下两者均变为遮罩抽屉。选择历史会话后，页面优先按发生时间展示最多200条永久长期记忆，长期记忆为空时回退到 ChatMemory 窗口；新建对话只生成新 conversationId，首次成功问答完成后由既有 Memory 事务写入并进入历史列表。删除只把 `ai_conversation.status` 更新为 `DELETED`，不会物理删除永久历史或审计数据。
+源码位于 `frontend/workflow-test/src`。`App.jsx` 管理历史会话列表、按需快照查询、单条/批量软删除确认、工作流请求、SSE 帧消费、产品确认续流和页面状态；`WorkflowProgress.jsx` 将已收到的 Stage 与 taskId 事实投影成 Graph/DAG 进度；`styles.css` 管理会话优先布局和响应式抽屉。中央区域只承载历史消息、本轮问题、实时模型输出、人工确认和最终答案，Composer 固定在独立底部网格行，因此不会被长输出挤出首屏。左侧负责历史会话，右侧“运行详情”负责 Graph 节点、动态 DAG 任务和原始事件；1180px 以下两者均变为遮罩抽屉。选择历史会话后，页面优先按发生时间展示最多200条永久长期记忆，长期记忆为空时回退到 ChatMemory 窗口；新建对话只生成新 conversationId，首次成功问答完成后由既有 Memory 事务写入并进入历史列表。删除只把 `ai_conversation.status` 更新为 `DELETED`，不会物理删除永久历史或审计数据。
+
+历史侧栏的“管理”模式支持多选和全选。前端不会使用一条宽泛的批量数据库更新，而是顺序调用既有单会话删除接口，确保每个 conversationId 都独立经过可信身份、所有权、活跃 Workflow 和有效 conversation lease 校验。批量操作允许部分成功：成功项从列表移除，失败项继续保持选中并提示数量；删除当前会话后自动生成新的 conversationId。工作流处于 `RUNNING` 或 `WAITING_CONFIRM` 时，管理入口和删除动作均保持禁用。
 
 产品召回需要人工确认时，候选不会切换到独立页面，而是作为助手消息内的确认卡片展示；确认按钮仍调用既有 `/product-confirmations/stream`，并带 Last-Event-ID 从当前 Checkpoint 继续执行。前置节点和子智能体 Token 以流式消息持续追加，节点状态同时进入运行详情。对话与流程区域都默认跟随最新内容；鼠标滚轮、触摸或指针干预后暂停自动跟随，用户回到底部或点击恢复按钮后再继续。
 

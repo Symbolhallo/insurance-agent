@@ -10,6 +10,7 @@ import {
     CircleCheck,
     GitBranch,
     LoaderCircle,
+    ListChecks,
     Menu,
     MessageSquare,
     PanelRightClose,
@@ -197,8 +198,10 @@ function App() {
     const [historyMessages, setHistoryMessages] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
     const [conversationError, setConversationError] = useState("");
-    const [pendingDeleteConversation, setPendingDeleteConversation] = useState(null);
+    const [pendingDeleteConversations, setPendingDeleteConversations] = useState([]);
     const [deletingConversation, setDeletingConversation] = useState(false);
+    const [historyManageMode, setHistoryManageMode] = useState(false);
+    const [selectedConversationIds, setSelectedConversationIds] = useState([]);
     const [historyOpen, setHistoryOpen] = useState(false);
     const [activityOpen, setActivityOpen] = useState(initiallyRunning);
     const [submittedQuestion, setSubmittedQuestion] = useState("");
@@ -292,6 +295,11 @@ function App() {
         void loadConversations();
     }, [loadConversations]);
 
+    useEffect(() => {
+        const availableIds = new Set(conversations.map(conversation => conversation.conversationId));
+        setSelectedConversationIds(current => current.filter(id => availableIds.has(id)));
+    }, [conversations]);
+
     const resetRun = useCallback(() => {
         abortCurrentRequest();
         runningRef.current = false;
@@ -322,7 +330,9 @@ function App() {
         setQuestion("");
         setRequestMeta("等待请求");
         setConnection({state: "idle", message: "新对话"});
-        setPendingDeleteConversation(null);
+        setPendingDeleteConversations([]);
+        setHistoryManageMode(false);
+        setSelectedConversationIds([]);
     }, [resetRun]);
 
     const selectConversation = useCallback(selectedConversationId => {
@@ -339,34 +349,75 @@ function App() {
     const requestDeleteConversation = useCallback((event, selectedConversation) => {
         event.stopPropagation();
         if (runningRef.current || waitingForConfirmationRef.current) return;
-        setPendingDeleteConversation(selectedConversation);
+        setPendingDeleteConversations([selectedConversation]);
     }, []);
 
-    const deleteConversation = useCallback(async () => {
-        const selectedConversationId = pendingDeleteConversation?.conversationId;
-        if (!selectedConversationId || runningRef.current
+    const requestDeleteSelectedConversations = useCallback(() => {
+        if (runningRef.current || waitingForConfirmationRef.current
+            || selectedConversationIds.length === 0) return;
+        const selectedIds = new Set(selectedConversationIds);
+        setPendingDeleteConversations(conversations.filter(
+            conversation => selectedIds.has(conversation.conversationId)));
+    }, [conversations, selectedConversationIds]);
+
+    const toggleHistoryManageMode = useCallback(() => {
+        if (runningRef.current || waitingForConfirmationRef.current || deletingConversation) return;
+        setHistoryManageMode(current => !current);
+        setSelectedConversationIds([]);
+    }, [deletingConversation]);
+
+    const toggleConversationSelection = useCallback(selectedConversationId => {
+        setSelectedConversationIds(current => current.includes(selectedConversationId)
+            ? current.filter(id => id !== selectedConversationId)
+            : [...current, selectedConversationId]);
+    }, []);
+
+    const toggleAllConversations = useCallback(() => {
+        setSelectedConversationIds(current => current.length === conversations.length
+            ? []
+            : conversations.map(conversation => conversation.conversationId));
+    }, [conversations]);
+
+    const deleteConversations = useCallback(async () => {
+        if (pendingDeleteConversations.length === 0 || runningRef.current
             || waitingForConfirmationRef.current || deletingConversation) return;
         setDeletingConversation(true);
-        try {
-            const response = await fetch(
-                `${MEMORY_API_BASE}/conversations/${encodeURIComponent(selectedConversationId)}`,
-                {method: "DELETE", headers: {"Accept": "application/json"}}
-            );
-            await readApiData(response);
-            setConversations(current => current.filter(
-                conversation => conversation.conversationId !== selectedConversationId));
-            if (selectedConversationId === conversationId) {
-                createNewConversation();
+        const deletedIds = [];
+        const failedIds = [];
+        for (const target of pendingDeleteConversations) {
+            try {
+                const response = await fetch(
+                    `${MEMORY_API_BASE}/conversations/${encodeURIComponent(target.conversationId)}`,
+                    {method: "DELETE", headers: {"Accept": "application/json"}}
+                );
+                await readApiData(response);
+                deletedIds.push(target.conversationId);
             }
-            setPendingDeleteConversation(null);
+            catch {
+                failedIds.push(target.conversationId);
+            }
         }
-        catch (error) {
-            setConversationError(error.message || "会话删除失败");
+
+        const deletedIdSet = new Set(deletedIds);
+        setConversations(current => current.filter(
+            conversation => !deletedIdSet.has(conversation.conversationId)));
+        setPendingDeleteConversations([]);
+        setDeletingConversation(false);
+
+        if (deletedIdSet.has(conversationId)) {
+            createNewConversation();
         }
-        finally {
-            setDeletingConversation(false);
+        if (failedIds.length > 0) {
+            setSelectedConversationIds(failedIds);
+            setHistoryManageMode(true);
+            setConversationError(`${deletedIds.length} 个会话已删除，${failedIds.length} 个删除失败或仍在运行`);
         }
-    }, [conversationId, createNewConversation, deletingConversation, pendingDeleteConversation]);
+        else {
+            setSelectedConversationIds([]);
+            setConversationError("");
+            setHistoryManageMode(false);
+        }
+    }, [conversationId, createNewConversation, deletingConversation, pendingDeleteConversations]);
 
     const addStage = useCallback(event => {
         const status = event.data?.status || event.type.toUpperCase();
@@ -670,9 +721,16 @@ function App() {
                 activeConversationId={conversationId}
                 error={conversationError}
                 disabled={workflowLocked}
+                manageMode={historyManageMode}
+                selectedConversationIds={selectedConversationIds}
+                deleting={deletingConversation}
                 onCreate={() => { createNewConversation(); setHistoryOpen(false); }}
                 onSelect={id => { selectConversation(id); setHistoryOpen(false); }}
                 onDelete={requestDeleteConversation}
+                onToggleManage={toggleHistoryManageMode}
+                onToggleSelection={toggleConversationSelection}
+                onToggleAll={toggleAllConversations}
+                onDeleteSelected={requestDeleteSelectedConversations}
             />
             <button className="sidebar-scrim" type="button" aria-label="关闭历史会话"
                     onClick={() => setHistoryOpen(false)}/>
@@ -770,12 +828,12 @@ function App() {
             </aside>
             <button className="activity-scrim" type="button" aria-label="关闭运行详情"
                     onClick={() => setActivityOpen(false)}/>
-            {pendingDeleteConversation && (
+            {pendingDeleteConversations.length > 0 && (
                 <DeleteConversationDialog
-                    conversation={pendingDeleteConversation}
+                    conversations={pendingDeleteConversations}
                     deleting={deletingConversation}
-                    onCancel={() => setPendingDeleteConversation(null)}
-                    onConfirm={deleteConversation}
+                    onCancel={() => setPendingDeleteConversations([])}
+                    onConfirm={deleteConversations}
                 />
             )}
         </div>
@@ -783,14 +841,19 @@ function App() {
 }
 
 function ConversationSidebar({conversations, activeConversationId, error, disabled,
-                                 onCreate, onSelect, onDelete}) {
+                                 manageMode, selectedConversationIds, deleting,
+                                 onCreate, onSelect, onDelete, onToggleManage,
+                                 onToggleSelection, onToggleAll, onDeleteSelected}) {
+    const allSelected = conversations.length > 0
+        && selectedConversationIds.length === conversations.length;
     return (
         <aside className="conversation-sidebar" aria-label="历史会话">
             <div className="sidebar-brand">
                 <span><ShieldCheck size={20}/></span>
                 <div><strong>Insurance AI</strong><small>智能业务工作台</small></div>
             </div>
-            <button className="new-chat-button" type="button" onClick={onCreate} disabled={disabled}>
+            <button className="new-chat-button" type="button" onClick={onCreate}
+                    disabled={disabled || manageMode}>
                 <Plus size={17}/><span>新建对话</span>
             </button>
             <div className="conversation-sidebar-header">
@@ -798,25 +861,55 @@ function ConversationSidebar({conversations, activeConversationId, error, disabl
                     <h2>最近对话</h2>
                     <span>{conversations.length}</span>
                 </div>
+                <button className="sidebar-manage-button" type="button" onClick={onToggleManage}
+                        disabled={disabled || deleting || conversations.length === 0}>
+                    {manageMode ? <X size={14}/> : <ListChecks size={14}/>}
+                    <span>{manageMode ? "取消" : "管理"}</span>
+                </button>
             </div>
+            {manageMode && (
+                <div className="batch-toolbar">
+                    <label>
+                        <input type="checkbox" checked={allSelected} onChange={onToggleAll}/>
+                        <span>{allSelected ? "取消全选" : "全选"}</span>
+                    </label>
+                    <span>已选 {selectedConversationIds.length} 项</span>
+                    <button type="button" onClick={onDeleteSelected}
+                            disabled={selectedConversationIds.length === 0 || deleting}>
+                        <Trash2 size={14}/><span>删除</span>
+                    </button>
+                </div>
+            )}
             {error && <div className="conversation-error" role="status">{error}</div>}
             <nav className="conversation-list" aria-label="会话列表">
                 {conversations.map(conversation => (
                     <div className="conversation-row" key={conversation.conversationId}
-                         data-active={conversation.conversationId === activeConversationId}>
+                         data-active={conversation.conversationId === activeConversationId}
+                         data-selected={selectedConversationIds.includes(conversation.conversationId)}
+                         data-manage={manageMode}>
+                        {manageMode && (
+                            <label className="conversation-check">
+                                <input type="checkbox"
+                                       checked={selectedConversationIds.includes(conversation.conversationId)}
+                                       onChange={() => onToggleSelection(conversation.conversationId)}
+                                       aria-label={`选择会话：${conversation.title || conversation.conversationId}`}/>
+                            </label>
+                        )}
                         <button className="conversation-select" type="button" disabled={disabled}
-                                onClick={() => onSelect(conversation.conversationId)}>
+                                onClick={() => manageMode
+                                    ? onToggleSelection(conversation.conversationId)
+                                    : onSelect(conversation.conversationId)}>
                             <MessageSquare size={16}/>
                             <span className="conversation-copy">
                                 <strong>{conversation.title || "保险智能体会话"}</strong>
                                 <span>{conversation.messageCount} 条消息 · {formatDateTime(conversation.updatedAt)}</span>
                             </span>
                         </button>
-                        <button className="conversation-delete" type="button" disabled={disabled}
+                        {!manageMode && <button className="conversation-delete" type="button" disabled={disabled}
                                 onClick={event => onDelete(event, conversation)}
                                 title="删除会话" aria-label={`删除会话：${conversation.title || conversation.conversationId}`}>
                             <Trash2 size={15}/>
-                        </button>
+                        </button>}
                     </div>
                 ))}
                 {conversations.length === 0 && (
@@ -913,7 +1006,9 @@ function ProductConfirmation({candidates, selectedProductCodes, running, onToggl
     );
 }
 
-function DeleteConversationDialog({conversation, deleting, onCancel, onConfirm}) {
+function DeleteConversationDialog({conversations, deleting, onCancel, onConfirm}) {
+    const batchDelete = conversations.length > 1;
+    const firstConversation = conversations[0];
     return (
         <div className="dialog-backdrop" role="presentation" onMouseDown={event => {
             if (event.target === event.currentTarget) onCancel();
@@ -922,12 +1017,17 @@ function DeleteConversationDialog({conversation, deleting, onCancel, onConfirm})
                      aria-labelledby="deleteConversationTitle">
                 <div className="dialog-icon"><Trash2 size={19}/></div>
                 <div>
-                    <h2 id="deleteConversationTitle">删除历史会话</h2>
-                    <p>“{conversation.title || "保险智能体会话"}”将从会话列表隐藏，历史消息和审计数据仍会保留。</p>
+                    <h2 id="deleteConversationTitle">{batchDelete ? "批量删除历史会话" : "删除历史会话"}</h2>
+                    <p>{batchDelete
+                        ? `选中的 ${conversations.length} 个会话将从列表隐藏。每个会话仍会独立校验运行状态。`
+                        : `“${firstConversation.title || "保险智能体会话"}”将从会话列表隐藏。`}
+                        历史消息和审计数据仍会保留。</p>
                 </div>
                 <div className="dialog-actions">
                     <button className="secondary-button" type="button" onClick={onCancel} disabled={deleting}>取消</button>
-                    <button className="danger-button" type="button" onClick={onConfirm} disabled={deleting}>删除</button>
+                    <button className="danger-button" type="button" onClick={onConfirm} disabled={deleting}>
+                        {deleting ? "正在删除" : batchDelete ? `删除 ${conversations.length} 个会话` : "删除"}
+                    </button>
                 </div>
             </section>
         </div>
