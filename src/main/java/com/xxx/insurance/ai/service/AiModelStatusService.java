@@ -1,6 +1,6 @@
 package com.xxx.insurance.ai.service;
 
-import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
+import io.agentscope.core.skill.repository.AgentSkillRepository;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.ai.model.AiModelStatus;
@@ -26,13 +26,14 @@ public class AiModelStatusService {
 
     private final AiModelProperties aiModelProperties;
 
-    private final SkillRegistry productAnalysisSkillRegistry;
+    private final AgentSkillRepository productAnalysisSkillRepository;
 
     public AiModelStatusService(
             AiModelProperties aiModelProperties,
-            @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILL_REGISTRY) SkillRegistry productAnalysisSkillRegistry) {
+            @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILL_REPOSITORY)
+            AgentSkillRepository productAnalysisSkillRepository) {
         this.aiModelProperties = aiModelProperties;
-        this.productAnalysisSkillRegistry = productAnalysisSkillRegistry;
+        this.productAnalysisSkillRepository = productAnalysisSkillRepository;
     }
 
     public AiModelStatus currentStatus() {
@@ -40,16 +41,13 @@ public class AiModelStatusService {
         return new AiModelStatus(
                 PROVIDER,
                 aiModelProperties.getBaseUrl(),
-                aiModelProperties.getChat().getOptions().getModel(),
-                aiModelProperties.getChat().getOptions().getTemperature(),
+                aiModelProperties.getModelName(),
+                aiModelProperties.getTemperature(),
                 StringUtils.hasText(apiKey),
                 maskApiKey(apiKey),
                 ProductAnalysisAgent.AGENT_NAME,
-                productAnalysisSkillRegistry.size(),
-                productAnalysisSkillRegistry.listAll().stream()
-                        .map(skill -> skill.getName())
-                        .sorted()
-                        .toList(),
+                productAnalysisSkillRepository.getAllSkillNames().size(),
+                productAnalysisSkillRepository.getAllSkillNames(),
                 List.of(ProductAnalysisTool.TOOL_NAME));
     }
 

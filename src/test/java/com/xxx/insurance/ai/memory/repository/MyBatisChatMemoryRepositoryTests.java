@@ -3,10 +3,10 @@ package com.xxx.insurance.ai.memory.repository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.memory.mapper.ChatMemoryMapper;
 import com.xxx.insurance.ai.memory.model.ChatMemoryMessageRecord;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.UserMessage;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,22 +23,22 @@ class MyBatisChatMemoryRepositoryTests {
 
         repository.saveAll("conversation-001", List.of(
                 UserMessage.builder()
-                        .text("first question")
+                        .textContent("first question")
                         .metadata(Map.of("source", "test"))
                         .build(),
                 AssistantMessage.builder()
-                        .content("first answer")
+                        .textContent("first answer")
                         .build()));
         repository.saveAll("conversation-001", List.of(
                 UserMessage.builder()
-                        .text("second question")
+                        .textContent("second question")
                         .build()));
 
-        List<Message> messages = repository.findByConversationId("conversation-001");
+        List<Msg> messages = repository.findByConversationId("conversation-001");
 
         assertThat(messages).hasSize(1);
         assertThat(messages.getFirst()).isInstanceOf(UserMessage.class);
-        assertThat(messages.getFirst().getText()).isEqualTo("second question");
+        assertThat(messages.getFirst().getTextContent()).isEqualTo("second question");
         assertThat(mapper.records)
                 .extracting(ChatMemoryMessageRecord::messageOrder)
                 .containsExactly(0);

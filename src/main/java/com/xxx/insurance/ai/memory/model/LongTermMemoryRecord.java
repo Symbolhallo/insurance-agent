@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.memory.model;
 
-import org.springframework.ai.chat.messages.MessageType;
+import io.agentscope.core.message.MsgRole;
+import com.xxx.insurance.common.security.RequestIdentity;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -20,6 +21,7 @@ import java.time.Instant;
  * @param importanceScore 重要性评分
  * @param metadataJson 扩展元数据 JSON
  * @param occurredAt 业务事件发生时间
+ * @param identity 记忆所属租户、用户、客户和操作员
  */
 public record LongTermMemoryRecord(
         String memoryId,
@@ -27,11 +29,12 @@ public record LongTermMemoryRecord(
         String invocationId,
         String agentName,
         String memoryType,
-        MessageType role,
+        MsgRole role,
         String content,
         String summary,
         String tagsJson,
         BigDecimal importanceScore,
         String metadataJson,
-        Instant occurredAt) {
+        Instant occurredAt,
+        RequestIdentity identity) {
 }

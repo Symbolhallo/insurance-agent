@@ -2,7 +2,7 @@ package com.xxx.insurance.ai.memory.service;
 
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
-import org.springframework.ai.chat.messages.Message;
+import io.agentscope.core.message.Msg;
 
 import java.util.List;
 
@@ -17,7 +17,7 @@ public interface AgentMemoryService {
     boolean isEnabled();
 
     /** 获取指定会话的窗口消息，供单 Agent 模型调用拼装上下文。 */
-    List<Message> getHistory(String conversationId);
+    List<Msg> getHistory(String conversationId);
 
     /** 在一个事务中保存用户/助手消息、长期记忆和成功调用审计。 */
     void saveSuccessfulExchange(AgentMemoryExchange exchange, AgentInvocationRecord invocationRecord);

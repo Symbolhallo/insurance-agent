@@ -18,6 +18,7 @@ public interface AgentInvocationMapper {
             insert into ai_agent_invocation (
                 invocation_id,
                 conversation_id,
+                tenant_id,
                 agent_name,
                 trace_id,
                 workflow_instance_id,
@@ -40,6 +41,7 @@ public interface AgentInvocationMapper {
             ) values (
                 #{invocationId},
                 #{conversationId},
+                #{tenantId},
                 #{agentName},
                 #{traceId},
                 #{workflowInstanceId},
@@ -66,6 +68,7 @@ public interface AgentInvocationMapper {
     record AgentInvocationWriteRecord(
             String invocationId,
             String conversationId,
+            String tenantId,
             String agentName,
             String traceId,
             String workflowInstanceId,
@@ -93,6 +96,7 @@ public interface AgentInvocationMapper {
             return new AgentInvocationWriteRecord(
                     record.invocationId(),
                     record.conversationId(),
+                    record.tenantId(),
                     record.agentName(),
                     record.traceId(),
                     record.workflowInstanceId(),

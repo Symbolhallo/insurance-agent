@@ -44,7 +44,7 @@ public class PlannerNode implements NodeAction {
         return Map.of(MainWorkflowStateKeys.WORKFLOW_PLAN, plan);
     }
 
-    /** 仅在 SSE 运行中创建 Planner ReactAgent 的 Token 发布上下文。 */
+    /** 仅在 SSE 运行中创建 Planner HarnessAgent 的 Token 发布上下文。 */
     private AgentTokenStreamContext streamContext(OverAllState state, AlignedWorkflowContext context) {
         boolean enabled = state.value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class).orElse(false);
         if (!enabled) {

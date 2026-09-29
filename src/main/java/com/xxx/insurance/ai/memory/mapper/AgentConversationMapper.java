@@ -11,12 +11,13 @@ import org.apache.ibatis.annotations.Mapper;
 public interface AgentConversationMapper {
 
     /**
-     * 幂等创建或激活会话主记录。重复 conversationId 会刷新身份、Agent 和更新时间，但保留已有标题，
-     * 防止后续调用用自动标题覆盖人工维护结果。
+     * 幂等创建或激活会话主记录。重复 conversationId 只刷新 Agent、状态和更新时间，不覆盖首次
+     * 占用时确定的租户/用户/客户/操作员；同时保留已有标题，防止自动标题覆盖人工维护结果。
      */
     @Insert("""
             insert into ai_conversation (
                 conversation_id,
+                tenant_id,
                 user_id,
                 customer_id,
                 operator_id,
@@ -28,6 +29,7 @@ public interface AgentConversationMapper {
                 updated_at
             ) values (
                 #{conversationId},
+                #{tenantId},
                 #{userId},
                 #{customerId},
                 #{operatorId},
@@ -39,9 +41,6 @@ public interface AgentConversationMapper {
                 #{occurredAt}
             )
             on duplicate key update
-                user_id = values(user_id),
-                customer_id = values(customer_id),
-                operator_id = values(operator_id),
                 session_type = values(session_type),
                 agent_name = values(agent_name),
                 title = coalesce(ai_conversation.title, values(title)),

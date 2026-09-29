@@ -5,17 +5,19 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * AI 模型运行配置。
  *
- * <p>该配置类只映射 Spring AI OpenAI-compatible 配置项，用于本地联调状态检查和
- * 后续 Model Router 演进时复用。API Key 只判断是否配置，不允许通过任何接口明文返回。</p>
+ * <p>该配置由 AgentScope OpenAI-compatible Model 直接消费，并供本地联调状态检查和
+ * 后续 Model Router 演进复用。API Key 只判断是否配置，不允许通过任何接口明文返回。</p>
  */
-@ConfigurationProperties(prefix = "spring.ai.openai")
+@ConfigurationProperties(prefix = "insurance.ai.model")
 public class AiModelProperties {
 
-    private String apiKey;
+    private String apiKey = "";
 
-    private String baseUrl;
+    private String baseUrl = "https://dashscope.aliyuncs.com/compatible-mode";
 
-    private Chat chat = new Chat();
+    private String modelName = "qwen-plus";
+
+    private Double temperature = 0.2;
 
     public String getApiKey() {
         return apiKey;
@@ -33,47 +35,19 @@ public class AiModelProperties {
         this.baseUrl = baseUrl;
     }
 
-    public Chat getChat() {
-        return chat;
+    public String getModelName() {
+        return modelName;
     }
 
-    public void setChat(Chat chat) {
-        this.chat = chat;
+    public void setModelName(String modelName) {
+        this.modelName = modelName;
     }
 
-    public static class Chat {
-
-        private Options options = new Options();
-
-        public Options getOptions() {
-            return options;
-        }
-
-        public void setOptions(Options options) {
-            this.options = options;
-        }
+    public Double getTemperature() {
+        return temperature;
     }
 
-    public static class Options {
-
-        private String model;
-
-        private Double temperature;
-
-        public String getModel() {
-            return model;
-        }
-
-        public void setModel(String model) {
-            this.model = model;
-        }
-
-        public Double getTemperature() {
-            return temperature;
-        }
-
-        public void setTemperature(Double temperature) {
-            this.temperature = temperature;
-        }
+    public void setTemperature(Double temperature) {
+        this.temperature = temperature;
     }
 }

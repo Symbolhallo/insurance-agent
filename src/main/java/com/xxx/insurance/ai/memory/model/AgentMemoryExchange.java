@@ -1,7 +1,8 @@
 package com.xxx.insurance.ai.memory.model;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.UserMessage;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.core.message.UserMessage;
+import com.xxx.insurance.common.security.RequestIdentity;
 
 import java.time.Instant;
 
@@ -14,6 +15,7 @@ import java.time.Instant;
  * @param userMessage 用户消息
  * @param assistantMessage 助手消息
  * @param occurredAt 业务事件发生时间
+ * @param identity 记忆所属租户、用户、客户和操作员
  */
 public record AgentMemoryExchange(
         String conversationId,
@@ -21,5 +23,16 @@ public record AgentMemoryExchange(
         String agentName,
         UserMessage userMessage,
         AssistantMessage assistantMessage,
-        Instant occurredAt) {
+        Instant occurredAt,
+        RequestIdentity identity) {
+
+    public AgentMemoryExchange(String conversationId,
+                               String invocationId,
+                               String agentName,
+                               UserMessage userMessage,
+                               AssistantMessage assistantMessage,
+                               Instant occurredAt) {
+        this(conversationId, invocationId, agentName, userMessage, assistantMessage,
+                occurredAt, RequestIdentity.localDefault());
+    }
 }

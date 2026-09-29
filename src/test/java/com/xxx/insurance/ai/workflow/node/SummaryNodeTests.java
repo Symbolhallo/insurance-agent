@@ -1,7 +1,7 @@
 package com.xxx.insurance.ai.workflow.node;
 
 import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.workflow.agent.WorkflowSummaryAgent;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
@@ -26,7 +26,7 @@ class SummaryNodeTests {
     @Test
     void writesSummaryResultToGraphState() throws Exception {
         SummaryNode node = new SummaryNode(new WorkflowSummaryAgent(
-                mock(ReactAgent.class), mock(ReactAgentStreamingExecutor.class)));
+                mock(HarnessAgent.class), mock(ReactAgentStreamingExecutor.class)));
 
         AlignedWorkflowContext alignedContext = mock(AlignedWorkflowContext.class);
         when(alignedContext.conversationId()).thenReturn("conversation-001");

@@ -21,7 +21,7 @@ public interface MainWorkflowService {
     /** 使用调用方预先生成的实例编号执行主工作流，供 SSE 在执行前建立订阅。 */
     MainWorkflowResponse run(String workflowInstanceId, MainWorkflowRequest request);
 
-    /** 使用预分配实例编号执行工作流，并显式控制内部 ReactAgent 是否使用 stream API。 */
+    /** 使用预分配实例编号执行工作流，并显式控制内部 AgentScope 模型增量是否发布到 SSE。 */
     MainWorkflowResponse run(String workflowInstanceId,
                              MainWorkflowRequest request,
                              boolean tokenStreamingEnabled);

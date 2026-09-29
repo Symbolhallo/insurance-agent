@@ -12,6 +12,8 @@ public enum ErrorCode {
 
     SUCCESS("0", "success", HttpStatus.OK),
     PARAM_INVALID("COMMON-400", "请求参数不合法", HttpStatus.BAD_REQUEST),
+    IDENTITY_REQUIRED("SECURITY-401", "缺少可信调用方身份", HttpStatus.UNAUTHORIZED),
+    RESOURCE_NOT_FOUND("SECURITY-404", "资源不存在", HttpStatus.NOT_FOUND),
     WORKFLOW_STATE_CONFLICT("WORKFLOW-409", "工作流状态已发生变化", HttpStatus.CONFLICT),
     WORKFLOW_REQUEST_CONFLICT("WORKFLOW-409-REQUEST", "请求重复或会话正在执行", HttpStatus.CONFLICT),
     AGENT_INVOKE_FAILED("AGENT-502", "智能体调用失败", HttpStatus.BAD_GATEWAY),

@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.workflow.model;
 
 import com.xxx.insurance.product.model.ConfirmedProduct;
+import com.xxx.insurance.common.security.RequestIdentity;
 
 import java.util.List;
 
@@ -19,7 +20,8 @@ public record WorkflowAgentTaskContext(
         String originalQuestion,
         List<ConfirmedProduct> confirmedProducts,
         List<AgentTaskExecutionResult> dependencyResults,
-        boolean tokenStreamingEnabled) {
+        boolean tokenStreamingEnabled,
+        RequestIdentity identity) {
 
     /** 固化集合快照，防止并行任务共享可变集合。 */
     public WorkflowAgentTaskContext {
@@ -31,12 +33,25 @@ public record WorkflowAgentTaskContext(
     public WorkflowAgentTaskContext(WorkflowPlanTask task,
                                     String conversationId,
                                     String workflowInstanceId,
+                                    long executionFenceToken,
+                                    String workflowStepId,
+                                    String originalQuestion,
+                                    List<ConfirmedProduct> confirmedProducts,
+                                    List<AgentTaskExecutionResult> dependencyResults,
+                                    boolean tokenStreamingEnabled) {
+        this(task, conversationId, workflowInstanceId, executionFenceToken, workflowStepId, originalQuestion,
+                confirmedProducts, dependencyResults, tokenStreamingEnabled, RequestIdentity.localDefault());
+    }
+
+    public WorkflowAgentTaskContext(WorkflowPlanTask task,
+                                    String conversationId,
+                                    String workflowInstanceId,
                                     String workflowStepId,
                                     String originalQuestion,
                                     List<ConfirmedProduct> confirmedProducts,
                                     List<AgentTaskExecutionResult> dependencyResults,
                                     boolean tokenStreamingEnabled) {
         this(task, conversationId, workflowInstanceId, 1L, workflowStepId, originalQuestion,
-                confirmedProducts, dependencyResults, tokenStreamingEnabled);
+                confirmedProducts, dependencyResults, tokenStreamingEnabled, RequestIdentity.localDefault());
     }
 }

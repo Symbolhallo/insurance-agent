@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.memory.service;
 
 import com.xxx.insurance.ai.memory.model.ConversationListItem;
+import com.xxx.insurance.common.security.RequestIdentity;
 
 import java.util.List;
 
@@ -8,12 +9,12 @@ import java.util.List;
 public interface ConversationManagementService {
 
     /** 列出最近使用的有效会话。 */
-    List<ConversationListItem> listConversations(int limit);
+    List<ConversationListItem> listConversations(RequestIdentity identity, int limit);
 
     /**
      * 从测试台会话列表归档指定会话；持久化消息和审计数据不会物理删除。
      *
      * @return {@code true} 表示本次完成归档，{@code false} 表示会话不存在或已经归档
      */
-    boolean archiveConversation(String conversationId);
+    boolean archiveConversation(RequestIdentity identity, String conversationId);
 }

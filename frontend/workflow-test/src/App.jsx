@@ -1,20 +1,38 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {WorkflowProgress, AGENT_NAMES} from "./WorkflowProgress";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
     ArrowDownToLine,
     Bot,
     Check,
+    ChevronRight,
+    CircleCheck,
+    GitBranch,
     LoaderCircle,
+    Menu,
     MessageSquare,
-    Play,
+    PanelRightClose,
+    PanelRightOpen,
     Plus,
     RotateCcw,
+    Send,
+    ShieldCheck,
+    Sparkles,
     SquareActivity,
     Trash2,
-    UserRound
+    UserRound,
+    X
 } from "lucide-react";
 
 const WORKFLOW_API_BASE = "/api/v1/workflows/main";
 const MEMORY_API_BASE = "/api/v1/ai/memory";
+const WORKFLOW_INSTANCE_ID_HEADER = "X-Workflow-Instance-Id";
+const ACTIVE_WORKFLOW_STORAGE_KEY = "insurance-agent.active-workflow";
+const WORKFLOW_STATUS_RUNNING = "RUNNING";
+const WORKFLOW_STATUS_WAITING_CONFIRM = "WAITING_CONFIRM";
+const MAX_RECONNECT_ATTEMPTS = 12;
+const MAX_RECONNECT_DELAY_MS = 5000;
 
 const PHASE_NAMES = {
     PRODUCT_REFERENCE_RESOLUTION: "产品线索解析",
@@ -40,37 +58,91 @@ const EVENT_NAMES = {
 function useAutoFollow(changeToken) {
     const containerRef = useRef(null);
     const [following, setFollowing] = useState(true);
+    const followingRef = useRef(true);
+    const pendingFrameRef = useRef(null);
+    const programmaticScrollRef = useRef(false);
+    const touchStartYRef = useRef(null);
 
     const scrollToLatest = useCallback(() => {
         const container = containerRef.current;
-        if (!container) return;
-        container.scrollTop = container.scrollHeight;
+        if (!container || !followingRef.current) return;
+        programmaticScrollRef.current = true;
+        const activeNode = container.querySelector('.workflow-node[data-status="WAITING_CONFIRM"], .workflow-node[data-status="RUNNING"]');
+        if (activeNode) {
+            const top = activeNode.getBoundingClientRect().top - container.getBoundingClientRect().top;
+            if (top < 0 || top + activeNode.offsetHeight > container.clientHeight) {
+                container.scrollTop += top - 60;
+            }
+        }
+        else {
+            container.scrollTop = container.scrollHeight;
+        }
+        requestAnimationFrame(() => {
+            programmaticScrollRef.current = false;
+        });
     }, []);
 
     useEffect(() => {
-        if (!following) return;
-        const frame = requestAnimationFrame(scrollToLatest);
-        return () => cancelAnimationFrame(frame);
+        if (!followingRef.current) return undefined;
+        if (pendingFrameRef.current !== null) cancelAnimationFrame(pendingFrameRef.current);
+        pendingFrameRef.current = requestAnimationFrame(() => {
+            pendingFrameRef.current = null;
+            scrollToLatest();
+        });
+        return () => {
+            if (pendingFrameRef.current !== null) {
+                cancelAnimationFrame(pendingFrameRef.current);
+                pendingFrameRef.current = null;
+            }
+        };
     }, [changeToken, following, scrollToLatest]);
 
     const pauseForUser = useCallback(() => {
         const container = containerRef.current;
         if (!container || container.scrollHeight <= container.clientHeight + 2) return;
+        followingRef.current = false;
+        if (pendingFrameRef.current !== null) {
+            cancelAnimationFrame(pendingFrameRef.current);
+            pendingFrameRef.current = null;
+        }
         setFollowing(false);
     }, []);
 
+    const handleWheel = useCallback(event => {
+        // 到底后继续向下滚动不改变跟随状态；只有向上阅读历史内容时才立即暂停。
+        if (event.deltaY < 0) pauseForUser();
+    }, [pauseForUser]);
+
     const handleScroll = useCallback(() => {
         const container = containerRef.current;
-        if (!container || following) return;
+        if (!container || programmaticScrollRef.current) return;
         const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-        if (distanceFromBottom <= 12) {
+        // 只负责“回到底部后恢复”。离开底部必须由明确的用户手势触发，DOM 重排不能暂停跟随。
+        if (distanceFromBottom <= 12 && !followingRef.current) {
+            followingRef.current = true;
             setFollowing(true);
         }
-    }, [following]);
+    }, []);
+
+    const handleTouchStart = useCallback(event => {
+        touchStartYRef.current = event.touches[0]?.clientY ?? null;
+    }, []);
+
+    const handleTouchMove = useCallback(event => {
+        const startY = touchStartYRef.current;
+        const currentY = event.touches[0]?.clientY;
+        // 手指向下拖动代表阅读更早内容；到底后继续向上推不暂停自动跟随。
+        if (startY !== null && currentY !== undefined && currentY > startY + 4) pauseForUser();
+    }, [pauseForUser]);
 
     const resume = useCallback(() => {
+        followingRef.current = true;
         setFollowing(true);
-        requestAnimationFrame(scrollToLatest);
+        if (pendingFrameRef.current !== null) cancelAnimationFrame(pendingFrameRef.current);
+        pendingFrameRef.current = requestAnimationFrame(() => {
+            pendingFrameRef.current = null;
+            scrollToLatest();
+        });
     }, [scrollToLatest]);
 
     return {
@@ -78,9 +150,9 @@ function useAutoFollow(changeToken) {
         following,
         resume,
         interactionProps: {
-            onWheel: pauseForUser,
-            onPointerDown: pauseForUser,
-            onTouchStart: pauseForUser,
+            onWheel: handleWheel,
+            onTouchStart: handleTouchStart,
+            onTouchMove: handleTouchMove,
             onScroll: handleScroll
         }
     };
@@ -97,15 +169,29 @@ function AutoFollowButton({following, onResume}) {
 }
 
 function App() {
-    const [conversationId, setConversationId] = useState(createConversationId);
+    const [restoredWorkflow] = useState(readActiveWorkflow);
+    const initiallyRunning = restoredWorkflow?.status === WORKFLOW_STATUS_RUNNING
+        && Boolean(restoredWorkflow.workflowInstanceId);
+    const initiallyWaiting = restoredWorkflow?.status === WORKFLOW_STATUS_WAITING_CONFIRM
+        && Boolean(restoredWorkflow.workflowInstanceId);
+    const [conversationId, setConversationId] = useState(
+        () => restoredWorkflow?.conversationId || createConversationId());
     const [question, setQuestion] = useState("");
-    const [connection, setConnection] = useState({state: "idle", message: "未连接"});
-    const [requestMeta, setRequestMeta] = useState("等待请求");
-    const [running, setRunning] = useState(false);
+    const [connection, setConnection] = useState(() => initiallyRunning
+        ? {state: "reconnecting", message: "正在恢复工作流连接"}
+        : initiallyWaiting
+            ? {state: "waiting", message: "等待产品确认"}
+            : {state: "idle", message: "未连接"});
+    const [requestMeta, setRequestMeta] = useState(() => restoredWorkflow?.workflowInstanceId
+        ? `workflowInstanceId: ${restoredWorkflow.workflowInstanceId}`
+        : "等待请求");
+    const [running, setRunning] = useState(initiallyRunning);
+    const [waitingForConfirmation, setWaitingForConfirmation] = useState(initiallyWaiting);
     const [stages, setStages] = useState([]);
     const [streams, setStreams] = useState([]);
-    const [candidates, setCandidates] = useState([]);
-    const [selectedProductCodes, setSelectedProductCodes] = useState([]);
+    const [candidates, setCandidates] = useState(() => restoredWorkflow?.candidates || []);
+    const [selectedProductCodes, setSelectedProductCodes] = useState(
+        () => restoredWorkflow?.selectedProductCodes || []);
     const [finalResult, setFinalResult] = useState(null);
     const [conversations, setConversations] = useState([]);
     const [historyMessages, setHistoryMessages] = useState([]);
@@ -113,12 +199,17 @@ function App() {
     const [conversationError, setConversationError] = useState("");
     const [pendingDeleteConversation, setPendingDeleteConversation] = useState(null);
     const [deletingConversation, setDeletingConversation] = useState(false);
+    const [historyOpen, setHistoryOpen] = useState(false);
+    const [activityOpen, setActivityOpen] = useState(initiallyRunning);
+    const [submittedQuestion, setSubmittedQuestion] = useState("");
 
     const controllerRef = useRef(null);
-    const runningRef = useRef(false);
-    const workflowInstanceIdRef = useRef(null);
-    const conversationIdRef = useRef(null);
-    const lastEventIdRef = useRef(null);
+    const runningRef = useRef(initiallyRunning);
+    const waitingForConfirmationRef = useRef(initiallyWaiting);
+    const workflowInstanceIdRef = useRef(restoredWorkflow?.workflowInstanceId || null);
+    const conversationIdRef = useRef(restoredWorkflow?.conversationId || null);
+    const lastEventIdRef = useRef(restoredWorkflow?.lastEventId || null);
+    const requestIdRef = useRef(restoredWorkflow?.requestId || null);
     const historyRequestRef = useRef(0);
 
     const streamChangeToken = useMemo(() => streams.reduce(
@@ -131,8 +222,18 @@ function App() {
 
     const setRunState = useCallback((isRunning, message, stateName = isRunning ? "running" : "idle") => {
         runningRef.current = isRunning;
+        waitingForConfirmationRef.current = false;
         setRunning(isRunning);
+        setWaitingForConfirmation(false);
         setConnection({state: stateName, message});
+    }, []);
+
+    const setWaitingState = useCallback(message => {
+        runningRef.current = false;
+        waitingForConfirmationRef.current = true;
+        setRunning(false);
+        setWaitingForConfirmation(true);
+        setConnection({state: "waiting", message});
     }, []);
 
     const abortCurrentRequest = useCallback(() => {
@@ -194,18 +295,23 @@ function App() {
     const resetRun = useCallback(() => {
         abortCurrentRequest();
         runningRef.current = false;
+        waitingForConfirmationRef.current = false;
         workflowInstanceIdRef.current = null;
         lastEventIdRef.current = null;
+        requestIdRef.current = null;
         setRunning(false);
+        setWaitingForConfirmation(false);
         setStages([]);
         setStreams([]);
         setCandidates([]);
         setSelectedProductCodes([]);
         setFinalResult(null);
+        setSubmittedQuestion("");
+        clearActiveWorkflow();
     }, [abortCurrentRequest]);
 
     const createNewConversation = useCallback(() => {
-        if (runningRef.current) return;
+        if (runningRef.current || waitingForConfirmationRef.current) return;
         resetRun();
         historyRequestRef.current += 1;
         const nextConversationId = createConversationId();
@@ -220,7 +326,8 @@ function App() {
     }, [resetRun]);
 
     const selectConversation = useCallback(selectedConversationId => {
-        if (runningRef.current || selectedConversationId === conversationId) return;
+        if (runningRef.current || waitingForConfirmationRef.current
+            || selectedConversationId === conversationId) return;
         resetRun();
         setConversationId(selectedConversationId);
         setQuestion("");
@@ -231,13 +338,14 @@ function App() {
 
     const requestDeleteConversation = useCallback((event, selectedConversation) => {
         event.stopPropagation();
-        if (runningRef.current) return;
+        if (runningRef.current || waitingForConfirmationRef.current) return;
         setPendingDeleteConversation(selectedConversation);
     }, []);
 
     const deleteConversation = useCallback(async () => {
         const selectedConversationId = pendingDeleteConversation?.conversationId;
-        if (!selectedConversationId || runningRef.current || deletingConversation) return;
+        if (!selectedConversationId || runningRef.current
+            || waitingForConfirmationRef.current || deletingConversation) return;
         setDeletingConversation(true);
         try {
             const response = await fetch(
@@ -262,9 +370,12 @@ function App() {
 
     const addStage = useCallback(event => {
         const status = event.data?.status || event.type.toUpperCase();
-        setStages(current => [...current, {
+        setStages(current => event.eventId && current.some(item => item.key === event.eventId) ? current : [...current, {
             key: event.eventId || `${event.type}-${Date.now()}-${current.length}`,
             type: event.type,
+            node: event.node,
+            taskId: event.data?.taskId,
+            agentType: event.data?.agentType,
             name: EVENT_NAMES[event.type] || event.type,
             status,
             detail: [event.node, event.data?.nodeName, event.data?.agentType, status]
@@ -325,6 +436,10 @@ function App() {
 
         lastEventIdRef.current = event.eventId || frame.id || lastEventIdRef.current;
         workflowInstanceIdRef.current = event.workflowInstanceId || workflowInstanceIdRef.current;
+        updateActiveWorkflow({
+            workflowInstanceId: workflowInstanceIdRef.current,
+            lastEventId: lastEventIdRef.current
+        });
         setRequestMeta(workflowInstanceIdRef.current
             ? `workflowInstanceId: ${workflowInstanceIdRef.current}`
             : `conversationId: ${conversationIdRef.current}`);
@@ -337,9 +452,18 @@ function App() {
         addStage(event);
         if (event.type === "human_confirm") {
             const nextCandidates = event.data?.candidates || [];
+            const nextSelectedProductCodes = nextCandidates.length > 0
+                ? [nextCandidates[0].productCode]
+                : [];
             setCandidates(nextCandidates);
-            setSelectedProductCodes(nextCandidates.length > 0 ? [nextCandidates[0].productCode] : []);
-            setRunState(false, "等待产品确认", "waiting");
+            setSelectedProductCodes(nextSelectedProductCodes);
+            updateActiveWorkflow({
+                status: WORKFLOW_STATUS_WAITING_CONFIRM,
+                candidates: nextCandidates,
+                selectedProductCodes: nextSelectedProductCodes
+            });
+            setWaitingState("等待产品确认");
+            setActivityOpen(false);
         }
         else if (event.type === "complete") {
             const answer = event.data?.finalAnswer || "";
@@ -348,40 +472,94 @@ function App() {
                 status: event.data?.status || "COMPLETED"
             });
             setRunState(false, "工作流已完成", "idle");
+            setActivityOpen(false);
+            clearActiveWorkflow();
             void loadConversations();
             void loadConversationHistory(conversationIdRef.current).then(loaded => {
-                if (loaded) setFinalResult(null);
+                if (loaded) setSubmittedQuestion("");
             });
         }
         else if (event.type === "error") {
             setRunState(false, event.data?.message || "工作流执行失败", "error");
+            clearActiveWorkflow();
         }
-    }, [addLocalError, addStage, loadConversationHistory, loadConversations, renderStream, setRunState]);
+    }, [addLocalError, addStage, loadConversationHistory, loadConversations, renderStream,
+        setRunState, setWaitingState]);
 
-    const openSse = useCallback(async (url, body, extraHeaders = {}) => {
+    const openSse = useCallback(async (url, body = null, extraHeaders = {}, options = {}) => {
         abortCurrentRequest();
         const controller = new AbortController();
         controllerRef.current = controller;
+        let requestUrl = url;
+        let requestMethod = options.method || "POST";
+        let requestBody = body;
+        let reconnectAttempts = 0;
 
         try {
-            const response = await fetch(url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "Accept": "text/event-stream",
-                    ...extraHeaders
-                },
-                body: JSON.stringify(body),
-                signal: controller.signal
-            });
-            if (!response.ok || !response.body) {
-                throw new Error(await responseError(response));
-            }
+            while (!controller.signal.aborted) {
+                try {
+                    const headers = {
+                        "Accept": "text/event-stream",
+                        ...extraHeaders
+                    };
+                    if (requestMethod !== "GET") {
+                        headers["Content-Type"] = "application/json";
+                    }
+                    if (lastEventIdRef.current) {
+                        headers["Last-Event-ID"] = lastEventIdRef.current;
+                    }
+                    const response = await fetch(requestUrl, {
+                        method: requestMethod,
+                        headers,
+                        body: requestMethod === "GET" ? undefined : JSON.stringify(requestBody),
+                        signal: controller.signal
+                    });
+                    if (!response.ok || !response.body) {
+                        const responseFailure = new Error(await responseError(response));
+                        responseFailure.status = response.status;
+                        throw responseFailure;
+                    }
 
-            setConnection({state: "running", message: "实时接收中"});
-            await consumeSse(response.body, handleEvent);
-            if (runningRef.current) {
-                setRunState(false, "连接已结束");
+                    const responseWorkflowInstanceId = response.headers.get(WORKFLOW_INSTANCE_ID_HEADER);
+                    if (responseWorkflowInstanceId) {
+                        workflowInstanceIdRef.current = responseWorkflowInstanceId;
+                        updateActiveWorkflow({workflowInstanceId: responseWorkflowInstanceId});
+                        setRequestMeta(`workflowInstanceId: ${responseWorkflowInstanceId}`);
+                    }
+                    reconnectAttempts = 0;
+                    setConnection({state: "running", message: "实时接收中"});
+                    await consumeSse(response.body, handleEvent);
+                    if (!runningRef.current) return;
+                }
+                catch (error) {
+                    if (error.name === "AbortError" || !runningRef.current) return;
+                    if (!workflowInstanceIdRef.current || error.status === 410) {
+                        const message = error.status === 410
+                            ? "可重放事件已过期，无法完整恢复当前输出"
+                            : error.message || "工作流连接失败";
+                        addLocalError(message);
+                        clearActiveWorkflow();
+                        setRunState(false, message, "error");
+                        return;
+                    }
+                }
+
+                reconnectAttempts += 1;
+                if (reconnectAttempts === MAX_RECONNECT_ATTEMPTS) {
+                    addLocalError("网络持续不可用，页面仍会后台自动重连");
+                }
+                const reconnectDelay = Math.min(
+                    500 * (2 ** Math.min(reconnectAttempts - 1, 4)),
+                    MAX_RECONNECT_DELAY_MS);
+                setConnection({
+                    state: "reconnecting",
+                    message: `连接中断，${Math.ceil(reconnectDelay / 1000)}秒后自动重连`
+                });
+                await abortableDelay(reconnectDelay, controller.signal);
+                requestUrl = `${WORKFLOW_API_BASE}/runs/${encodeURIComponent(
+                    workflowInstanceIdRef.current)}/events`;
+                requestMethod = "GET";
+                requestBody = null;
             }
         }
         catch (error) {
@@ -397,33 +575,65 @@ function App() {
         }
     }, [abortCurrentRequest, addLocalError, handleEvent, setRunState]);
 
+    useEffect(() => {
+        if (!initiallyRunning || !restoredWorkflow?.workflowInstanceId) return;
+        const headers = restoredWorkflow.lastEventId
+            ? {"Last-Event-ID": restoredWorkflow.lastEventId}
+            : {};
+        void openSse(
+            `${WORKFLOW_API_BASE}/runs/${encodeURIComponent(
+                restoredWorkflow.workflowInstanceId)}/events`,
+            null,
+            headers,
+            {method: "GET"});
+    }, [initiallyRunning, openSse, restoredWorkflow]);
+
     const submitRun = async event => {
         event.preventDefault();
         const message = question.trim();
         const normalizedConversationId = conversationId.trim();
-        if (running || !message || !normalizedConversationId) return;
+        if (running || waitingForConfirmation || !message || !normalizedConversationId) return;
 
         resetRun();
+        setSubmittedQuestion(message);
+        setQuestion("");
         conversationIdRef.current = normalizedConversationId;
+        requestIdRef.current = createRequestId();
+        writeActiveWorkflow({
+            conversationId: normalizedConversationId,
+            requestId: requestIdRef.current,
+            workflowInstanceId: null,
+            lastEventId: null,
+            status: WORKFLOW_STATUS_RUNNING,
+            candidates: [],
+            selectedProductCodes: []
+        });
         setRunState(true, "工作流连接中");
+        setActivityOpen(true);
         setRequestMeta(`conversationId: ${normalizedConversationId}`);
         await openSse(`${WORKFLOW_API_BASE}/runs/stream`, {
             message,
             conversationId: normalizedConversationId,
-            requestId: createRequestId()
+            requestId: requestIdRef.current
         });
     };
 
     const confirmProducts = async event => {
         event.preventDefault();
-        if (running || !workflowInstanceIdRef.current || selectedProductCodes.length === 0) {
+        if (running || !waitingForConfirmation || !workflowInstanceIdRef.current
+            || selectedProductCodes.length === 0) {
             if (selectedProductCodes.length === 0) {
                 setConnection({state: "waiting", message: "请选择至少一个产品"});
             }
             return;
         }
 
+        updateActiveWorkflow({
+            status: WORKFLOW_STATUS_RUNNING,
+            selectedProductCodes
+        });
         setRunState(true, "正在恢复工作流");
+        setActivityOpen(true);
         const headers = lastEventIdRef.current
             ? {"Last-Event-ID": lastEventIdRef.current}
             : {};
@@ -439,124 +649,127 @@ function App() {
     };
 
     const toggleProduct = productCode => {
-        setSelectedProductCodes(current => current.includes(productCode)
-            ? current.filter(code => code !== productCode)
-            : [...current, productCode]);
+        setSelectedProductCodes(current => {
+            const next = current.includes(productCode)
+                ? current.filter(code => code !== productCode)
+                : [...current, productCode];
+            updateActiveWorkflow({selectedProductCodes: next});
+            return next;
+        });
     };
 
+    const workflowLocked = running || waitingForConfirmation;
+
+    const hasConversationContent = historyLoading || historyMessages.length > 0 || submittedQuestion
+        || streams.length > 0 || finalResult || waitingForConfirmation;
+
     return (
-        <div className="app-shell">
-            <header className="topbar">
-                <div className="brand-block">
-                    <SquareActivity size={24}/>
-                    <div>
-                        <h1>保险智能体工作流测试台</h1>
-                        <p className="connection-status" data-state={connection.state}>{connection.message}</p>
+        <div className="app-shell" data-history-open={historyOpen} data-activity-open={activityOpen}>
+            <ConversationSidebar
+                conversations={conversations}
+                activeConversationId={conversationId}
+                error={conversationError}
+                disabled={workflowLocked}
+                onCreate={() => { createNewConversation(); setHistoryOpen(false); }}
+                onSelect={id => { selectConversation(id); setHistoryOpen(false); }}
+                onDelete={requestDeleteConversation}
+            />
+            <button className="sidebar-scrim" type="button" aria-label="关闭历史会话"
+                    onClick={() => setHistoryOpen(false)}/>
+
+            <main className="chat-shell">
+                <header className="chat-header">
+                    <button className="icon-button mobile-menu" type="button" aria-label="打开历史会话"
+                            onClick={() => setHistoryOpen(true)}><Menu size={20}/></button>
+                    <div className="chat-title">
+                        <h1>保险智能助理</h1>
+                        <span className="connection-status" data-state={connection.state}>
+                            <i/>{connection.message}
+                        </span>
                     </div>
+                    <div className="header-actions">
+                        <button className="icon-button" type="button" onClick={clearAll}
+                                disabled={workflowLocked} title="新建对话" aria-label="新建对话">
+                            <RotateCcw size={18}/>
+                        </button>
+                        <button className="activity-button" type="button" aria-expanded={activityOpen}
+                                onClick={() => setActivityOpen(value => !value)}>
+                            {activityOpen ? <PanelRightClose size={18}/> : <PanelRightOpen size={18}/>}
+                            <span>运行详情</span>
+                            {(running || waitingForConfirmation) && <i/>}
+                        </button>
+                    </div>
+                </header>
+
+                <section className="conversation-canvas" ref={streamFollow.containerRef}
+                         {...streamFollow.interactionProps} aria-label="当前对话">
+                    <div className="conversation-column">
+                        {!hasConversationContent && <WelcomePanel onSuggestion={setQuestion}/>}
+                        <ConversationHistory messages={historyMessages} loading={historyLoading}/>
+                        {submittedQuestion && <CurrentQuestion text={submittedQuestion}/>}
+                        {(running || streams.length > 0) && (
+                            <LiveExecution streams={streams} running={running} onOpenActivity={() => setActivityOpen(true)}/>
+                        )}
+                        {waitingForConfirmation && (
+                            <ProductConfirmation
+                                candidates={candidates}
+                                selectedProductCodes={selectedProductCodes}
+                                running={running}
+                                onToggle={toggleProduct}
+                                onSubmit={confirmProducts}
+                            />
+                        )}
+                        {finalResult && <FinalResult result={finalResult}/>}
+                    </div>
+                    <AutoFollowButton following={streamFollow.following} onResume={streamFollow.resume}/>
+                </section>
+
+                <div className="composer-dock">
+                    <form id="queryForm" className="composer" onSubmit={submitRun}>
+                        <label className="sr-only" htmlFor="question">输入保险问题</label>
+                        <textarea id="question" maxLength={2000} rows={1} value={question}
+                                  onChange={event => setQuestion(event.target.value)}
+                                  onKeyDown={event => {
+                                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                                          event.preventDefault();
+                                          event.currentTarget.form?.requestSubmit();
+                                      }
+                                  }}
+                                  placeholder={waitingForConfirmation ? "请先完成上方产品确认" : "询问产品对比、保险知识、保单或资产信息"}
+                                  disabled={workflowLocked} required/>
+                        <div className="composer-footer">
+                            <span title={requestMeta}>{question.length} / 2000 · Enter 发送，Shift + Enter 换行</span>
+                            <button className="send-button" type="submit" disabled={workflowLocked || !question.trim()}
+                                    aria-label={running ? "处理中" : "发送问题"}>
+                                {running ? <LoaderCircle size={18} className="spin"/> : <Send size={18}/>}
+                            </button>
+                        </div>
+                    </form>
+                    <p>回答仅供业务辅助，请以正式条款、核心系统数据与人工审核结论为准。</p>
                 </div>
-                <button className="icon-button topbar-action" type="button" onClick={clearAll}
-                        title="清空当前运行" aria-label="清空当前运行">
-                    <RotateCcw size={18}/>
-                </button>
-            </header>
+            </main>
 
-            <div className="application-body">
-                <ConversationSidebar
-                    conversations={conversations}
-                    activeConversationId={conversationId}
-                    error={conversationError}
-                    disabled={running}
-                    onCreate={createNewConversation}
-                    onSelect={selectConversation}
-                    onDelete={requestDeleteConversation}
-                />
-
-                <main className="content-area">
-                    <section className="query-band" aria-labelledby="queryTitle">
-                    <div className="query-inner">
-                        <div className="query-heading">
-                            <h2 id="queryTitle">发起分析</h2>
-                            <label htmlFor="conversationId">会话编号</label>
-                            <input id="conversationId" maxLength={64} autoComplete="off"
-                                   value={conversationId} readOnly/>
-                        </div>
-                        <form id="queryForm" className="query-form" onSubmit={submitRun}>
-                            <label className="sr-only" htmlFor="question">问题</label>
-                            <textarea id="question" maxLength={2000} rows={3} value={question}
-                                      onChange={event => setQuestion(event.target.value)}
-                                      onKeyDown={event => {
-                                          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                                              event.preventDefault();
-                                              event.currentTarget.form?.requestSubmit();
-                                          }
-                                      }}
-                                      placeholder="输入保险产品、保单、资产或业务知识问题" required/>
-                            <div className="query-actions">
-                                <span className="request-meta">{requestMeta}</span>
-                                <button className="primary-button command-button" type="submit" disabled={running}>
-                                    <Play size={16}/>
-                                    <span>开始运行</span>
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                    </section>
-
-                    <section className="workspace" aria-label="工作流运行结果">
-                    <aside className="stage-panel">
-                        <PanelTitle title="执行阶段" count={stages.length}
-                                    follow={stageFollow}/>
-                        <ol className="stage-list" ref={stageFollow.containerRef} {...stageFollow.interactionProps}>
+            <aside className="activity-drawer" aria-label="工作流运行详情">
+                <div className="activity-header">
+                    <div><span>实时工作流</span><strong>运行详情</strong></div>
+                    <button className="icon-button" type="button" onClick={() => setActivityOpen(false)}
+                            aria-label="关闭运行详情"><X size={18}/></button>
+                </div>
+                <div className="activity-scroll" ref={stageFollow.containerRef} {...stageFollow.interactionProps}>
+                    <WorkflowProgress stages={stages} streams={streams} waiting={waitingForConfirmation}
+                                      running={running} connection={connection}/>
+                    <details className="event-details">
+                        <summary>原始事件 <span>{stages.length}</span></summary>
+                        <ol>
                             {stages.map(stage => <StageItem key={stage.key} stage={stage}/>) }
-                            {stages.length === 0 && <li className="empty-state">暂无工作流事件</li>}
+                            {stages.length === 0 && <li className="empty-state compact">工作流启动后会显示节点事件</li>}
                         </ol>
-                    </aside>
-
-                    <section className="stream-panel">
-                        <PanelTitle title="对话与模型输出" count={historyMessages.length + streams.length}
-                                    follow={streamFollow}/>
-                        <div className="stream-scroll" ref={streamFollow.containerRef}
-                             {...streamFollow.interactionProps}>
-                            <ConversationHistory messages={historyMessages} loading={historyLoading}/>
-                            <div className="stream-list">
-                                {streams.map(stream => <StreamItem key={stream.streamId} stream={stream}/>) }
-                                {historyMessages.length === 0 && streams.length === 0 && !finalResult
-                                    && !historyLoading && (
-                                    <div className="empty-state">历史消息和模型输出将在这里出现</div>
-                                )}
-                            </div>
-                            {finalResult && <FinalResult result={finalResult}/>} 
-                        </div>
-                    </section>
-
-                    <aside className="confirm-panel">
-                        <div className="panel-title">
-                            <h2>产品确认</h2>
-                            <span className="counter">{candidates.length}</span>
-                        </div>
-                        <form id="confirmForm" onSubmit={confirmProducts}>
-                            <div className="candidate-list">
-                                {candidates.map(candidate => (
-                                    <CandidateItem key={candidate.productCode} candidate={candidate}
-                                                   checked={selectedProductCodes.includes(candidate.productCode)}
-                                                   onChange={() => toggleProduct(candidate.productCode)}/>
-                                ))}
-                                {candidates.length === 0 && (
-                                    <div className="empty-state">当前无需人工确认</div>
-                                )}
-                            </div>
-                            {candidates.length > 0 && (
-                                <button className="primary-button command-button full-width" type="submit"
-                                        disabled={running || selectedProductCodes.length === 0}>
-                                    <Check size={16}/>
-                                    <span>确认并继续</span>
-                                </button>
-                            )}
-                        </form>
-                    </aside>
-                    </section>
-                </main>
-            </div>
+                    </details>
+                </div>
+                <AutoFollowButton following={stageFollow.following} onResume={stageFollow.resume}/>
+            </aside>
+            <button className="activity-scrim" type="button" aria-label="关闭运行详情"
+                    onClick={() => setActivityOpen(false)}/>
             {pendingDeleteConversation && (
                 <DeleteConversationDialog
                     conversation={pendingDeleteConversation}
@@ -573,15 +786,18 @@ function ConversationSidebar({conversations, activeConversationId, error, disabl
                                  onCreate, onSelect, onDelete}) {
     return (
         <aside className="conversation-sidebar" aria-label="历史会话">
+            <div className="sidebar-brand">
+                <span><ShieldCheck size={20}/></span>
+                <div><strong>Insurance AI</strong><small>智能业务工作台</small></div>
+            </div>
+            <button className="new-chat-button" type="button" onClick={onCreate} disabled={disabled}>
+                <Plus size={17}/><span>新建对话</span>
+            </button>
             <div className="conversation-sidebar-header">
                 <div>
-                    <h2>历史会话</h2>
-                    <span>{conversations.length} 个会话</span>
+                    <h2>最近对话</h2>
+                    <span>{conversations.length}</span>
                 </div>
-                <button className="icon-button" type="button" onClick={onCreate} disabled={disabled}
-                        title="新建对话" aria-label="新建对话">
-                    <Plus size={17}/>
-                </button>
             </div>
             {error && <div className="conversation-error" role="status">{error}</div>}
             <nav className="conversation-list" aria-label="会话列表">
@@ -604,10 +820,96 @@ function ConversationSidebar({conversations, activeConversationId, error, disabl
                     </div>
                 ))}
                 {conversations.length === 0 && (
-                    <div className="conversation-empty">暂无历史会话，发送第一条问题后会自动保存。</div>
+                    <div className="conversation-empty">发送第一条问题后，会话将自动保存在这里。</div>
                 )}
             </nav>
+            <div className="sidebar-footer">
+                <SquareActivity size={15}/>
+                <span>工作流事件已开启持久化</span>
+            </div>
         </aside>
+    );
+}
+
+function WelcomePanel({onSuggestion}) {
+    const suggestions = [
+        ["产品对比", "对比盛世典藏和鑫享人生的保障责任与适用人群"],
+        ["保险知识", "重疾险的等待期和免赔额分别是什么意思？"],
+        ["保单查询", "查询客户 CUST-001 当前有效的保单"],
+        ["资产查询", "查询客户 CUST-001 的保险资产概况"]
+    ];
+    return (
+        <section className="welcome-panel">
+            <div className="welcome-mark"><Sparkles size={24}/></div>
+            <h2>今天想了解什么？</h2>
+            <p>我可以协助产品分析、业务知识问答，以及授权范围内的保单和资产查询。</p>
+            <div className="suggestion-grid">
+                {suggestions.map(([label, prompt]) => (
+                    <button type="button" key={label} onClick={() => onSuggestion(prompt)}>
+                        <span>{label}</span><strong>{prompt}</strong><ChevronRight size={16}/>
+                    </button>
+                ))}
+            </div>
+        </section>
+    );
+}
+
+function CurrentQuestion({text}) {
+    return (
+        <article className="message-row user-message">
+            <div className="message-avatar"><UserRound size={16}/></div>
+            <div className="message-content"><div className="message-label">你</div><p>{text}</p></div>
+        </article>
+    );
+}
+
+function LiveExecution({streams, running, onOpenActivity}) {
+    return (
+        <article className="message-row assistant-message live-execution">
+            <div className="message-avatar"><Bot size={17}/></div>
+            <div className="message-content">
+                <div className="message-label">保险智能助理</div>
+                <div className="execution-status">
+                    {running ? <LoaderCircle size={16} className="spin"/> : <CircleCheck size={16}/>}
+                    <span>{running ? "正在分析并协调专业智能体" : "模型处理过程已完成"}</span>
+                    <button type="button" onClick={onOpenActivity}><GitBranch size={14}/>查看流程</button>
+                </div>
+                <div className="live-stream-list">
+                    {streams.map(stream => <StreamItem key={stream.streamId} stream={stream}/>) }
+                    {streams.length === 0 && running && (
+                        <div className="stream-placeholder"><i/><i/><i/></div>
+                    )}
+                </div>
+            </div>
+        </article>
+    );
+}
+
+function ProductConfirmation({candidates, selectedProductCodes, running, onToggle, onSubmit}) {
+    return (
+        <article className="message-row assistant-message confirmation-message">
+            <div className="message-avatar waiting"><ShieldCheck size={17}/></div>
+            <div className="message-content">
+                <div className="message-label">需要你的确认</div>
+                <form id="confirmForm" className="confirmation-card" onSubmit={onSubmit}>
+                    <header><div><strong>请选择要继续分析的产品</strong><p>确认后将从当前 Checkpoint 恢复，并继续流式输出。</p></div><span>{candidates.length} 个候选</span></header>
+                    <div className="candidate-list">
+                        {candidates.map(candidate => (
+                            <CandidateItem key={candidate.productCode} candidate={candidate}
+                                           checked={selectedProductCodes.includes(candidate.productCode)}
+                                           onChange={() => onToggle(candidate.productCode)}/>
+                        ))}
+                        {candidates.length === 0 && <div className="empty-state compact">没有可确认的候选产品</div>}
+                    </div>
+                    {candidates.length > 0 && (
+                        <button className="primary-button confirmation-submit" type="submit"
+                                disabled={running || selectedProductCodes.length === 0}>
+                            <Check size={16}/><span>确认并继续</span>
+                        </button>
+                    )}
+                </form>
+            </div>
+        </article>
     );
 }
 
@@ -654,7 +956,9 @@ function ConversationHistory({messages, loading}) {
                             <strong>{message.role === "USER" ? "用户" : "保险智能体"}</strong>
                             <time>{formatDateTime(message.occurredAt)}</time>
                         </header>
-                        <div>{message.content}</div>
+                        {message.role === "ASSISTANT"
+                            ? <MarkdownContent className="history-markdown" content={message.content}/>
+                            : <div>{message.content}</div>}
                     </div>
                 </article>
             ))}
@@ -697,12 +1001,14 @@ function StreamItem({stream}) {
                 <div>
                     <strong className="stream-phase">{PHASE_NAMES[stream.phase] || stream.phase || "模型输出"}</strong>
                     <span className="stream-agent">
-                        {[stream.agentName, stream.taskId].filter(Boolean).join(" · ")}
+                        {[AGENT_NAMES[stream.agentName] || stream.agentName, stream.taskId].filter(Boolean).join(" · ")}
                     </span>
                 </div>
-                <span className="stream-state">{stream.finished ? "完成" : "生成中"}</span>
+                <span className="stream-state">{stream.finished ? "生成结束 · 待最终审核" : "生成中"}</span>
             </header>
-            <pre className="stream-content">{stream.text}</pre>
+            {stream.finished
+                ? <MarkdownContent className="stream-content stream-markdown" content={stream.text}/>
+                : <pre className="stream-content">{stream.text}</pre>}
         </article>
     );
 }
@@ -714,8 +1020,24 @@ function FinalResult({result}) {
                 <h2>最终回答</h2>
                 <span className="status-label">{result.status}</span>
             </div>
-            <div className="final-answer">{result.answer}</div>
+            <MarkdownContent className="final-answer markdown-content" content={result.answer}/>
         </section>
+    );
+}
+
+/** 使用 React 节点渲染模型 Markdown；原始 HTML 不会被解释，避免把模型文本注入 DOM。 */
+function MarkdownContent({content, className}) {
+    return (
+        <div className={className}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml
+                           components={{
+                               a: ({node: _node, ...props}) => (
+                                   <a {...props} target="_blank" rel="noreferrer noopener"/>
+                               )
+                           }}>
+                {content || ""}
+            </ReactMarkdown>
+        </div>
     );
 }
 
@@ -841,6 +1163,71 @@ function createConversationId() {
 
 function createRequestId() {
     return `req-${Date.now()}-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
+}
+
+function readActiveWorkflow() {
+    try {
+        const value = sessionStorage.getItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+        if (!value) return null;
+        const workflow = JSON.parse(value);
+        if (!workflow?.conversationId
+            || ![WORKFLOW_STATUS_RUNNING, WORKFLOW_STATUS_WAITING_CONFIRM].includes(workflow.status)) {
+            sessionStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+            return null;
+        }
+        return {
+            ...workflow,
+            candidates: Array.isArray(workflow.candidates) ? workflow.candidates : [],
+            selectedProductCodes: Array.isArray(workflow.selectedProductCodes)
+                ? workflow.selectedProductCodes
+                : []
+        };
+    }
+    catch {
+        return null;
+    }
+}
+
+function writeActiveWorkflow(workflow) {
+    try {
+        sessionStorage.setItem(ACTIVE_WORKFLOW_STORAGE_KEY, JSON.stringify(workflow));
+    }
+    catch {
+        // 浏览器禁用会话存储时仍允许当前页面继续消费 SSE，只失去刷新恢复能力。
+    }
+}
+
+function updateActiveWorkflow(patch) {
+    const current = readActiveWorkflow();
+    if (!current) return;
+    writeActiveWorkflow({...current, ...patch});
+}
+
+function clearActiveWorkflow() {
+    try {
+        sessionStorage.removeItem(ACTIVE_WORKFLOW_STORAGE_KEY);
+    }
+    catch {
+        // 与写入失败保持相同降级语义。
+    }
+}
+
+function abortableDelay(delayMillis, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+        }
+        const timeout = window.setTimeout(() => {
+            signal.removeEventListener("abort", onAbort);
+            resolve();
+        }, delayMillis);
+        const onAbort = () => {
+            window.clearTimeout(timeout);
+            reject(new DOMException("Aborted", "AbortError"));
+        };
+        signal.addEventListener("abort", onAbort, {once: true});
+    });
 }
 
 function formatTime(value) {

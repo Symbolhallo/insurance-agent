@@ -34,6 +34,10 @@ mybatis:
 # insurance.ai.workflow.* 是本项目自定义工作流配置，不属于 Spring AI Alibaba 官方属性。
 insurance:
   ai:
+    # 业务会话短期窗口配置；长期历史仍追加到 ai_long_term_memory。
+    memory:
+      # 每个 conversationId 最多保留20条 AgentScope Msg。
+      max-messages: 20
     workflow:
       # Spring AI Alibaba Graph 状态快照在 OceanBase 中的保留与写入策略。
       checkpoint:

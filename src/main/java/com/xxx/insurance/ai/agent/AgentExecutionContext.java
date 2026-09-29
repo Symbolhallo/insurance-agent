@@ -1,5 +1,6 @@
 package com.xxx.insurance.ai.agent;
 
+import com.xxx.insurance.common.security.RequestIdentity;
 import org.springframework.util.StringUtils;
 
 /**
@@ -11,7 +12,8 @@ import org.springframework.util.StringUtils;
  * @param originalUserMessage 进入工作流时的原始用户问题，用于审计记录
  * @param conversationMemoryEnabled 是否允许本次子智能体调用直接读写会话记忆
  * @param taskId Planner 任务编号，独立调用时为空
- * @param tokenStreamingEnabled 是否使用 ReactAgent.stream 执行模型
+ * @param tokenStreamingEnabled 是否使用 AgentScope HarnessAgent.streamEvents 执行模型并发布增量事件
+ * @param identity 当前调用方身份，写入 Memory/审计但不交给模型生成
  */
 public record AgentExecutionContext(
         String workflowInstanceId,
@@ -20,7 +22,19 @@ public record AgentExecutionContext(
         String originalUserMessage,
         boolean conversationMemoryEnabled,
         String taskId,
-        boolean tokenStreamingEnabled) {
+        boolean tokenStreamingEnabled,
+        RequestIdentity identity) {
+
+    public AgentExecutionContext(String workflowInstanceId,
+                                 String workflowStepId,
+                                 long executionFenceToken,
+                                 String originalUserMessage,
+                                 boolean conversationMemoryEnabled,
+                                 String taskId,
+                                 boolean tokenStreamingEnabled) {
+        this(workflowInstanceId, workflowStepId, executionFenceToken, originalUserMessage,
+                conversationMemoryEnabled, taskId, tokenStreamingEnabled, RequestIdentity.localDefault());
+    }
 
     /**
      * 兼容单 Agent 调用的构造方式，默认允许该 Agent 直接读写会话记忆。
@@ -39,14 +53,19 @@ public record AgentExecutionContext(
                                  String taskId,
                                  boolean tokenStreamingEnabled) {
         this(workflowInstanceId, workflowStepId, 0L, originalUserMessage,
-                conversationMemoryEnabled, taskId, tokenStreamingEnabled);
+                conversationMemoryEnabled, taskId, tokenStreamingEnabled, RequestIdentity.localDefault());
     }
 
     /**
      * 创建不属于 Workflow 的独立 Agent 调用上下文。
      */
     public static AgentExecutionContext standalone(String userMessage) {
-        return new AgentExecutionContext(null, null, 0L, userMessage, true, null, false);
+        return standalone(userMessage, RequestIdentity.localDefault());
+    }
+
+    /** 创建携带服务端可信身份的独立 Agent 调用上下文。 */
+    public static AgentExecutionContext standalone(String userMessage, RequestIdentity identity) {
+        return new AgentExecutionContext(null, null, 0L, userMessage, true, null, false, identity);
     }
 
     /**

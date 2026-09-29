@@ -12,6 +12,7 @@ import com.xxx.insurance.ai.workflow.model.WorkflowInstanceExecutionView;
 import com.xxx.insurance.ai.workflow.model.WorkflowResumeRequest;
 import com.xxx.insurance.ai.workflow.sse.service.WorkflowEventPublisher;
 import com.xxx.insurance.common.exception.BusinessException;
+import com.xxx.insurance.common.security.ResourceAccessService;
 import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import com.xxx.insurance.product.service.ConversationConfirmedProductService;
 import org.junit.jupiter.api.Test;
@@ -93,6 +94,7 @@ class LocalDbMainWorkflowServiceTests {
                 mock(WorkflowFinalizationService.class),
                 mock(WorkflowPauseService.class),
                 new WorkflowLifecycleProperties(),
+                mock(ResourceAccessService.class),
                 mock(ThreadPoolTaskExecutor.class));
     }
 }

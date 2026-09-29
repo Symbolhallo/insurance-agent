@@ -6,6 +6,7 @@ import java.time.Instant;
  * AI 会话主记录。
  *
  * @param conversationId 会话编号
+ * @param tenantId 租户编号
  * @param userId 用户编号
  * @param customerId 客户编号
  * @param operatorId 操作员编号
@@ -17,6 +18,7 @@ import java.time.Instant;
  */
 public record AgentConversationRecord(
         String conversationId,
+        String tenantId,
         String userId,
         String customerId,
         String operatorId,

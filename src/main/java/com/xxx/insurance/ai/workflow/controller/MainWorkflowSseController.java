@@ -1,13 +1,17 @@
 package com.xxx.insurance.ai.workflow.controller;
 
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
+import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseSubscription;
 import com.xxx.insurance.ai.workflow.sse.service.WorkflowSseService;
 import com.xxx.insurance.product.model.ProductConfirmationRequest;
+import com.xxx.insurance.common.security.RequestIdentity;
+import com.xxx.insurance.common.security.ResourceAccessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,26 +30,38 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/v1/workflows/main")
 public class MainWorkflowSseController {
 
+    public static final String WORKFLOW_INSTANCE_ID_HEADER = "X-Workflow-Instance-Id";
+
     private final WorkflowSseService workflowSseService;
 
+    private final ResourceAccessService resourceAccessService;
+
     /** 创建 SSE Controller 并注入工作流流式应用服务。 */
-    public MainWorkflowSseController(WorkflowSseService workflowSseService) {
+    public MainWorkflowSseController(WorkflowSseService workflowSseService,
+                                     ResourceAccessService resourceAccessService) {
         this.workflowSseService = workflowSseService;
+        this.resourceAccessService = resourceAccessService;
     }
 
     /**
      * 校验请求并启动新的流式 Main Graph。应用层会先建立订阅，再异步执行产品解析、可选人工确认、
-     * 上下文对齐、意图/计划、动态 DAG、总结和审核；所有可见事件先写 OceanBase，再投递当前连接。
+     * 上下文对齐、意图/计划、动态 DAG、总结和审核；响应头立即返回预分配的 workflowInstanceId，
+     * 所有可见事件先写 OceanBase，再投递当前连接。
      */
     @Operation(
             summary = "以 SSE 启动 Main Graph",
-            description = "先建立SSE订阅，再异步执行产品实体解析、可选候选确认、上下文对齐、意图识别、"
+            description = "响应头X-Workflow-Instance-Id立即返回预分配实例编号；先建立SSE订阅，再异步执行产品实体解析、"
+                    + "可选候选确认、上下文对齐、意图识别、"
                     + "Planner、动态DAG、Summary和输出审核；返回start、stage、human_confirm、agent_start、"
                     + "agent_stream、agent_complete、summary、review、complete或error事件，全部写入OceanBase。")
     @PostMapping(value = "/runs/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamRun(@Valid @RequestBody MainWorkflowRequest request) {
+    public ResponseEntity<SseEmitter> streamRun(@Valid @RequestBody MainWorkflowRequest request,
+                                                RequestIdentity identity) {
         // 主工作流链路 1：校验请求后进入 SSE 应用服务；本 HTTP 线程不直接执行模型或 Graph。
-        return workflowSseService.start(request);
+        WorkflowSseSubscription subscription = workflowSseService.start(request.withIdentity(identity));
+        return ResponseEntity.ok()
+                .header(WORKFLOW_INSTANCE_ID_HEADER, subscription.workflowInstanceId())
+                .body(subscription.emitter());
     }
 
     /**
@@ -58,7 +74,9 @@ public class MainWorkflowSseController {
     @GetMapping(value = "/runs/{workflowInstanceId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter reconnect(
             @PathVariable String workflowInstanceId,
-            @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId) {
+            @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
+            RequestIdentity identity) {
+        resourceAccessService.requireWorkflowAccess(identity, workflowInstanceId);
         return workflowSseService.reconnect(workflowInstanceId, lastEventId);
     }
 
@@ -75,7 +93,9 @@ public class MainWorkflowSseController {
     public SseEmitter confirmProducts(
             @PathVariable String workflowInstanceId,
             @RequestHeader(name = "Last-Event-ID", required = false) String lastEventId,
-            @Valid @RequestBody ProductConfirmationRequest request) {
+            @Valid @RequestBody ProductConfirmationRequest request,
+            RequestIdentity identity) {
+        resourceAccessService.requireWorkflowAccess(identity, workflowInstanceId);
         return workflowSseService.confirmProducts(workflowInstanceId, request, lastEventId);
     }
 }

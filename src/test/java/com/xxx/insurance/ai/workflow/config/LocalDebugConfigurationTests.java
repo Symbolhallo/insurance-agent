@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
-import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.boot.env.PropertiesPropertySourceLoader;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.ClassPathResource;
 
@@ -18,7 +18,7 @@ class LocalDebugConfigurationTests {
 
     @Test
     void bindsBreakpointFriendlyWorkflowDurations() throws Exception {
-        Binder binder = binder("application-debug-timing.yml");
+        Binder binder = binder("application-debug-timing.properties");
 
         WorkflowSseProperties sse = binder.bind(
                 "insurance.ai.workflow.sse", Bindable.of(WorkflowSseProperties.class))
@@ -39,7 +39,7 @@ class LocalDebugConfigurationTests {
 
     @Test
     void localDebugProfileIncludesDatabaseBeforeTimingOverrides() throws Exception {
-        PropertySource<?> source = load("application.yml").getFirst();
+        PropertySource<?> source = load("application.properties").getFirst();
 
         assertThat(source.getProperty("spring.profiles.group.local-debug[0]")).isEqualTo("local-db");
         assertThat(source.getProperty("spring.profiles.group.local-debug[1]")).isEqualTo("debug-timing");
@@ -50,6 +50,6 @@ class LocalDebugConfigurationTests {
     }
 
     private List<PropertySource<?>> load(String location) throws Exception {
-        return new YamlPropertySourceLoader().load(location, new ClassPathResource(location));
+        return new PropertiesPropertySourceLoader().load(location, new ClassPathResource(location));
     }
 }

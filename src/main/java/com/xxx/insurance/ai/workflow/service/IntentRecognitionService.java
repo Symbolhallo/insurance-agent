@@ -1,7 +1,8 @@
 package com.xxx.insurance.ai.workflow.service;
 
 import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
-import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeModelExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeStructuredOutput;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.IntentRecognitionModelOutput;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
@@ -12,10 +13,8 @@ import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
 import com.xxx.insurance.policy.agent.PolicyQueryAgent;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.asset.agent.AssetQueryAgent;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.converter.BeanOutputConverter;
+import io.agentscope.core.message.SystemMessage;
+import io.agentscope.core.message.UserMessage;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -58,17 +57,14 @@ public class IntentRecognitionService {
             IntentRecognitionNode.POLICY_QUERY_INTENT, PolicyQueryAgent.AGENT_NAME,
             IntentRecognitionNode.ASSET_QUERY_INTENT, AssetQueryAgent.AGENT_NAME);
 
-    private final ChatModel chatModel;
+    private final AgentScopeModelExecutor modelExecutor;
 
-    private final ChatModelStreamingExecutor streamingExecutor;
+    private final AgentScopeStructuredOutput structuredOutput;
 
-    private final BeanOutputConverter<IntentRecognitionModelOutput> outputConverter;
-
-    public IntentRecognitionService(ChatModel chatModel,
-                                    ChatModelStreamingExecutor streamingExecutor) {
-        this.chatModel = chatModel;
-        this.streamingExecutor = streamingExecutor;
-        this.outputConverter = new BeanOutputConverter<>(IntentRecognitionModelOutput.class);
+    public IntentRecognitionService(AgentScopeModelExecutor modelExecutor,
+                                    AgentScopeStructuredOutput structuredOutput) {
+        this.modelExecutor = modelExecutor;
+        this.structuredOutput = structuredOutput;
     }
 
     /**
@@ -84,13 +80,13 @@ public class IntentRecognitionService {
     /** 在 SSE 模式下额外发布意图识别模型的原始增量 JSON Token。 */
     public IntentRoutingResult recognize(AlignedWorkflowContext context,
                                          AgentTokenStreamContext streamContext) {
-        SystemMessage systemMessage = new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat()));
+        SystemMessage systemMessage = new SystemMessage(
+                SYSTEM_PROMPT.formatted(structuredOutput.schema(IntentRecognitionModelOutput.class)));
         UserMessage userMessage = new UserMessage(
                 "<user_request>\n" + context.rewrittenQuestion() + "\n</user_request>");
-        String modelOutput = streamContext == null
-                ? chatModel.call(systemMessage, userMessage)
-                : streamingExecutor.execute(chatModel, List.of(systemMessage, userMessage), streamContext);
-        IntentRecognitionModelOutput output = outputConverter.convert(modelOutput);
+        String modelOutput = modelExecutor.execute(List.of(systemMessage, userMessage), streamContext);
+        IntentRecognitionModelOutput output = structuredOutput.convert(
+                modelOutput, IntentRecognitionModelOutput.class);
         validateModelOutput(output);
 
         Set<String> uniqueIntents = new HashSet<>();

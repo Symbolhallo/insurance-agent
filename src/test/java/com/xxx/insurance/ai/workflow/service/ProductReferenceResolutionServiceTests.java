@@ -1,15 +1,14 @@
 package com.xxx.insurance.ai.workflow.service;
 
-import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xxx.insurance.ai.agent.AgentScopeModelExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeStructuredOutput;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.ProductRecallTrigger;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
 import com.xxx.insurance.product.model.ConfirmedProduct;
 import com.xxx.insurance.product.service.ConversationConfirmedProductService;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
 
 import java.time.Instant;
 import java.util.List;
@@ -91,14 +90,16 @@ class ProductReferenceResolutionServiceTests {
     private ProductReferenceResolution resolve(List<ConfirmedProduct> confirmedProducts,
                                                String modelOutput,
                                                String message) {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.call(any(SystemMessage.class), any(UserMessage.class))).thenReturn(modelOutput);
+        AgentScopeModelExecutor modelExecutor = mock(AgentScopeModelExecutor.class);
+        when(modelExecutor.execute(any(), any())).thenReturn(modelOutput);
         ConversationConfirmedProductService confirmedProductService = mock(
                 ConversationConfirmedProductService.class);
         when(confirmedProductService.findConfirmedProducts("conversation-001"))
                 .thenReturn(confirmedProducts);
         return new ProductReferenceResolutionService(
-                chatModel, confirmedProductService, mock(ChatModelStreamingExecutor.class))
+                confirmedProductService,
+                modelExecutor,
+                new AgentScopeStructuredOutput(new ObjectMapper()))
                 .resolve(new MainWorkflowRequest(message, "conversation-001"));
     }
 

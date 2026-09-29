@@ -11,8 +11,9 @@ import com.xxx.insurance.ai.workflow.model.WorkflowNodeDefinition;
 import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseEventType;
 import com.xxx.insurance.ai.workflow.sse.service.LocalDbWorkflowSseEventService;
 import com.xxx.insurance.common.util.TraceIdUtil;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.UserMessage;
+import com.xxx.insurance.common.security.RequestIdentity;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.core.message.UserMessage;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,6 +67,16 @@ public class WorkflowFinalizationService {
                             String outputJson,
                             String modelName,
                             long executionFenceToken) {
+        return complete(response, outputJson, modelName, executionFenceToken, RequestIdentity.localDefault());
+    }
+
+    /** 使用工作流启动时持久化进 State 的可信身份完成终态 Memory 与审计写入。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean complete(MainWorkflowResponse response,
+                            String outputJson,
+                            String modelName,
+                            long executionFenceToken,
+                            RequestIdentity identity) {
         Instant endedAt = response.endedAt();
         int finalized = workflowExecutionMapper.finalizeInstance(
                 response.workflowInstanceId(), response.status(), outputJson, response.errorMessage(),
@@ -75,7 +86,7 @@ public class WorkflowFinalizationService {
         }
 
         // 最终收口 1：固定 invocationId，并与终态更新处于同一事务，重试不会重复写 Memory。
-        saveFinalConversation(response, modelName);
+        saveFinalConversation(response, modelName, identity);
         workflowExecutionMapper.skipPendingSteps(response.workflowInstanceId(), endedAt);
         checkpointSaver.markWorkflowCompleted(response.workflowInstanceId(), executionFenceToken);
         // 最终收口 2：COMPLETE 先作为事实事件落库，提交后由 SSE Poller 投递，具备 Outbox 语义。
@@ -130,7 +141,9 @@ public class WorkflowFinalizationService {
      * ChatMemory 窗口、追加 USER/ASSISTANT 长期记忆、upsert 会话主记录和写 SUCCESS 审计；未启用
      * local-db Memory 时直接跳过，避免默认 Profile 产生伪持久化。
      */
-    private void saveFinalConversation(MainWorkflowResponse response, String modelName) {
+    private void saveFinalConversation(MainWorkflowResponse response,
+                                       String modelName,
+                                       RequestIdentity identity) {
         if (!agentMemoryService.isEnabled()) {
             return;
         }
@@ -138,15 +151,16 @@ public class WorkflowFinalizationService {
         AgentInvocationRecord invocationRecord = new AgentInvocationRecord(
                 invocationId,
                 response.conversationId(),
+                identity.tenantId(),
                 "main-workflow",
                 TraceIdUtil.currentTraceId(),
                 response.workflowInstanceId(),
                 response.workflowStepIds().get(WorkflowNodeDefinition.SUMMARY.code()),
                 "openai-compatible",
                 modelName,
-                "mock-user",
-                "mock-customer",
-                "mock-operator",
+                identity.userId(),
+                identity.customerId(),
+                identity.operatorId(),
                 response.originalQuestion(),
                 response.finalAnswer(),
                 response.durationMs(),
@@ -161,7 +175,7 @@ public class WorkflowFinalizationService {
                 new AgentMemoryExchange(
                         response.conversationId(), invocationId, "main-workflow",
                         new UserMessage(response.originalQuestion()),
-                        new AssistantMessage(response.finalAnswer()), response.endedAt()),
+                        new AssistantMessage(response.finalAnswer()), response.endedAt(), identity),
                 invocationRecord);
     }
 }

@@ -12,6 +12,7 @@ import java.util.List;
  *
  * @param invocationId Agent 单次调用编号
  * @param conversationId 关联的会话编号
+ * @param tenantId 所属租户编号
  * @param agentName 被调用的智能体名称
  * @param traceId 链路追踪编号
  * @param workflowInstanceId 关联的工作流实例编号，独立调用时为空
@@ -35,6 +36,7 @@ import java.util.List;
 public record AgentInvocationRecord(
         String invocationId,
         String conversationId,
+        String tenantId,
         String agentName,
         String traceId,
         String workflowInstanceId,

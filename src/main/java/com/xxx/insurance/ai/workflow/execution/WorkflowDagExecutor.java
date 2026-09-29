@@ -9,6 +9,7 @@ import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowAgentTaskContext;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlanTask;
+import com.xxx.insurance.common.security.RequestIdentity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -70,6 +71,19 @@ public class WorkflowDagExecutor {
                                       long executionFenceToken,
                                       String workflowStepId,
                                       boolean tokenStreamingEnabled) {
+        return execute(plan, routingResult, context, workflowInstanceId, executionFenceToken,
+                workflowStepId, tokenStreamingEnabled, RequestIdentity.localDefault());
+    }
+
+    /** 使用主工作流可信身份执行任务图，使所有子智能体审计记录继承同一租户和用户。 */
+    public DagExecutionResult execute(WorkflowPlan plan,
+                                      IntentRoutingResult routingResult,
+                                      AlignedWorkflowContext context,
+                                      String workflowInstanceId,
+                                      long executionFenceToken,
+                                      String workflowStepId,
+                                      boolean tokenStreamingEnabled,
+                                      RequestIdentity identity) {
         Map<String, WorkflowPlanTask> pending = orderedTasks(plan);
         Map<String, AgentTaskExecutionResult> completed = new LinkedHashMap<>();
         Map<Future<AgentTaskExecutionResult>, WorkflowPlanTask> running = new HashMap<>();
@@ -86,7 +100,7 @@ public class WorkflowDagExecutor {
                 requireAllowedAgent(task, allowedAgents);
                 WorkflowAgentTaskContext taskContext = taskContext(
                         task, completed, context, workflowInstanceId,
-                        executionFenceToken, workflowStepId, tokenStreamingEnabled);
+                        executionFenceToken, workflowStepId, tokenStreamingEnabled, identity);
                 Future<AgentTaskExecutionResult> future = completions.submit(
                         () -> taskGraphRunner.execute(taskContext));
                 running.put(future, task);
@@ -135,7 +149,8 @@ public class WorkflowDagExecutor {
                                                  String workflowInstanceId,
                                                  long executionFenceToken,
                                                  String workflowStepId,
-                                                 boolean tokenStreamingEnabled) {
+                                                 boolean tokenStreamingEnabled,
+                                                 RequestIdentity identity) {
         return new WorkflowAgentTaskContext(
                 task,
                 alignedContext.conversationId(),
@@ -145,7 +160,8 @@ public class WorkflowDagExecutor {
                 alignedContext.originalQuestion(),
                 alignedContext.resolvedProducts(),
                 dependencyResults(task, completed),
-                tokenStreamingEnabled);
+                tokenStreamingEnabled,
+                identity);
     }
 
     /** 按展示序号建立稳定的待执行索引；执行顺序不依赖此排序。 */

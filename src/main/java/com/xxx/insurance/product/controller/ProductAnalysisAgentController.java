@@ -1,6 +1,9 @@
 package com.xxx.insurance.product.controller;
 
 import com.xxx.insurance.common.result.ApiResponse;
+import com.xxx.insurance.common.security.RequestIdentity;
+import com.xxx.insurance.common.security.ResourceAccessService;
+import com.xxx.insurance.ai.agent.AgentExecutionContext;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.model.ProductAnalysisChatRequest;
 import com.xxx.insurance.product.model.ProductAnalysisChatResponse;
@@ -25,21 +28,28 @@ public class ProductAnalysisAgentController {
 
     private final ProductAnalysisAgent productAnalysisAgent;
 
-    public ProductAnalysisAgentController(ProductAnalysisAgent productAnalysisAgent) {
+    private final ResourceAccessService resourceAccessService;
+
+    public ProductAnalysisAgentController(ProductAnalysisAgent productAnalysisAgent,
+                                          ResourceAccessService resourceAccessService) {
         this.productAnalysisAgent = productAnalysisAgent;
+        this.resourceAccessService = resourceAccessService;
     }
 
     /**
      * 调用产品分析智能体。
      *
-     * <p>该接口会触发 ReactAgent 模型调用。使用 DeepSeek 本地联调时，需要在 IDEA 或终端
+     * <p>该接口会触发 HarnessAgent 模型调用。使用 DeepSeek 本地联调时，需要在 IDEA 或终端
      * 配置 AI_API_KEY、AI_BASE_URL、AI_MODEL。</p>
      */
     @Operation(
             summary = "调用产品分析智能体",
-            description = "触发 ProductAnalysisAgent 的 ReactAgent 调用，用于本地验证 Skill 与 product_analysis Tool 的单 Agent 闭环。")
+            description = "触发 ProductAnalysisAgent 的 AgentScope HarnessAgent 调用，用于本地验证 Skill 与 product_analysis Tool 的单 Agent 闭环。")
     @PostMapping("/chat")
-    public ApiResponse<ProductAnalysisChatResponse> chat(@Valid @RequestBody ProductAnalysisChatRequest request) {
-        return ApiResponse.success(productAnalysisAgent.chat(request));
+    public ApiResponse<ProductAnalysisChatResponse> chat(@Valid @RequestBody ProductAnalysisChatRequest request,
+                                                         RequestIdentity identity) {
+        resourceAccessService.claimConversation(identity, request.conversationId());
+        return ApiResponse.success(productAnalysisAgent.chat(
+                request, AgentExecutionContext.standalone(request.message(), identity)));
     }
 }

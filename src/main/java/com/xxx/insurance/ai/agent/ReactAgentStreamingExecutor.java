@@ -1,12 +1,13 @@
 package com.xxx.insurance.ai.agent;
 
-import com.alibaba.cloud.ai.graph.NodeOutput;
-import com.alibaba.cloud.ai.graph.OverAllState;
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.streaming.OutputType;
-import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
+import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.event.AgentEvent;
+import io.agentscope.core.event.AgentResultEvent;
+import io.agentscope.core.event.TextBlockDeltaEvent;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.UserMessage;
+import io.agentscope.harness.agent.HarnessAgent;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -15,184 +16,136 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import reactor.core.publisher.Flux;
-
 /**
- * Spring AI Alibaba ReactAgent 流式执行适配器。
+ * AgentScope ReActAgent 流式执行适配器。
  *
- * <p>该组件消费完整 {@link ReactAgent#stream(String)}，将 AGENT_MODEL_STREAMING 的增量
- * Message 实时交给 Token Sink，同时从最终 Graph State 提取完整 AssistantMessage。</p>
- *
- * <p>1.1.2.0 的 streamMessages() 只透出模型增量和 Tool 完成消息，会过滤
- * AGENT_MODEL_FINISHED 及最终 Graph State。当前调用必须在一次 Tool/ReAct 执行内同时获得
- * Token 和权威最终消息，因此不能改成 streamMessages() 后再调用 call()，否则 Tool 会重复执行。</p>
+ * <p>一次 AgentScope 事件流同时承载模型增量、Tool Calling 和最终结果。这里只把正文增量
+ * 发布到项目可靠 SSE 通道，并从同一事件流提取权威最终消息，避免重复调用模型或 Tool。</p>
  */
 @Component
 public class ReactAgentStreamingExecutor {
 
     private final AgentTokenStreamSink tokenStreamSink;
 
-    /** 创建流式执行器并注入与具体 SSE 实现解耦的 Token 发布端口。 */
     public ReactAgentStreamingExecutor(AgentTokenStreamSink tokenStreamSink) {
         this.tokenStreamSink = tokenStreamSink;
     }
 
-    /** 使用字符串输入执行 ReactAgent 流，并返回最终助手消息。 */
-    public AssistantMessage execute(ReactAgent reactAgent, String input) throws Exception {
+    public AssistantMessage execute(HarnessAgent reactAgent, String input) {
         return execute(reactAgent, input, null);
     }
 
-    /**
-     * 用一次 ReactAgent.stream 完成完整 ReAct/Tool 循环：持续保存最新 Graph State，只发布无 ToolCall 的
-     * AGENT_MODEL_STREAMING 助手正文，流结束后从最终 messages 提取并校验权威 AssistantMessage，再刷新
-     * Token Sink 的尾批次和结束标记。任何异常都会 abort 当前 streamId、保留已生成正文且不伪造正常结束。
-     */
-    public AssistantMessage execute(ReactAgent reactAgent,
+    /** 执行完整 ReAct 事件流，并在正常、异常路径分别完成或中止项目 Token 流。 */
+    public AssistantMessage execute(HarnessAgent reactAgent,
                                     String input,
-                                    AgentTokenStreamContext streamContext) throws Exception {
-        return executeStream(reactAgent.stream(input), streamContext);
+                                    AgentTokenStreamContext streamContext) {
+        return executeEvents(reactAgent, List.of(new UserMessage(input)), streamContext);
     }
 
-    /** 使用历史消息列表执行 ReactAgent 流，并返回最终助手消息。 */
-    public AssistantMessage execute(ReactAgent reactAgent, List<Message> input) throws Exception {
+    /** 使用 AgentScope 消息窗口执行 Agent。 */
+    public AssistantMessage execute(HarnessAgent reactAgent, List<Msg> input) {
         return execute(reactAgent, input, null);
     }
 
-    /**
-     * 使用历史消息执行与字符串入口相同的单次 ReactAgent 流、Tool 循环、Token 过滤、最终 State 提取和
-     * 正常/异常资源收口；不会为获取最终回答再次 call，从而避免 Tool 重复执行。
-     */
-    public AssistantMessage execute(ReactAgent reactAgent,
-                                    List<Message> input,
-                                    AgentTokenStreamContext streamContext) throws Exception {
-        return executeStream(reactAgent.stream(input), streamContext);
+    public AssistantMessage execute(HarnessAgent reactAgent,
+                                    List<Msg> input,
+                                    AgentTokenStreamContext streamContext) {
+        return executeEvents(reactAgent, input, streamContext);
     }
 
-    /** 统一处理不同输入形式产生的同一类 ReactAgent 输出流，确保成功与异常收口逻辑只有一份。 */
-    private AssistantMessage executeStream(Flux<NodeOutput> outputStream,
-                                           AgentTokenStreamContext streamContext) throws Exception {
-        AtomicReference<OverAllState> lastState = new AtomicReference<>();
+    private AssistantMessage executeEvents(HarnessAgent reactAgent,
+                                           List<Msg> input,
+                                           AgentTokenStreamContext streamContext) {
+        AtomicReference<Msg> finalResult = new AtomicReference<>();
         StreamPublication publication = new StreamPublication(streamContext);
+        RuntimeContext runtimeContext = runtimeContext(streamContext);
         try {
-            outputStream
-                    .doOnNext(output -> handleOutput(output, lastState, publication))
+            reactAgent.streamEvents(input, runtimeContext)
+                    .doOnNext(event -> handleEvent(event, finalResult, publication))
                     .blockLast();
-            AssistantMessage finalMessage = validateFinalMessage(extractAssistantMessage(lastState.get()));
+            Msg result = finalResult.get();
+            if (result == null || !StringUtils.hasText(result.getTextContent())) {
+                throw new IllegalStateException("AgentScope ReActAgent returned blank result");
+            }
             publication.complete();
-            return finalMessage;
+            return result instanceof AssistantMessage assistant
+                    ? assistant
+                    : new AssistantMessage(reactAgent.getName(), result.getTextContent());
         }
-        catch (Exception ex) {
+        catch (RuntimeException ex) {
             publication.abort();
             throw ex;
         }
-    }
-
-    /**
-     * 对每个 NodeOutput 先保存最新 State，再仅接受 AGENT_MODEL_STREAMING、AssistantMessage、无 ToolCall、
-     * 非空正文的增量块；Tool 请求、Tool 完成、Hook 事件和空块不进入面向用户的 Token SSE。
-     */
-    private void handleOutput(NodeOutput output,
-                              AtomicReference<OverAllState> lastState,
-                              StreamPublication publication) {
-        rememberState(output, lastState);
-        if (!(output instanceof StreamingOutput<?> streamingOutput)) {
-            return;
-        }
-        if (streamingOutput.getOutputType() != OutputType.AGENT_MODEL_STREAMING) {
-            return;
-        }
-
-        Object rawMessage = streamingOutput.message();
-        if (!(rawMessage instanceof AssistantMessage assistantMessage)) {
-            return;
-        }
-        if (assistantMessage.hasToolCalls()) {
-            return;
-        }
-
-        String text = assistantMessage.getText();
-        if (text == null || text.isEmpty()) {
-            return;
-        }
-        publication.publish(text);
-    }
-
-    /** 保存每个 NodeOutput 携带的最新 State，最终 END State 包含完整消息列表。 */
-    private void rememberState(NodeOutput output, AtomicReference<OverAllState> lastState) {
-        if (output == null) {
-            return;
-        }
-        OverAllState outputState = output.state();
-        if (outputState == null) {
-            return;
-        }
-        lastState.set(outputState);
-    }
-
-    /** 按 ReactAgent.call 的同等语义提取消息列表中最后一个 AssistantMessage。 */
-    private AssistantMessage extractAssistantMessage(OverAllState state) {
-        if (state == null) {
-            throw new IllegalStateException("ReactAgent stream returned no graph state");
-        }
-        Object rawMessages = state.value("messages")
-                .orElseThrow(() -> new IllegalStateException("ReactAgent stream returned no messages"));
-        List<?> messages = (List<?>) rawMessages;
-        for (int index = messages.size() - 1; index >= 0; index--) {
-            Object message = messages.get(index);
-            if (message instanceof AssistantMessage assistantMessage) {
-                return assistantMessage;
+        finally {
+            // 业务会话历史由 OceanBase ai_chat_memory 统一管理。内部执行器使用一次性 Session，
+            // 调用后立即删除 Harness State，避免同一历史被业务窗口和 Harness 重复注入。
+            reactAgent.clearStateCache(runtimeContext.getUserId(), runtimeContext.getSessionId());
+            if (reactAgent.getStateStore() != null) {
+                reactAgent.getStateStore().delete(runtimeContext.getUserId(), runtimeContext.getSessionId());
             }
         }
-        throw new IllegalStateException("ReactAgent stream returned no AssistantMessage");
     }
 
-    /**
-     * 将 1.1.2.0 AgentLlmNode 流式分支包装成文本的模型异常恢复为失败终态。
-     */
-    private AssistantMessage validateFinalMessage(AssistantMessage message) {
-        if (!StringUtils.hasText(message.getText())) {
-            throw new IllegalStateException("ReactAgent stream returned blank AssistantMessage");
+    /** 只转发正文增量；Tool、思考块和生命周期事件仍留在 AgentScope 事件总线中。 */
+    private void handleEvent(AgentEvent event,
+                             AtomicReference<Msg> finalResult,
+                             StreamPublication publication) {
+        if (event instanceof TextBlockDeltaEvent delta && StringUtils.hasText(delta.getDelta())) {
+            publication.publish(delta.getDelta());
         }
-        if (message.getText().startsWith("Exception:")) {
-            throw new IllegalStateException("ReactAgent streaming model call failed");
+        else if (event instanceof AgentResultEvent resultEvent) {
+            finalResult.set(resultEvent.getResult());
         }
-        return message;
     }
 
-    /**
-     * 维护单次模型调用的稳定 streamId 和单调 chunkIndex，使并行子智能体可独立拼接；仅存在工作流上下文
-     * 时调用 Sink，正常结束强制刷新尾批次并发结束标记，异常结束只刷新正文和释放临时批次。
-     */
+    private RuntimeContext runtimeContext(AgentTokenStreamContext context) {
+        String sessionPrefix = context == null
+                ? "standalone"
+                : context.workflowInstanceId() + ":" + String.valueOf(context.taskId());
+        RuntimeContext.Builder builder = RuntimeContext.builder()
+                .userId("insurance-platform")
+                .sessionId(sessionPrefix + ":" + UUID.randomUUID().toString().replace("-", ""));
+        if (context != null) {
+            putIfPresent(builder, "workflowInstanceId", context.workflowInstanceId());
+            putIfPresent(builder, "taskId", context.taskId());
+            putIfPresent(builder, "agentName", context.agentName());
+        }
+        return builder.build();
+    }
+
+    /** AgentScope 使用 ConcurrentHashMap 保存扩展上下文，空的可选链路字段必须省略。 */
+    private void putIfPresent(RuntimeContext.Builder builder, String key, String value) {
+        if (StringUtils.hasText(value)) {
+            builder.put(key, value);
+        }
+    }
+
     private final class StreamPublication {
 
         private final AgentTokenStreamContext context;
-        private final String streamId;
+        private final String streamId = "stream-" + UUID.randomUUID().toString().replace("-", "");
         private final AtomicLong chunkIndex = new AtomicLong();
 
         private StreamPublication(AgentTokenStreamContext context) {
             this.context = context;
-            this.streamId = "stream-" + UUID.randomUUID().toString().replace("-", "");
         }
 
         private void publish(String content) {
-            if (context == null) {
-                return;
+            if (context != null) {
+                tokenStreamSink.publishToken(context, streamId, chunkIndex.incrementAndGet(), content);
             }
-            tokenStreamSink.publishToken(context, streamId, chunkIndex.incrementAndGet(), content);
         }
 
         private void complete() {
-            if (context == null) {
-                return;
+            if (context != null) {
+                tokenStreamSink.complete(context, streamId, chunkIndex.get());
             }
-            tokenStreamSink.complete(context, streamId, chunkIndex.get());
         }
 
         private void abort() {
-            if (context == null) {
-                return;
+            if (context != null) {
+                tokenStreamSink.abort(context, streamId);
             }
-            tokenStreamSink.abort(context, streamId);
         }
     }
 }

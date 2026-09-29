@@ -105,7 +105,8 @@ Agent 误用覆盖/删除操作。未来若新增“客户偏好、事实画像�
 - 异常进入现有 Agent 调用审计和 DAG 失败/重试机制；
 - 不把框架英文限流提示当成最终金融回答。
 
-配置项：`insurance.ai.agent.safety.model-call-limit`。
+当前 AgentScope 迁移分支对应配置项为 `insurance.ai.agent.safety.max-iterations`，语义是 HarnessAgent
+的 ReAct 最大轮数，不是精确的底层 HTTP 模型请求计数。
 
 ### 暂不启用的能力
 

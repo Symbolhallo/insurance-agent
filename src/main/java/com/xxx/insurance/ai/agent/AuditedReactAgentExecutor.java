@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.agent;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
@@ -9,7 +10,6 @@ import com.xxx.insurance.common.exception.ErrorCode;
 import com.xxx.insurance.common.util.TraceIdUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -19,10 +19,10 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * 为不直接维护对话记忆的领域 ReactAgent 提供统一模型调用、SSE 和调用审计。
+ * 为不直接维护对话记忆的领域 HarnessAgent 提供统一模型调用、SSE 和调用审计。
  *
  * <p>保单与资产子智能体只保存调用流水；主工作流仍在 Summary 和审核完成后统一写入
- * ChatMemory 与长期记忆，避免并行任务竞争同一个 conversationId。</p>
+     * 会话窗口与长期记忆，避免并行任务竞争同一个 conversationId。</p>
  */
 @Component
 public class AuditedReactAgentExecutor {
@@ -33,7 +33,7 @@ public class AuditedReactAgentExecutor {
     private final AiModelProperties aiModelProperties;
     private final ReactAgentStreamingExecutor streamingExecutor;
 
-    /** 创建统一执行器，组合持久化审计、当前模型标识和单次 ReactAgent 流式执行适配器。 */
+    /** 创建统一执行器，组合持久化审计、当前模型标识和单次 HarnessAgent 事件流适配器。 */
     public AuditedReactAgentExecutor(AgentMemoryService agentMemoryService,
                                      AiModelProperties aiModelProperties,
                                      ReactAgentStreamingExecutor streamingExecutor) {
@@ -44,17 +44,17 @@ public class AuditedReactAgentExecutor {
 
     /**
      * 执行一次受审计的领域 Agent 调用。先校验查询并生成 invocationId，再按工作流上下文选择
-     * ReactAgent.call 或单次 stream/ReAct Tool 循环，拒绝空最终答案；成功时记录耗时并只追加子任务调用
+     * 单次 AgentScope streamEvents/ReAct Tool 循环，拒绝空最终答案；成功时记录耗时并只追加子任务调用
      * 流水（不并发覆盖会话 ChatMemory），返回统一 SubAgentExecutionResult。模型、Tool 或流异常时尽力写
      * FAILED 审计，审计持久化失败不会覆盖原始异常，最终统一抛出领域 Agent 调用失败。
      */
-    public SubAgentExecutionResult execute(ReactAgent reactAgent,
+    public SubAgentExecutionResult execute(HarnessAgent reactAgent,
                                            String agentName,
                                            String invocationPrefix,
                                            String query,
                                            String conversationId,
                                            AgentExecutionContext executionContext) {
-        Objects.requireNonNull(reactAgent, "ReactAgent must not be null");
+        Objects.requireNonNull(reactAgent, "HarnessAgent must not be null");
         Objects.requireNonNull(executionContext, "Agent execution context must not be null");
         validateQuery(query);
         String invocationId = invocationPrefix + UUID.randomUUID().toString().replace("-", "");
@@ -83,7 +83,7 @@ public class AuditedReactAgentExecutor {
     }
 
     /** 执行模型调用、校验答案并保存成功审计，返回统一子智能体结果。 */
-    private SubAgentExecutionResult executeAndRecordSuccess(ReactAgent reactAgent,
+    private SubAgentExecutionResult executeAndRecordSuccess(HarnessAgent reactAgent,
                                                             String agentName,
                                                             String query,
                                                             String conversationId,
@@ -94,9 +94,9 @@ public class AuditedReactAgentExecutor {
                 agentName, invocationId, conversationId);
         AssistantMessage assistantMessage = call(
                 reactAgent, agentName, query, conversationId, executionContext);
-        String answer = assistantMessage.getText();
+        String answer = assistantMessage.getTextContent();
         if (!StringUtils.hasText(answer)) {
-            throw new IllegalStateException("ReactAgent returned blank answer");
+            throw new IllegalStateException("HarnessAgent returned blank answer");
         }
 
         long durationMs = elapsedMillis(startedNanos);
@@ -115,19 +115,16 @@ public class AuditedReactAgentExecutor {
     }
 
     /**
-     * 根据工作流 Token 开关选择同步 call 或单次 stream：流式路径用 workflow/task/agent/phase 构造独立
-     * streamContext，逐块交给可靠 SSE Sink，同时从同一次 ReactAgent 最终 State 提取权威 AssistantMessage；
-     * 独立非工作流调用没有 SSE 上下文，但仍复用相同最终消息校验。
+     * 使用同一个 AgentScope streamEvents 执行路径获得 Tool 事件和权威最终消息；只有工作流 Token 开启时
+     * 才构造 streamContext 并把正文增量交给可靠 SSE，其他调用仍执行相同事件流但不对外发布 Token。
      */
-    private AssistantMessage call(ReactAgent reactAgent,
+    private AssistantMessage call(HarnessAgent reactAgent,
                                   String agentName,
                                   String query,
                                   String conversationId,
                                   AgentExecutionContext executionContext) throws Exception {
-        if (!executionContext.tokenStreamingEnabled()) {
-            return reactAgent.call(query);
-        }
-        AgentTokenStreamContext streamContext = StringUtils.hasText(executionContext.workflowInstanceId())
+        AgentTokenStreamContext streamContext = executionContext.tokenStreamingEnabled()
+                && StringUtils.hasText(executionContext.workflowInstanceId())
                 ? new AgentTokenStreamContext(
                         executionContext.workflowInstanceId(),
                         conversationId,
@@ -180,15 +177,16 @@ public class AuditedReactAgentExecutor {
         return new AgentInvocationRecord(
                 invocationId,
                 conversationId,
+                executionContext.identity().tenantId(),
                 agentName,
                 TraceIdUtil.currentTraceId(),
                 executionContext.workflowInstanceId(),
                 executionContext.workflowStepId(),
                 "openai-compatible",
                 modelName(),
-                "mock-user",
-                "MOCK-CUSTOMER-001",
-                "mock-operator",
+                executionContext.identity().userId(),
+                executionContext.identity().customerId(),
+                executionContext.identity().operatorId(),
                 executionContext.auditedUserMessage(query),
                 answer,
                 durationMs,
@@ -202,10 +200,7 @@ public class AuditedReactAgentExecutor {
     }
 
     private String modelName() {
-        if (aiModelProperties.getChat() == null || aiModelProperties.getChat().getOptions() == null) {
-            return null;
-        }
-        return aiModelProperties.getChat().getOptions().getModel();
+        return aiModelProperties.getModelName();
     }
 
     private long elapsedMillis(long startedNanos) {

@@ -1,6 +1,6 @@
 package com.xxx.insurance.ai.agent;
 
-/** 将 ReactAgent 增量模型内容交给具体传输通道的核心端口。 */
+/** 将 AgentScope Model/HarnessAgent 增量正文交给具体传输通道的核心端口。 */
 public interface AgentTokenStreamSink {
 
     /** 发布一个模型增量文本块。 */

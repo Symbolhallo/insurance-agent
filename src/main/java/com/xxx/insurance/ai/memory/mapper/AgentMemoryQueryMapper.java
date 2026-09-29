@@ -31,6 +31,7 @@ public interface AgentMemoryQueryMapper {
      */
     @Select("""
             select conversation_id,
+                   tenant_id,
                    user_id,
                    customer_id,
                    operator_id,
@@ -44,6 +45,7 @@ public interface AgentMemoryQueryMapper {
             """)
     @ConstructorArgs({
             @Arg(column = "conversation_id", javaType = String.class),
+            @Arg(column = "tenant_id", javaType = String.class),
             @Arg(column = "user_id", javaType = String.class),
             @Arg(column = "customer_id", javaType = String.class),
             @Arg(column = "operator_id", javaType = String.class),

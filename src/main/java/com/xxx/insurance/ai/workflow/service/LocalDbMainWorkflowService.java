@@ -10,6 +10,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
 import com.xxx.insurance.common.exception.BusinessException;
 import com.xxx.insurance.common.exception.ErrorCode;
+import com.xxx.insurance.common.security.RequestIdentity;
+import com.xxx.insurance.common.security.ResourceAccessService;
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
 import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.config.AiModelProperties;
@@ -107,6 +109,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
     private final WorkflowLifecycleProperties lifecycleProperties;
 
+    private final ResourceAccessService resourceAccessService;
+
     public LocalDbMainWorkflowService(WorkflowExecutionMapper workflowExecutionMapper,
                                       @Qualifier(MainWorkflowGraphConfig.MAIN_WORKFLOW_GRAPH)
                                       CompiledGraph mainWorkflowGraph,
@@ -118,6 +122,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                                       WorkflowFinalizationService workflowFinalizationService,
                                       WorkflowPauseService workflowPauseService,
                                       WorkflowLifecycleProperties lifecycleProperties,
+                                      ResourceAccessService resourceAccessService,
                                       @Qualifier(WorkflowExecutionConfig.WORKFLOW_DAG_TASK_EXECUTOR)
                                       ThreadPoolTaskExecutor workflowDagTaskExecutor) {
         this.workflowExecutionMapper = workflowExecutionMapper;
@@ -130,6 +135,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         this.workflowFinalizationService = workflowFinalizationService;
         this.workflowPauseService = workflowPauseService;
         this.lifecycleProperties = lifecycleProperties;
+        this.resourceAccessService = resourceAccessService;
         this.workflowDagTaskExecutor = workflowDagTaskExecutor;
     }
 
@@ -171,6 +177,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     public MainWorkflowResponse run(String workflowInstanceId,
                                     MainWorkflowRequest request,
                                     boolean tokenStreamingEnabled) {
+        RequestIdentity identity = request.identity() == null
+                ? RequestIdentity.localDefault()
+                : request.identity();
+        resourceAccessService.claimConversation(identity, request.conversationId());
         Instant startedAt = Instant.now();
         String inputJson = toJson(request);
         Map<String, String> workflowStepIds = createWorkflowSteps();
@@ -182,6 +192,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 workflowInstanceId,
                 WORKFLOW_CODE,
                 request.conversationId(),
+                identity.tenantId(),
+                identity.userId(),
+                identity.customerId(),
+                identity.operatorId(),
                 request.requestId(),
                 TraceIdUtil.currentTraceId(),
                 STATUS_RUNNING,
@@ -521,6 +535,9 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     private MainWorkflowResponse complete(OverAllState finalState,
                                           String workflowInstanceId,
                                           Instant startedAt) {
+        MainWorkflowRequest originalRequest = requiredState(
+                finalState, MainWorkflowStateKeys.REQUEST,
+                MainWorkflowRequest.class, "original request");
         IntentRoutingResult routingResult = requiredState(
                 finalState, MainWorkflowStateKeys.INTENT_ROUTING_RESULT,
                 IntentRoutingResult.class, "intent result");
@@ -590,7 +607,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 .orElseThrow(() -> new IllegalStateException(
                         "Main workflow graph returned empty execution fence token"));
         boolean finalized = workflowFinalizationService.complete(
-                response, toJson(response), modelName(), executionFenceToken);
+                response, toJson(response), modelName(), executionFenceToken,
+                originalRequest.identity() == null
+                        ? RequestIdentity.localDefault()
+                        : originalRequest.identity());
         if (!finalized) {
             log.info("[Workflow] code={} action=complete status=idempotent-ignore workflowInstanceId={}",
                     WORKFLOW_CODE, workflowInstanceId);
@@ -626,12 +646,9 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         return null;
     }
 
-    /** 读取当前全局 ChatModel 名称，用于主工作流最终调用审计。 */
+    /** 读取当前全局 AgentScope Model 名称，用于主工作流最终调用审计。 */
     private String modelName() {
-        if (aiModelProperties.getChat() == null || aiModelProperties.getChat().getOptions() == null) {
-            return null;
-        }
-        return aiModelProperties.getChat().getOptions().getModel();
+        return aiModelProperties.getModelName();
     }
 
     /** 校验用户选择属于当前候选集合，并转换为会话范围内的标准确认产品。 */

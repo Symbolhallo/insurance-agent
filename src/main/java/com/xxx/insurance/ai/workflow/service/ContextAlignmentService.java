@@ -6,7 +6,8 @@ import com.xxx.insurance.ai.memory.model.ConversationSummaryView;
 import com.xxx.insurance.ai.memory.model.LongTermMemoryView;
 import com.xxx.insurance.ai.memory.service.AgentMemoryQueryService;
 import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
-import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeModelExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeStructuredOutput;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.ConversationTopicRelation;
 import com.xxx.insurance.ai.workflow.model.ContextAlignmentModelOutput;
@@ -15,12 +16,10 @@ import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
 import com.xxx.insurance.common.util.TraceIdUtil;
 import com.xxx.insurance.product.model.ConfirmedProduct;
+import io.agentscope.core.message.SystemMessage;
+import io.agentscope.core.message.UserMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -88,21 +87,18 @@ public class ContextAlignmentService {
             %s
             """;
 
-    private final ChatModel chatModel;
-
     private final AgentMemoryQueryService agentMemoryQueryService;
 
-    private final ChatModelStreamingExecutor streamingExecutor;
+    private final AgentScopeModelExecutor modelExecutor;
 
-    private final BeanOutputConverter<ContextAlignmentModelOutput> outputConverter;
+    private final AgentScopeStructuredOutput structuredOutput;
 
-    public ContextAlignmentService(ChatModel chatModel,
-                                   AgentMemoryQueryService agentMemoryQueryService,
-                                   ChatModelStreamingExecutor streamingExecutor) {
-        this.chatModel = chatModel;
+    public ContextAlignmentService(AgentMemoryQueryService agentMemoryQueryService,
+                                   AgentScopeModelExecutor modelExecutor,
+                                   AgentScopeStructuredOutput structuredOutput) {
         this.agentMemoryQueryService = agentMemoryQueryService;
-        this.streamingExecutor = streamingExecutor;
-        this.outputConverter = new BeanOutputConverter<>(ContextAlignmentModelOutput.class);
+        this.modelExecutor = modelExecutor;
+        this.structuredOutput = structuredOutput;
     }
 
     /**
@@ -126,13 +122,13 @@ public class ContextAlignmentService {
         log.info("[Workflow] node=context-alignment action=align status=start conversationId={} memoryEnabled={}",
                 request.conversationId(),
                 snapshot.memoryEnabled());
-        SystemMessage systemMessage = new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat()));
+        SystemMessage systemMessage = new SystemMessage(
+                SYSTEM_PROMPT.formatted(structuredOutput.schema(ContextAlignmentModelOutput.class)));
         UserMessage userMessage = new UserMessage(
                 buildUserPrompt(request.message(), snapshot, productResolution.resolvedProducts()));
-        String modelOutput = streamContext == null
-                ? chatModel.call(systemMessage, userMessage)
-                : streamingExecutor.execute(chatModel, List.of(systemMessage, userMessage), streamContext);
-        ContextAlignmentModelOutput aligned = outputConverter.convert(modelOutput);
+        String modelOutput = modelExecutor.execute(List.of(systemMessage, userMessage), streamContext);
+        ContextAlignmentModelOutput aligned = structuredOutput.convert(
+                modelOutput, ContextAlignmentModelOutput.class);
         validate(aligned);
         ConversationTopicRelation topicRelation = hasConversationHistory(snapshot)
                 ? aligned.topicRelation()

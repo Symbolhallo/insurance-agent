@@ -9,12 +9,12 @@ import org.apache.ibatis.annotations.Select;
 import java.util.List;
 
 /**
- * Spring AI ChatMemory 窗口表 Mapper。
+ * 业务会话短期窗口表 Mapper；消息内容使用 AgentScope Msg 语义。
  */
 @Mapper
 public interface ChatMemoryMapper {
 
-    /** 列出当前窗口表中存在的 conversationId，供 Spring AI ChatMemoryRepository 枚举会话。 */
+    /** 列出当前窗口表中存在的 conversationId，供业务记忆仓库枚举会话。 */
     @Select("""
             select distinct conversation_id
             from ai_chat_memory

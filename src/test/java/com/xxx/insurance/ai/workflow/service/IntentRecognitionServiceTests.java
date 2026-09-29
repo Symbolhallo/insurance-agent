@@ -1,6 +1,8 @@
 package com.xxx.insurance.ai.workflow.service;
 
-import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xxx.insurance.ai.agent.AgentScopeModelExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeStructuredOutput;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.ConversationTopicRelation;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
@@ -10,9 +12,6 @@ import com.xxx.insurance.ai.workflow.node.IntentRecognitionNode;
 import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
 
 import java.time.Instant;
 import java.util.List;
@@ -86,9 +85,10 @@ class IntentRecognitionServiceTests {
     }
 
     private IntentRoutingResult recognize(String modelOutput, String rewrittenQuestion) {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.call(any(SystemMessage.class), any(UserMessage.class))).thenReturn(modelOutput);
-        return new IntentRecognitionService(chatModel, mock(ChatModelStreamingExecutor.class))
+        AgentScopeModelExecutor modelExecutor = mock(AgentScopeModelExecutor.class);
+        when(modelExecutor.execute(any(), any())).thenReturn(modelOutput);
+        return new IntentRecognitionService(
+                modelExecutor, new AgentScopeStructuredOutput(new ObjectMapper()))
                 .recognize(new AlignedWorkflowContext(
                 "conversation-001",
                 rewrittenQuestion,

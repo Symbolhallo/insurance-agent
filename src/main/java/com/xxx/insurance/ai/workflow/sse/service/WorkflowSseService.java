@@ -2,6 +2,7 @@ package com.xxx.insurance.ai.workflow.sse.service;
 
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
+import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseSubscription;
 import com.xxx.insurance.ai.workflow.service.MainWorkflowService;
 import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import org.slf4j.Logger;
@@ -44,9 +45,10 @@ public class WorkflowSseService {
     /**
      * 启动一次流式工作流：预分配 workflowInstanceId，使用该编号先注册 SseEmitter，再提交后台 Graph，
      * 从而保证 START/首 Token 产生时连接已经存在。线程池拒绝或提交异常时立即清理临时订阅并把异常
-     * 交还 HTTP 层，不留下尚未创建实例的悬空连接。
+     * 交还 HTTP 层，不留下尚未创建实例的悬空连接；成功时同时返回实例号与连接，使 Controller 可以在
+     * SSE 数据到达前通过响应头公开断线恢复主键。
      */
-    public SseEmitter start(MainWorkflowRequest request) {
+    public WorkflowSseSubscription start(MainWorkflowRequest request) {
         // 主工作流链路 2：预分配实例编号并先注册连接，再把 Graph 提交到隔离线程池，避免首事件丢失。
         String workflowInstanceId = mainWorkflowService.createWorkflowInstanceId();
         SseEmitter emitter = eventService.subscribeNewRun(workflowInstanceId);
@@ -57,7 +59,7 @@ public class WorkflowSseService {
             eventService.failNewRun(workflowInstanceId, ex);
             throw ex;
         }
-        return emitter;
+        return new WorkflowSseSubscription(workflowInstanceId, emitter);
     }
 
     /**

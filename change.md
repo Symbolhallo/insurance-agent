@@ -1,5 +1,89 @@
 # 工程变更记录
 
+## 2026-09-29：修复流式阅读抖动并按实际路径展示工作流
+
+- React 自动跟随改为同步引用控制：只有向上滚轮或向下拖动触摸等明确“阅读更早内容”的手势才暂停，并取消尚未执行的滚动帧；已经到底后继续向下滚动、程序滚动和 Markdown/历史消息造成的 DOM 重排不改变跟随状态，避免按钮与对话区域反复闪动。
+- 历史助手消息、已结束的模型流和最终答案统一接入 `react-markdown + remark-gfm`，支持标题、列表、表格、引用、链接及代码块；关闭原始 HTML 解析，外部链接使用安全的新窗口属性，不引入 `dangerouslySetInnerHTML`。
+- 运行详情不再静态展示全部主流程节点，只根据实际收到的 `stage`、模型流阶段、人工确认事件以及动态 DAG `taskId` 投影本次执行路径；不涉及产品召回的意图不会展示候选召回和人工确认节点。
+- 为固定路径 `/workflow-test/assets/app.js` 增加仅限联调页的 `Cache-Control: no-store` 资源配置，避免 Spring Boot 页面继续执行浏览器缓存中的旧 bundle。
+- 更新 React 页面回归测试，覆盖可取消自动滚动、Markdown 安全渲染、动态节点投影和静态资源禁用缓存；浏览器真实 DeepSeek 链路确认知识问答只展示实际节点和 `knowledge-qa-agent`，未展示产品召回/人工确认，并确认最终回答产生标题、列表等语义化 Markdown DOM。
+
+## 2026-09-29：兼容 Planner 的 JSON Schema 外壳输出
+
+- 修复 RuntimeContext 空值后，通过 IDEA 启动的真实 DeepSeek + OceanBase SSE 链路继续验证，发现 Planner 偶发把实际计划放入 `{"type":"object","properties":{...}}`，导致严格反序列化失败。
+- 统一结构化输出边界仅识别并解包这一种明确的 object/properties 外壳；解包后仍执行原目标类型反序列化以及任务数量、Agent 白名单、依赖和无环校验，不放宽动态 DAG 安全规则。
+- Planner 指令明确要求根对象直接输出 objective、tasks、rationale，禁止返回 type/properties Schema 元数据；增加直接 JSON 与 Schema 外壳两类回归测试。
+- 使用 IDEA 运行配置中的 DeepSeek 与本地 OceanBase 完成真实 SSE 回归：知识问答请求依次通过产品实体解析、上下文对齐、意图识别、Planner、动态 DAG、KnowledgeQaAgent、Summary 和 Review，最终产生 59 个有序事件并以 `SUCCESS`/`complete` 收口。
+
+## 2026-09-28：修复人工确认恢复后 Planner RuntimeContext 空值异常
+
+- IDEA 真实链路在“产品召回 -> 人工确认 -> 上下文对齐 -> 意图识别 -> Planner”阶段复现 NPE；根因是 Planner、Summary 等非 DAG Token 流允许 `taskId` 为空，而 `ReactAgentStreamingExecutor` 将空值写入 AgentScope `RuntimeContext.Builder` 的 `ConcurrentHashMap`。
+- RuntimeContext 扩展字段改为仅写入非空文本；workflowInstanceId、agentName 等已有链路元数据保持不变，可选 taskId 缺失时直接省略，不改变 AgentScope 事件流、SSE 或最终消息提取语义。
+- 新增空 taskId 回归测试，确认 Planner 上下文可以执行、必要元数据仍存在且 RuntimeContext 不包含空键值；Planner、Summary 和流式执行器针对性测试通过。
+
+## 2026-09-28：修复人工确认恢复后的会话查询映射错误
+
+- 在 IDEA 使用 `local-debug` Profile 复现并定位人工确认恢复链路异常：`AgentMemoryQueryMapper.findConversation()` 仍按旧版 9 字段构造会话记录，而 V21 租户隔离已为 `AgentConversationRecord` 增加 `tenantId`，MyBatis 因找不到匹配的 Record 构造器抛出 `NoSuchMethodException`。
+- `findConversation()` 查询和 `@ConstructorArgs` 同步补充 `tenant_id`，字段顺序与 `AgentConversationRecord` 的 10 个构造参数严格一致；不改变 Memory、Graph、Checkpoint、SSE 或人工确认流程。
+- 新增 Mapper 注解回归测试，固定 SQL 投影与构造参数顺序，避免后续 Record 字段演进时出现运行期映射错误。
+- IDEA Debug 启动验证通过：OceanBase 连接成功、21 个 Flyway 迁移校验通过、Tomcat 8080 正常启动；使用此前失败的真实 conversationId 查询聚合会话接口返回 HTTP 200，针对性测试通过。
+
+## 2026-09-28：参考成熟 AI 产品重构会话工作台
+
+- 参考 Vercel Chatbot 的会话优先、持久历史和稳定 Composer 模式，以及 LangSmith Studio 将运行过程独立观测的交互方式，重新设计 React 流式联调页；不修改后端 API、SSE 协议和工作流状态语义。
+- 页面调整为“历史会话侧栏 + 中央对话 + 可开关运行详情抽屉”：输入框固定在独立底部区域，不再和长输出、节点列表竞争首屏空间；桌面抽屉可并列显示，窄屏使用遮罩抽屉。
+- 产品候选确认改为对话内消息卡片，确认后沿原 Checkpoint 恢复接口继续接收流；前置模型和子智能体 Token 在助手消息中实时追加，Graph 节点、动态 DAG 任务和原始事件在运行详情中同步展示。
+- 新增空会话建议问题、清晰的连接状态、移动端历史抽屉和运行抽屉；问题发送后立即清空 Composer。自动跟随继续在用户滚动时暂停，回到底部或点击按钮后恢复。
+- 移除旧的多面板工作台覆盖样式，统一为单一 `styles.css`；Vite 构建通过。Playwright 模拟产品确认、确认后续流、双 Agent 任务和最终回答，并验证 1440×900、1366×650、1024×768、390×844、375×667、844×390 视口下输入框始终可见、无整页滚动或横向溢出。
+
+## 2026-09-28：修复工作台输入框首屏不可见
+
+- 移除桌面560px最小高度和手机整页纵向展开，将页面约束为100dvh，输入区置顶且不参与收缩，长正文仅在内容区滚动。
+- 1250px及以下历史会话改为按钮展开；对话、处理流程、产品确认使用工作区切换，确认到达后自动展示候选，提交后返回输出。
+- 输入区增加清晰问题标签和字数统计，保留请求编号为悬停信息，减少技术字段占用。
+- Playwright模拟SSE验证1440×900、1366×650、1024×768、390×844、375×667、844×390六种视口：初始及长输出后输入框与发送按钮完整处于视口，页面不产生整体纵向滚动；确认、续流及手机流程切换通过。
+
+
+## 2026-09-28：专业工作台与实时流程视图
+
+- React 页面改为浅色工作台布局，保留历史会话导航，将输入区固定在桌面底部，流程与正文分别滚动。
+- 新增 `WorkflowProgress.jsx`，按实际 stage 事件展示九个主节点，按 taskId 展示并行 Agent 状态；未知、未经过和失败不冒充成功。
+- 新增“对话结果 / 实时过程”视图切换，前置模型增量在实时过程中完整可见；中间回答标记待最终审核，审核后最终回答保持可见。
+- 产品确认面板仅在 WAITING_CONFIRM 时出现；保留确认续流、Last-Event-ID 和历史会话功能。阶段事件按 eventId 去重，自动跟随优先定位活动节点，手动滚动仍暂停跟随。
+- 新增 `workbench.css` 响应式工作台样式；Vite `/api` 代理到本地8080，方便前后端分开调试。
+- Playwright + 本机 Chrome 模拟 SSE 验证确认、恢复、并行任务、正文输出和1440/1024/390像素布局；无页面脚本错误、无横向溢出。此轮未进行真实模型调用。
+
+
+## 2026-09-28：可信身份贯穿与租户级资源隔离
+
+- 新增统一 `RequestIdentity`、Spring MVC 参数解析器和 `insurance.security.identity.*` 配置。本地继续使用稳定默认身份；生产可通过 `IDENTITY_HEADERS_REQUIRED=true` 强制可信网关注入租户和用户请求头。
+- 新增 `ResourceAccessService` 与 OceanBase Mapper。首次使用 conversationId 时原子创建所有权占位，主键冲突绝不覆盖既有 owner；会话和工作流越权统一返回404，避免暴露其他租户资源。
+- 同步/流式 Main Workflow、SSE 重连、产品确认、主动恢复、Memory 查询/摘要/删除、产品分析、知识问答和 AgentScope AG-UI 入口均接入统一身份边界。
+- Swagger/OpenAPI 自动为使用身份边界的接口展示四个真实 Header；本地标为可选，严格模式将租户和用户标为必填，不再把 RequestIdentity 误展示为普通查询对象。
+- `RequestIdentity` 贯穿 Main Graph State、Checkpoint、动态 DAG 子任务、领域 Agent、最终 Memory、长期记忆和调用审计；修复 Checkpoint 恢复时身份字段因 Jackson 只读配置丢失的问题。
+- 新增 Flyway V21：为 `ai_conversation`、`ai_workflow_instance`、`ai_agent_invocation` 和 `ai_long_term_memory` 增加 tenant 字段及组合索引，不新增业务表。
+- 会话列表和软删除 SQL 增加 tenantId+userId 条件；历史占位记录在产生有效长期消息前不展示。`ai_conversation` 后续 upsert 不再修改首次认领的租户、用户、客户或操作员。
+- 新增身份严格模式、非法标识符、越权404、所有权不可覆盖、租户持久化 SQL、V21 迁移和 Checkpoint 身份往返测试。
+- `./gradlew clean test` 全量通过，React/Vite 生产构建通过，`git diff --check` 无空白错误；仓库未检出硬编码 `sk-*` 密钥。
+
+## 2026-09-28：React 测试台补齐 SSE 自动恢复与人工确认暂停态
+
+- `POST /api/v1/workflows/main/runs/stream` 在建立流时通过 `X-Workflow-Instance-Id` 响应头立即返回预分配实例编号，前端不再依赖首个 SSE 事件才能获得恢复主键。
+- React 测试台把 `conversationId`、`requestId`、`workflowInstanceId`、`Last-Event-ID`、运行状态和产品候选保存在 `sessionStorage`；连接意外结束后使用既有 `GET /runs/{workflowInstanceId}/events` 自动重放并继续实时跟随。
+- 自动重连采用500毫秒起步、最高5秒的退避；短时网络失败不结束业务运行，HTTP 410 重放缺口则明确终止本地恢复，避免展示不完整事件链路。
+- `human_confirm` 改为独立 `WAITING_CONFIRM` 页面状态。等待期间保留并恢复候选及勾选结果，锁定新建、切换、删除、清空和再次发起操作；用户提交确认后恢复为运行态并继续消费第二段 SSE。
+- 工作流 `complete/error` 后清理浏览器恢复游标；刷新页面时，运行中的实例自动重连，等待确认的实例直接恢复确认面板，不重复启动 Graph。
+- 保留 OceanBase SSE 事实表、多实例 Poller、Last-Event-ID、Graph Checkpoint 和 Human Confirm 后端语义；未新增数据库表或修改 Main Graph。
+- React/Vite 生产构建成功；SSE Service、Controller 响应头和静态页面定向测试通过；`./gradlew clean test` 全量144项测试通过，0失败、0错误、0跳过。
+
+## 2026-09-11：运行配置迁移为 properties 并保留 YAML
+
+- 新增 `application.properties`、`application-local-db.properties` 和 `application-debug-timing.properties`，逐项迁移端口、模型、Swagger、OceanBase、Flyway、MyBatis、Checkpoint、SSE、维护任务和 Lease 配置，环境变量占位符及默认值保持不变。
+- 原有三份 `.yml` 文件原样保留为迁移对照和低优先级兼容副本；同目录同名配置由 Spring Boot 优先采用 `.properties`。
+- `local-db` properties 使用空 `spring.autoconfigure.exclude` 恢复 DataSource/Flyway 自动配置，继续保持默认 Profile 无数据库、`local-debug -> local-db + debug-timing` 的加载语义。
+- 配置绑定测试切换到 properties，并新增 Spring ConfigData 优先级测试，验证基础配置和 local-db properties 均高于同名 YAML。
+- `./gradlew test` 全量176项测试通过，0失败、0错误、0跳过。
+
 ## 2026-08-27：React 测试台增加历史会话管理
 
 - 左侧新增历史会话栏，按 OceanBase `ai_conversation.updated_at` 倒序展示标题、长期消息数量和更新时间；选中后按需读取最多200条永久长期记忆，并按时间正序显示用户/助手消息。
@@ -606,3 +690,52 @@ insurance:
 - 为 SSE 补充原子序号、同事务 `last_insert_id()`、Outbox、Last-Event-ID 重放及物理过期清理说明。
 - 为短期记忆、长期记忆、调用审计、召回审计和会话确认产品补充覆盖/追加/幂等边界说明。
 - 仅优化注释和项目文档，不修改 SQL、事务边界或业务执行逻辑。
+
+## 2026-09-21：AgentScope Java 迁移第一阶段
+
+- 新建 `feature/agentscope-java-migration` 分支，引入 AgentScope Java 2.0.3 Core 与 OpenAI-compatible 模型扩展。
+- 产品、知识、保单、资产、Planner 和 Summary 全部改用 AgentScope `ReActAgent`；全局模型使用 `OpenAIChatModel + DeepSeekFormatter`。
+- Spring AI Alibaba Agent Framework 与 DashScope 适配依赖已移除；Tool 改用 AgentScope 注解和独立 Toolkit，Skill 改用按业务域隔离的 `ClasspathSkillRepository`。
+- `ReactAgentStreamingExecutor` 改为消费 `streamEvents(...)`，只把 `TextBlockDeltaEvent` 发布到既有可靠 SSE，并从同一次流中的 `AgentResultEvent` 获取最终答案。
+- ReAct 轮数上限由 AgentScope `maxIters` 承担；既有 ChatMemory、长期记忆、调用审计、Token 批处理和 SSE Outbox 行为保持不变。
+- Spring AI `ChatModel` 暂保留给上下文对齐、意图识别等结构化前置节点；Spring AI Alibaba Graph Core 暂保留给主图、Checkpoint、人工确认和动态 DAG，尚未宣称完成 Graph Runtime 迁移。
+- 修复独立非工作流 Agent 调用可能向 AgentScope `RuntimeContext.sessionId` 传入空值的问题。
+- Spring Boot 3.5.8 依赖管理当前把 AgentScope 声明的 Reactor 3.8.2 和 Jackson 2.21.x 解析为 3.7.13、2.19.4；自动化测试通过，仍需用真实 DeepSeek Tool Calling 与 SSE 做合并前兼容验收。
+- `./gradlew test` 全量 138 项测试通过。
+
+## 2026-09-24：AgentScope 原生能力迁移收口
+
+### Agent 与模型
+
+- 引入 `agentscope-harness` 和 `agentscope-extensions-agui`；产品、知识、保单、资产、Planner、Summary 统一装配为 `HarnessAgent`。
+- 前置产品实体解析、上下文对齐、意图识别和会话摘要改用 `AgentScopeModelExecutor`；结构化输出改用 `JsonSchemaUtils + AgentScopeStructuredOutput`。
+- 删除 Spring AI `ChatModelStreamingExecutor`、`ChatMemoryConfig` 和直接 OpenAI Model Starter；业务主源码不再导入 `org.springframework.ai.*`。
+- 模型配置从 `spring.ai.openai.*` 收口为 `insurance.ai.model.*`，仍通过 `AI_API_KEY`、`AI_BASE_URL`、`AI_MODEL`、`AI_TEMPERATURE` 环境变量覆盖。
+
+### Message、Memory 与 State
+
+- `ai_chat_memory` 窗口仓库直接读写 AgentScope `Msg`，保留完整窗口覆盖、事务双写和 Main Workflow 最终收口语义。
+- 新增 `AgentScopeStateStore` 的 OceanBase 实现、数据库 CAS 和 Agent 名称命名空间；默认 profile 使用内存 Store，`local-db` 使用 OceanBase。
+- 新增 Flyway V20 `ai_agentscope_state`。工作流内部 Harness 调用使用一次性 session 并在结束后删除，AG-UI 稳定 threadId 可跨请求续接。
+- AgentScope State、业务短期窗口、永久历史和 Alibaba Graph Checkpoint 保持四种不同数据语义，不做互相覆盖式替换。
+
+### AG-UI
+
+- 新增 `POST /api/v1/agui/agents/{agentId}/runs`，使用官方 `AguiAgentAdapter` 和 `AguiEventEncoder` 输出标准 SSE。
+- 公共 Registry 只开放四个领域 Agent，Planner/Summary 不公开；采用 `AGENT_ONLY` 拒绝前端 Tool 注入，关闭 reasoning 暴露。
+- `insurance.ai.agui.run-timeout` 默认10分钟；客户端完成、异常和超时会取消 Reactor subscription，线程池拒绝会结束 SSE。
+- AG-UI 只提供领域 Agent 标准实时协议，不替代 Main Graph 的 OceanBase Outbox、Poller、Last-Event-ID 与人工确认恢复。
+
+### Graph 保留边界
+
+- Spring AI Alibaba 1.1.2.0 Graph Core 继续承载 StateGraph、动态 DAG、Checkpoint、Human Confirm 和 GraphLifecycleListener。
+- OceanBase CheckpointSaver、Execution Lease/Heartbeat/Fence、conversation lock、可靠 SSE 和最终事务收口均保留；Harness/AG-UI 当前没有等价生产语义。
+- Graph Checkpoint 只保存真实工作流业务 State；AgentScope 消息由短期窗口和 AgentStateStore 管理，不复制进 Graph State。
+
+### 验证
+
+- 新增 Agent 状态命名空间隔离、OceanBase StateStore CAS、AG-UI Agent 白名单和协议策略测试。
+- `./gradlew clean test` 全量 143 项测试通过；业务主源码扫描确认不存在 `org.springframework.ai.*` 或非 Graph 的 Spring AI Alibaba import。
+- 对照 AgentScope Harness 2.0.3 源码确认：统一工厂保留默认上下文溢出压缩与 Tool 结果淘汰，显式关闭文件系统、Shell、子 Agent、自学习 Memory Hook 等不符合当前金融业务边界的能力。
+- 运行时依赖解析确认 Reactor 为 3.7.13、Jackson 为 2.19.4、OpenTelemetry 为 1.49.x，低于 AgentScope 2.0.3 声明版本；单元测试通过，真实环境仍需专项验证。
+- 真实 DeepSeek Tool Calling、AG-UI 长连接和 local-db V20 迁移仍需在本机运行环境验收。

@@ -53,7 +53,8 @@ public class WorkflowSubAgentRouter {
                 taskContext.originalQuestion(),
                 false,
                 taskContext.task().taskId(),
-                taskContext.tokenStreamingEnabled());
+                taskContext.tokenStreamingEnabled(),
+                taskContext.identity());
         return switch (taskContext.task().agentType()) {
             case ProductAnalysisAgent.AGENT_NAME -> from(productAnalysisAgent.chat(
                     new ProductAnalysisChatRequest(query, taskContext.conversationId()), executionContext));

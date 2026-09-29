@@ -25,8 +25,8 @@ import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import com.xxx.insurance.product.model.ProductCandidate;
 import com.xxx.insurance.product.model.ConfirmedProduct;
 import com.xxx.insurance.product.model.ProductRecallResult;
+import com.xxx.insurance.common.security.RequestIdentity;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.UserMessage;
 
 import java.time.Instant;
 import java.math.BigDecimal;
@@ -43,17 +43,21 @@ class GraphCheckpointStateCodecTests {
     private final GraphCheckpointStateCodec codec = new GraphCheckpointStateCodec(serializer);
 
     @Test
-    void roundTripsSpringAiMessagesAndWorkflowRecords() {
+    void roundTripsWorkflowRecordsAndScalarState() {
+        RequestIdentity identity = new RequestIdentity(
+                "tenant-a", "user-a", "customer-a", "operator-a");
         Map<String, Object> state = Map.of(
-                "request", new MainWorkflowRequest("分析鑫享人生", "conversation-001"),
-                "messages", List.of(UserMessage.builder().text("分析鑫享人生").build()),
+                "request", new MainWorkflowRequest(
+                        "分析鑫享人生", "conversation-001", "request-001", identity),
+                "tokenStreamingEnabled", true,
                 "iteration", 3);
 
         GraphCheckpointStateCodec.EncodedState encoded = codec.encode(state);
         Map<String, Object> decoded = codec.decode(encoded.payload(), encoded.contentType());
 
         assertThat(decoded.get("request")).isEqualTo(state.get("request"));
-        assertThat((List<?>) decoded.get("messages")).singleElement().isInstanceOf(UserMessage.class);
+        assertThat(((MainWorkflowRequest) decoded.get("request")).identity()).isEqualTo(identity);
+        assertThat(decoded.get("tokenStreamingEnabled")).isEqualTo(true);
         assertThat(decoded.get("iteration")).isEqualTo(3);
     }
 

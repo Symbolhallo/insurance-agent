@@ -6,8 +6,8 @@ import com.xxx.insurance.product.model.ProductAnalysisResult;
 import com.xxx.insurance.product.service.ProductAnalysisService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
+import io.agentscope.core.tool.Tool;
+import io.agentscope.core.tool.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -16,11 +16,11 @@ import java.util.Objects;
 /**
  * 产品分析业务 Tool。
  *
- * <p>Tool 是 Agent 执行确定性业务动作的边界。ReactAgent 负责根据用户问题和 Skill
+ * <p>Tool 是 Agent 执行确定性业务动作的边界。AgentScope HarnessAgent 负责根据用户问题和 Skill
  * 说明提取结构化参数；本 Tool 只接收结构化参数并查询产品域 Service，不解析原始用户问题。</p>
  *
- * <p>当前实现仍然使用 MockProductAnalysisService，目的是验证 Spring AI Alibaba
- * ReactAgent -> ToolCallback -> Service -> Formatter 的链路。后续替换真实业务系统时，
+ * <p>当前实现仍然使用 MockProductAnalysisService，目的是验证 AgentScope
+ * HarnessAgent -> Toolkit -> Tool -> Service -> Formatter 的链路。后续替换真实业务系统时，
  * 优先替换 ProductAnalysisService 实现，而不是改动 Agent 编排。</p>
  */
 @Component
@@ -52,9 +52,9 @@ public class ProductAnalysisTool {
             name = TOOL_NAME,
             description = "根据产品编码、客户画像和分析维度查询保险产品Mock数据，并返回结构化产品分析结果。")
     public ProductAnalysisResult analyzeProducts(
-            @ToolParam(description = "产品编码列表，例如 PA-001、PA-002") List<String> productCodes,
-            @ToolParam(description = "客户画像或需求描述", required = false) String customerProfile,
-            @ToolParam(description = "分析维度列表，例如 coverage、risk、premium", required = false)
+            @ToolParam(name = "product_codes", description = "产品编码列表，例如 PA-001、PA-002") List<String> productCodes,
+            @ToolParam(name = "customer_profile", description = "客户画像或需求描述", required = false) String customerProfile,
+            @ToolParam(name = "analysis_dimensions", description = "分析维度列表，例如 coverage、risk、premium", required = false)
             List<String> analysisDimensions) {
         ProductAnalysisRequest request = new ProductAnalysisRequest(
                 normalizeProductCodes(productCodes),

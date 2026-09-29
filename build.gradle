@@ -16,6 +16,7 @@ java {
 ext {
     springAiVersion = '1.1.2'
     springAiAlibabaVersion = '1.1.2.0'
+    agentScopeVersion = '2.0.3'
     springdocOpenapiVersion = '2.8.17'
     lombokVersion = '1.18.38'
     mybatisSpringBootVersion = '3.0.5'
@@ -34,9 +35,13 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-web'
 
-    implementation 'org.springframework.ai:spring-ai-starter-model-openai'
-    implementation "com.alibaba.cloud.ai:spring-ai-alibaba-dashscope:${springAiAlibabaVersion}"
-    implementation "com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:${springAiAlibabaVersion}"
+    // AgentScope Java is the Agent/Model/Tool/Skill runtime. Graph Core remains temporarily as
+    // the compatibility runtime for the existing OceanBase checkpointed main workflow.
+    implementation "io.agentscope:agentscope-core:${agentScopeVersion}"
+    implementation "io.agentscope:agentscope-harness:${agentScopeVersion}"
+    implementation "io.agentscope:agentscope-extensions-model-openai:${agentScopeVersion}"
+    implementation "io.agentscope:agentscope-extensions-agui:${agentScopeVersion}"
+    implementation "com.alibaba.cloud.ai:spring-ai-alibaba-graph-core:${springAiAlibabaVersion}"
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocOpenapiVersion}"
     implementation "org.mybatis.spring.boot:mybatis-spring-boot-starter:${mybatisSpringBootVersion}"
     implementation 'org.flywaydb:flyway-core'

@@ -4,7 +4,7 @@
 
 This project is `insurance-agent`, a technical verification project for a future banking and financial agent platform.
 
-The current business goal is to build an insurance product management agent system based on Spring AI Alibaba.
+The current business goal is to build an insurance product management agent system with AgentScope Java as the Agent runtime and a temporary Spring AI Alibaba Graph Core compatibility layer.
 
 Final target capabilities:
 
@@ -32,8 +32,8 @@ Current phase:
 - Phase2-Task0 Memory / Workflow pre-design document is complete.
 - Phase2 confirmed local database is OceanBase/MySQL protocol through `127.0.0.1:2881`.
 - Phase2 allows plaintext model input/output in local database, uses mock identity fields, and keeps local memory permanently.
-- Phase2 Memory should follow Spring AI `ChatMemory` / `ChatMemoryRepository`; `AgentInvocation` is audit/observation, not the primary memory table.
-- ProductAnalysisAgent uses optional ChatMemory: default profile is stateless, local-db profile enables conversation history through `ReactAgent.call(List<Message>)`.
+- Phase2 short-term Memory uses AgentScope `Msg` with `MyBatisChatMemoryRepository`; `AgentInvocation` is audit/observation, not the primary memory table.
+- ProductAnalysisAgent uses the optional OceanBase message window directly as AgentScope messages before one HarnessAgent execution.
 - local-db profile writes successful ProductAnalysisAgent requests to both `ai_chat_memory` and `ai_long_term_memory`; long-term memory is append-only history.
 - The React workflow test page lists active `ai_conversation` records, loads persisted long-term messages on demand, and soft-deletes idle conversations by setting status `DELETED`; permanent Memory, invocation, and Workflow audit data must not be physically deleted by this UI operation.
 - `ai_chat_memory` and `ai_long_term_memory` must be written through `AgentMemoryService.saveSuccessfulExchange(...)` in one transaction.
@@ -43,15 +43,15 @@ Current phase:
 - `ProductReferenceResolutionNode` is the single source of truth for product clues and candidate recall routing. It may only load confirmed products from the current `conversationId`.
 - A first, fuzzy, or unresolved product reference enters candidate recall and persistent Human Confirm. A pure condition filter or a reference uniquely mapped to a product confirmed in the same conversation goes directly to context alignment.
 - `ContextAlignmentNode` runs only after product resolution and uses standardized product data to align history and rewrite the question.
-- `WorkflowPlannerAgent` is a dedicated Spring AI Alibaba `ReactAgent`; Planner v2 emits one or two whitelisted ProductAnalysisAgent/KnowledgeQAAgent tasks and only allows dependencies on earlier tasks.
+- `WorkflowPlannerAgent` is a dedicated AgentScope `HarnessAgent`; Planner emits a whitelisted task DAG and Java performs deterministic validation.
 - Phase2 OceanBase Graph Checkpoint foundation is complete: V4 creates thread/checkpoint tables, `OceanBaseCheckpointSaver` implements `BaseCheckpointSaver`, and Main Graph uses `workflowInstanceId` as threadId under the `local-db` profile.
 - Phase2 Mock product recall, retrieval audit, context-alignment recall decision, and V6 workflow definition are complete.
 - Phase2 Human Confirm, conversation-scoped confirmed products, Checkpoint update/resume API, and V7 workflow definition are complete.
 - Phase2 KnowledgeQAAgent, isolated knowledge Skill/Tool, two-intent routing, dynamic single-agent invocation, and V8 workflow definition are complete.
 - Phase2 dynamic DAG execution is complete: independent tasks run on a bounded executor, dependency failures skip successors, partial results are summarized, and V9 records the workflow definition.
-- DAG child agents write invocation audit only; Main Workflow writes one final user/assistant exchange to ChatMemory and long-term memory after aggregation.
+- DAG child agents write invocation audit only; Main Workflow writes one final user/assistant exchange to the short-term window and long-term memory after aggregation.
 - Phase2 output review is complete: the node calls one `OutputReviewGateway.review(...)` method and uses a Mock gateway until the line-of-business microservice contract is supplied.
-- Phase2 Summary Agent is complete: one successful task is passed through without a model call; multiple or mixed task results are synthesized by a dedicated tool-less ReactAgent. Main Graph runs `dag-executor -> summary -> output-review`, and V11 records the workflow definition.
+- Phase2 Summary Agent is complete: one successful task is passed through without a model call; multiple or mixed task results are synthesized by a dedicated tool-less HarnessAgent. Main Graph runs `dag-executor -> summary -> output-review`, and V11 records the workflow definition.
 - Only `OutputReviewResult.publishableAnswer` may become `finalAnswer`; invalid or failed review calls fail closed, and a BLOCK decision produces workflow status `REVIEW_BLOCKED`.
 - Phase2 stage-level Workflow SSE is complete: `POST /runs/stream` starts a background Graph, `GET /runs/{workflowInstanceId}/events` replays by `Last-Event-ID`, and OceanBase stores sanitized replay events for 10 minutes by default; a dedicated 30-second cleanup schedule physically deletes expired rows.
 - Phase2 live Agent streaming is complete: SSE runs publish `AGENT_MODEL_STREAMING` text immediately with `streamId`, `taskId`, `agentName`, and phase. Sub-agent and Summary streams are provisional; only the complete Summary is reviewed, and the `complete.finalAnswer` field is authoritative after PASS/REWRITE/BLOCK handling.
@@ -67,18 +67,25 @@ Current phase:
 - Every top-level request must provide a `requestId`. `(conversationId, requestId)` is unique, and `ai_conversation_workflow_lock` permits only one active top-level workflow per conversation. Startup performs conditional stale-lock cleanup before relying on the conversation primary key as the final multi-instance mutex.
 - After every architecture, workflow, persistence, API, package-structure, or business-capability optimization, update `docs/project-understanding-guide.md` in the same change so it remains the authoritative project map.
 - Spring AI Alibaba 1.1.2.0 may materialize nested final Record elements in generic lists as `LinkedHashMap` between Graph checkpoints. The Main Workflow checkpoint serializer explicitly normalizes and restores `IntentRoutingResult.routes` as `IntentRoute` objects; new nested State DTO lists require the same consecutive-checkpoint regression test.
-- All four domain agents invoke the shared real ChatModel. ProductAnalysisAgent, KnowledgeQAAgent, PolicyQueryAgent, and AssetQueryAgent each have isolated Skill registries and Tool callbacks.
-- All four domain ReactAgents use Spring AI Alibaba `ModelCallLimitHook`; the default per-run model call limit is 8 and counters remain isolated in each `RunnableConfig.context()`.
+- ProductAnalysisAgent, KnowledgeQAAgent, PolicyQueryAgent, AssetQueryAgent, Planner and Summary share the AgentScope `Model`. Each domain owns an isolated AgentScope `ClasspathSkillRepository` and Toolkit.
+- AgentScope `HarnessAgent.maxIters(...)` applies the configured per-run ReAct iteration limit, defaulting to 8.
 - Main Graph lifecycle observation uses Spring AI Alibaba `GraphLifecycleListener` for logs, duration and Stage SSE. `WorkflowNodeExecutionGuard` remains in the node call chain for step-state CAS, Lease/Fence rejection and output audit because listener exceptions are isolated by the framework.
-- Spring AI Alibaba 1.1.2.0 `streamMessages()` filters final model completion and Graph State. `ReactAgentStreamingExecutor` intentionally keeps one low-level `stream()` execution to publish tokens and extract the authoritative final AssistantMessage without executing tools twice.
+- `ReactAgentStreamingExecutor` consumes one AgentScope `streamEvents(...)` execution, publishes `TextBlockDeltaEvent` tokens and extracts the authoritative `AgentResultEvent` without executing tools twice.
+- Structured pre-workflow nodes use `AgentScopeModelExecutor` and `AgentScopeStructuredOutput`; business source code must not reintroduce Spring AI `ChatModel`, `Message`, `BeanOutputConverter`, or `ChatMemory` APIs.
+- Default/test profiles use `InMemoryAgentStateStore`; `local-db` uses `OceanBaseAgentStateStore` with CAS and an Agent-name session namespace. Workflow-internal Harness sessions are ephemeral and deleted after execution; AG-UI uses stable thread IDs.
+- `POST /api/v1/agui/agents/{agentId}/runs` is the AgentScope AG-UI endpoint for the four domain agents only. Planner and Summary are internal and must not be registered. AG-UI does not replace the reliable Main Graph SSE Outbox, poller, replay, or Last-Event-ID endpoints.
 - Graph `Store` does not replace append-only `ai_long_term_memory`, and official `MysqlSaver` does not replace `OceanBaseCheckpointSaver`; see `docs/spring-ai-alibaba/07-native-capability-adoption-report.md`.
-- PolicyQueryAgent and AssetQueryAgent currently query only `MOCK-CUSTOMER-001` through read-only Mock Tools, then use ReactAgent to format the Tool facts. They must never invent customer data. Production integration must inject customer identity and authorization through server-side context instead of model-generated Tool arguments.
+- PolicyQueryAgent and AssetQueryAgent currently query only `MOCK-CUSTOMER-001` through read-only Mock Tools, then use HarnessAgent to format the Tool facts. They must never invent customer data. Production integration must inject customer identity and authorization through server-side context instead of model-generated Tool arguments.
+- HTTP/SSE/AG-UI entry points consume `RequestIdentity` from trusted gateway headers. Local development may use configured defaults; production must set `IDENTITY_HEADERS_REQUIRED=true` and let the gateway strip and re-inject identity headers after authentication.
+- `ai_conversation` and `ai_workflow_instance` are tenant/user ownership roots. Controllers must authorize those roots before reading child Memory, Checkpoint, SSE, confirmation or audit data; ownership mismatches return 404 and must not disclose another tenant's resource.
+- Main Workflow Checkpoint State must preserve `MainWorkflowRequest.identity` across interrupt/resume. HTTP Controllers must always call `withIdentity(...)` so any client-provided body value is replaced by the trusted resolver result.
 
 ## Technology Baseline
 
 - Java 21
 - Spring Boot 3.5.8
 - Gradle
+- AgentScope Java 2.0.3
 - Spring AI 1.1.2
 - Spring AI Alibaba 1.1.2.0
 - Lombok
@@ -86,7 +93,8 @@ Current phase:
 Current model strategy:
 
 - Single-model mode.
-- A global `ChatModel` Bean is reused by upper layers.
+- A global AgentScope `Model` Bean is reused by all Harness agents and structured pre-workflow nodes.
+- Model properties use the project namespace `insurance.ai.model.*` and environment variables; there is no Spring AI ChatModel Bean.
 - API keys must be read from environment variables.
 - Never hard-code API keys.
 
@@ -172,6 +180,7 @@ common
 ├── config
 ├── exception
 ├── result
+├── security
 └── util
 ```
 
@@ -180,7 +189,7 @@ orchestration, `execution` owns dynamic DAG scheduling, `lifecycle` owns transac
 state transitions and Lease/Fence guards, and `sse` owns reliable event delivery. Do not
 move these responsibilities back into a generic service package.
 
-## Spring AI Alibaba Verified Classes
+## AgentScope And Graph References
 
 Before changing package ownership, workflow orchestration, database persistence, Memory,
 Checkpoint, SSE, or domain Agent assembly, read the project map first:
@@ -192,9 +201,8 @@ docs/project-understanding-guide.md
 It is the maintained index of directory responsibilities, important functions and Beans,
 database tables and relationships, runtime call chains, profiles, and file placement rules.
 
-For every task involving Spring AI Alibaba architecture, Agent Framework, Graph Core,
-ReactAgent, Tool, Skill, Hook, Interceptor, Memory, Checkpoint, streaming, or multi-agent
-APIs, first consult the project reference documents under:
+For every task involving the retained Spring AI Alibaba Graph Core, Memory, Checkpoint,
+streaming, or workflow APIs, first consult the project reference documents under:
 
 ```text
 docs/spring-ai-alibaba/
@@ -207,35 +215,43 @@ sources differ, the local dependency sources control compile-time decisions and 
 difference must be documented. Do not rely on memory or unverified rolling website
 examples for Spring AI Alibaba code.
 
-Do not guess imports for Spring AI Alibaba Agent or Skill classes. The following classes were verified from local Gradle cache for version `1.1.2.0`.
+Agent, Tool and Skill code now uses AgentScope Java 2.0.3. Verify exact APIs from locally resolved
+source jars before modifying them. Current primary types are:
 
 ```java
-com.alibaba.cloud.ai.graph.agent.ReactAgent
-com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook
-com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry
-com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry
-com.alibaba.cloud.ai.graph.skills.registry.filesystem.FileSystemSkillRegistry
+io.agentscope.harness.agent.HarnessAgent
+io.agentscope.core.model.Model
+io.agentscope.core.state.AgentStateStore
+io.agentscope.core.tool.Toolkit
+io.agentscope.core.skill.repository.ClasspathSkillRepository
+io.agentscope.extensions.model.openai.OpenAIChatModel
+io.agentscope.core.agui.adapter.AguiAgentAdapter
 ```
 
 Verified artifacts:
 
 ```text
-com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:1.1.2.0
+io.agentscope:agentscope-core:2.0.3
+io.agentscope:agentscope-harness:2.0.3
+io.agentscope:agentscope-extensions-model-openai:2.0.3
+io.agentscope:agentscope-extensions-agui:2.0.3
 com.alibaba.cloud.ai:spring-ai-alibaba-graph-core:1.1.2.0
 ```
 
-`spring-ai-alibaba-graph-core` is pulled transitively by `spring-ai-alibaba-agent-framework`.
+Graph Core is an explicit temporary dependency for the existing production workflow runtime.
 
 ## Current Dependency Direction
 
-The project should keep Spring AI base model support and Spring AI Alibaba agent support aligned.
+The project keeps AgentScope Agent support and the temporary Spring AI Alibaba Graph compatibility layer explicit.
 
 Expected dependency direction:
 
 ```gradle
-implementation 'org.springframework.ai:spring-ai-starter-model-openai'
-implementation "com.alibaba.cloud.ai:spring-ai-alibaba-dashscope:${springAiAlibabaVersion}"
-implementation "com.alibaba.cloud.ai:spring-ai-alibaba-agent-framework:${springAiAlibabaVersion}"
+implementation "io.agentscope:agentscope-core:${agentScopeVersion}"
+implementation "io.agentscope:agentscope-harness:${agentScopeVersion}"
+implementation "io.agentscope:agentscope-extensions-model-openai:${agentScopeVersion}"
+implementation "io.agentscope:agentscope-extensions-agui:${agentScopeVersion}"
+implementation "com.alibaba.cloud.ai:spring-ai-alibaba-graph-core:${springAiAlibabaVersion}"
 ```
 
 Avoid adding broad or experimental dependencies unless a task explicitly requires them.
@@ -253,7 +269,7 @@ Skill represents:
 - Usage rules
 - Financial compliance constraints
 
-Each `SKILL.md` must include YAML frontmatter required by Spring AI Alibaba's `SkillScanner`:
+Each `SKILL.md` keeps YAML frontmatter consumed by AgentScope's classpath skill repository:
 
 ```markdown
 ---
@@ -296,32 +312,28 @@ src/main/resources/skills/
 └── asset-query/
 ```
 
-Spring AI Alibaba Skill integration target:
+AgentScope Skill integration target:
 
 ```text
-ReactAgent
+HarnessAgent
 ↓
-SkillsAgentHook
-↓
-SkillRegistry
+AgentSkillRepository
 ↓
 SKILL.md
 ```
 
 ## ProductAnalysisAgent Direction
 
-`ProductAnalysisAgent` is the Phase1 target agent, but it must not be implemented during project initialization tasks.
+`ProductAnalysisAgent` is the completed Phase1 reference agent and the pattern for the other domain agents.
 
 Expected future structure:
 
 ```text
 ProductAnalysisAgent
 ↓
-ReactAgent
+HarnessAgent
 ↓
-SkillsAgentHook
-↓
-SkillRegistry
+AgentSkillRepository
 ↓
 ProductAnalysisTool
 ↓
@@ -389,11 +401,11 @@ Use these markers when implementing agent, skill, tool, or memory infrastructure
 
 ## Coding Rules
 
-Spring AI Alibaba integration code must include detailed comments explaining:
+AgentScope and retained Spring AI Alibaba Graph integration code must include detailed comments explaining:
 
 - Why the design is used
-- How Spring AI Alibaba calls are wired
-- How future ReactAgent, Skill, Tool, Memory, or Workflow layers will consume it
+- How AgentScope Agent calls or Spring AI Alibaba Graph calls are wired
+- How HarnessAgent, Skill, Tool, Memory, AG-UI, or Workflow layers consume it
 
 Every Spring `@Bean` factory method must have method-level JavaDoc explaining the Bean purpose,
 key dependencies, framework call relationship, and primary consumer. Every public business method
@@ -428,18 +440,14 @@ The current stage does not actively call a model during startup.
 
 ## Forbidden Unless Explicitly Requested
 
-Do not implement the following outside the task boundary:
+Do not change the following without an explicit task and equivalent regression coverage:
 
-- ProductAnalysisAgent
-- ReactAgent assembly
-- Tool Calling
-- Graph Workflow
-- Additional Planner capabilities beyond the validated two-task Planner v2
-- Policy and asset agents
-- Additional Human Confirm scenarios beyond product candidate confirmation
-- Vector Database
-- Custom agent framework that bypasses Spring AI Alibaba
-- Hard-coded API keys or secrets
+- Replace the retained Alibaba Graph runtime with Harness/AG-UI while losing Checkpoint, Human Confirm, dynamic DAG, Lease/Fence, or replay semantics
+- Expose Planner or Summary through the public AG-UI registry
+- Accept frontend-injected tools for financial domain agents
+- Move customer identity or authorization decisions into model-generated tool arguments
+- Add a vector database inside this service; retrieval remains an external microservice boundary
+- Hard-code API keys or secrets
 
 When a task belongs to a later phase, keep only placeholders or comments if needed.
 
@@ -458,4 +466,5 @@ Correct IDEA configuration:
 - Put `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` under Environment variables.
 - Use `local-db` for normal OceanBase runs and `local-debug` for long breakpoint sessions.
 - `local-debug` already includes `local-db` followed by `debug-timing`; do not list both.
+- Runtime configuration is maintained primarily in `application*.properties`. Retained `application*.yml` files are lower-priority migration references and must be synchronized when configuration values change.
 - Leave Active profiles empty for stateless single-Agent verification.

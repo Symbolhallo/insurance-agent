@@ -1,7 +1,8 @@
 package com.xxx.insurance.ai.workflow.service;
 
 import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
-import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeModelExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeStructuredOutput;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.ProductRecallDecision;
 import com.xxx.insurance.ai.workflow.model.ProductRecallTrigger;
@@ -9,12 +10,10 @@ import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolutionModelOutput;
 import com.xxx.insurance.product.model.ConfirmedProduct;
 import com.xxx.insurance.product.service.ConversationConfirmedProductService;
+import io.agentscope.core.message.SystemMessage;
+import io.agentscope.core.message.UserMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -69,21 +68,18 @@ public class ProductReferenceResolutionService {
             %s
             """;
 
-    private final ChatModel chatModel;
-
     private final ConversationConfirmedProductService confirmedProductService;
 
-    private final ChatModelStreamingExecutor streamingExecutor;
+    private final AgentScopeModelExecutor modelExecutor;
 
-    private final BeanOutputConverter<ProductReferenceResolutionModelOutput> outputConverter;
+    private final AgentScopeStructuredOutput structuredOutput;
 
-    public ProductReferenceResolutionService(ChatModel chatModel,
-                                             ConversationConfirmedProductService confirmedProductService,
-                                             ChatModelStreamingExecutor streamingExecutor) {
-        this.chatModel = chatModel;
+    public ProductReferenceResolutionService(ConversationConfirmedProductService confirmedProductService,
+                                             AgentScopeModelExecutor modelExecutor,
+                                             AgentScopeStructuredOutput structuredOutput) {
         this.confirmedProductService = confirmedProductService;
-        this.streamingExecutor = streamingExecutor;
-        this.outputConverter = new BeanOutputConverter<>(ProductReferenceResolutionModelOutput.class);
+        this.modelExecutor = modelExecutor;
+        this.structuredOutput = structuredOutput;
     }
 
     /**
@@ -102,12 +98,12 @@ public class ProductReferenceResolutionService {
                                               AgentTokenStreamContext streamContext) {
         List<ConfirmedProduct> confirmedProducts = confirmedProductService
                 .findConfirmedProducts(request.conversationId());
-        SystemMessage systemMessage = new SystemMessage(SYSTEM_PROMPT.formatted(outputConverter.getFormat()));
+        SystemMessage systemMessage = new SystemMessage(
+                SYSTEM_PROMPT.formatted(structuredOutput.schema(ProductReferenceResolutionModelOutput.class)));
         UserMessage userMessage = new UserMessage(buildUserPrompt(request.message(), confirmedProducts));
-        String modelOutput = streamContext == null
-                ? chatModel.call(systemMessage, userMessage)
-                : streamingExecutor.execute(chatModel, List.of(systemMessage, userMessage), streamContext);
-        ProductReferenceResolutionModelOutput output = outputConverter.convert(modelOutput);
+        String modelOutput = modelExecutor.execute(List.of(systemMessage, userMessage), streamContext);
+        ProductReferenceResolutionModelOutput output = structuredOutput.convert(
+                modelOutput, ProductReferenceResolutionModelOutput.class);
         validate(output, confirmedProducts);
 
         Map<String, ConfirmedProduct> productsByCode = confirmedProducts.stream()

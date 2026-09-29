@@ -1,6 +1,6 @@
 package com.xxx.insurance.ai.workflow.agent;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
@@ -20,7 +20,7 @@ import java.util.UUID;
  * 将多个子智能体结果合成为统一回答的 Summary Agent 业务门面。
  *
  * <p>单任务成功时直接透传，避免无意义的二次模型调用；存在多个任务结果时才调用独立
- * ReactAgent。该 Agent 不注册 Tool、Skill 或 Memory，只处理本次 DAG 已产生的结果。</p>
+ * HarnessAgent。该 Agent 不注册 Tool、Skill 或业务 Memory，只处理本次 DAG 已产生的结果。</p>
  */
 public class WorkflowSummaryAgent {
 
@@ -33,12 +33,12 @@ public class WorkflowSummaryAgent {
     private static final String ALL_TASKS_FAILED_ANSWER =
             "本次请求的子智能体任务均未成功完成，请稍后重试或联系人工支持。";
 
-    private final ReactAgent reactAgent;
+    private final HarnessAgent reactAgent;
 
     private final ReactAgentStreamingExecutor streamingExecutor;
 
-    /** 创建 Summary 业务门面并注入专属 ReactAgent。 */
-    public WorkflowSummaryAgent(ReactAgent reactAgent, ReactAgentStreamingExecutor streamingExecutor) {
+    /** 创建 Summary 业务门面并注入专属 HarnessAgent。 */
+    public WorkflowSummaryAgent(HarnessAgent reactAgent, ReactAgentStreamingExecutor streamingExecutor) {
         this.reactAgent = reactAgent;
         this.streamingExecutor = streamingExecutor;
     }
@@ -53,7 +53,7 @@ public class WorkflowSummaryAgent {
         return summarize(dagResult, false);
     }
 
-    /** 根据 SSE 执行模式选择 ReactAgent.call 或 ReactAgent.stream，业务汇总规则保持一致。 */
+    /** 根据 SSE 执行模式决定是否发布 AgentScope streamEvents 增量，业务汇总规则保持一致。 */
     public WorkflowSummaryResult summarize(DagExecutionResult dagResult, boolean tokenStreamingEnabled) {
         return summarize(dagResult, tokenStreamingEnabled, null, null, 0L);
     }
@@ -101,9 +101,8 @@ public class WorkflowSummaryAgent {
                             AGENT_NAME,
                             AgentTokenStreamContext.PHASE_SUMMARY)
                     : null;
-            String answer = tokenStreamingEnabled
-                    ? streamingExecutor.execute(reactAgent, input, streamContext).getText()
-                    : reactAgent.call(input).getText();
+            String answer = streamingExecutor.execute(
+                    reactAgent, input, tokenStreamingEnabled ? streamContext : null).getTextContent();
             if (!StringUtils.hasText(answer)) {
                 throw new IllegalStateException("Summary Agent returned blank answer");
             }
@@ -117,8 +116,8 @@ public class WorkflowSummaryAgent {
         }
     }
 
-    /** 返回底层 Summary ReactAgent，供装配验证和测试使用。 */
-    public ReactAgent reactAgent() {
+    /** 返回底层 Summary HarnessAgent，供装配验证和测试使用。 */
+    public HarnessAgent reactAgent() {
         return reactAgent;
     }
 

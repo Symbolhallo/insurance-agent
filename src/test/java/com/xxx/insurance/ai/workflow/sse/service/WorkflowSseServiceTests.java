@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.workflow.sse.service;
 
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
+import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseSubscription;
 import com.xxx.insurance.ai.workflow.service.MainWorkflowService;
 import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import org.junit.jupiter.api.Test;
@@ -30,10 +31,11 @@ class WorkflowSseServiceTests {
         when(eventService.subscribeNewRun("wfi-001")).thenReturn(emitter);
         ArgumentCaptor<Runnable> task = ArgumentCaptor.forClass(Runnable.class);
 
-        SseEmitter result = new WorkflowSseService(mainWorkflowService, eventService, taskExecutor)
+        WorkflowSseSubscription result = new WorkflowSseService(mainWorkflowService, eventService, taskExecutor)
                 .start(request);
 
-        assertThat(result).isSameAs(emitter);
+        assertThat(result.workflowInstanceId()).isEqualTo("wfi-001");
+        assertThat(result.emitter()).isSameAs(emitter);
         var ordered = inOrder(mainWorkflowService, eventService, taskExecutor);
         ordered.verify(mainWorkflowService).createWorkflowInstanceId();
         ordered.verify(eventService).subscribeNewRun("wfi-001");

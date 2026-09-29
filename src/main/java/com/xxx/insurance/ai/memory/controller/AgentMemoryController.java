@@ -8,6 +8,8 @@ import com.xxx.insurance.ai.memory.service.AgentMemoryQueryService;
 import com.xxx.insurance.ai.memory.service.ConversationManagementService;
 import com.xxx.insurance.ai.memory.service.ConversationSummaryService;
 import com.xxx.insurance.common.result.ApiResponse;
+import com.xxx.insurance.common.security.RequestIdentity;
+import com.xxx.insurance.common.security.ResourceAccessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -43,12 +45,16 @@ public class AgentMemoryController {
 
     private final ConversationManagementService conversationManagementService;
 
+    private final ResourceAccessService resourceAccessService;
+
     public AgentMemoryController(AgentMemoryQueryService agentMemoryQueryService,
                                  ConversationSummaryService conversationSummaryService,
-                                 ConversationManagementService conversationManagementService) {
+                                 ConversationManagementService conversationManagementService,
+                                 ResourceAccessService resourceAccessService) {
         this.agentMemoryQueryService = agentMemoryQueryService;
         this.conversationSummaryService = conversationSummaryService;
         this.conversationManagementService = conversationManagementService;
+        this.resourceAccessService = resourceAccessService;
     }
 
     /** 列出测试台可选择的有效历史会话；完整消息仍通过单会话快照接口按需加载。 */
@@ -61,8 +67,9 @@ public class AgentMemoryController {
             @RequestParam(defaultValue = "50")
             @Min(value = 1, message = "limit must be greater than or equal to 1")
             @Max(value = 100, message = "limit must be less than or equal to 100")
-            int limit) {
-        return ApiResponse.success(conversationManagementService.listConversations(limit));
+            int limit,
+            RequestIdentity identity) {
+        return ApiResponse.success(conversationManagementService.listConversations(identity, limit));
     }
 
     @Operation(
@@ -80,13 +87,15 @@ public class AgentMemoryController {
             @RequestParam(defaultValue = "50")
             @Min(value = 1, message = "limit must be greater than or equal to 1")
             @Max(value = 200, message = "limit must be less than or equal to 200")
-            int limit) {
+            int limit,
+            RequestIdentity identity) {
+        resourceAccessService.requireConversationAccess(identity, conversationId);
         return ApiResponse.success(agentMemoryQueryService.getConversationSnapshot(conversationId, limit));
     }
 
     @Operation(
             summary = "调用模型生成会话摘要",
-            description = "读取会话长期记忆，调用全局 ChatModel 生成结构化摘要，并保存到 ai_conversation_summary。")
+            description = "读取会话长期记忆，调用全局 AgentScope Model 生成结构化摘要，并保存到 ai_conversation_summary。")
     @PostMapping("/conversations/{conversationId}/summaries")
     public ApiResponse<ConversationSummaryResponse> summarizeConversation(
             @Parameter(description = "会话编号")
@@ -95,7 +104,9 @@ public class AgentMemoryController {
             @Size(max = 64, message = "conversationId length must be less than or equal to 64")
             String conversationId,
 
-            @Valid @RequestBody(required = false) ConversationSummaryRequest request) {
+            @Valid @RequestBody(required = false) ConversationSummaryRequest request,
+            RequestIdentity identity) {
+        resourceAccessService.requireConversationAccess(identity, conversationId);
         int maxMemories = request == null || request.maxMemories() == null ? 100 : request.maxMemories();
         return ApiResponse.success(conversationSummaryService.summarize(conversationId, maxMemories));
     }
@@ -113,7 +124,8 @@ public class AgentMemoryController {
             @PathVariable
             @NotBlank(message = "conversationId must not be blank")
             @Size(max = 64, message = "conversationId length must be less than or equal to 64")
-            String conversationId) {
-        return ApiResponse.success(conversationManagementService.archiveConversation(conversationId));
+            String conversationId,
+            RequestIdentity identity) {
+        return ApiResponse.success(conversationManagementService.archiveConversation(identity, conversationId));
     }
 }

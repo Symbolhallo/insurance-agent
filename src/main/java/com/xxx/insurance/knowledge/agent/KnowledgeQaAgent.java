@@ -1,7 +1,9 @@
 package com.xxx.insurance.knowledge.agent;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.UserMessage;
+import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
 import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
@@ -15,9 +17,6 @@ import com.xxx.insurance.knowledge.model.KnowledgeQaChatRequest;
 import com.xxx.insurance.knowledge.model.KnowledgeQaChatResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
@@ -29,7 +28,7 @@ import java.util.UUID;
 /**
  * 保险业务知识问答智能体业务入口。
  *
- * <p>业务层通过该类调用 Spring AI Alibaba ReactAgent，并复用现有 ChatMemory、长期记忆
+ * <p>业务层通过该类调用 AgentScope HarnessAgent，并复用现有 OceanBase 会话窗口、长期记忆
  * 和调用审计事务边界。知识检索由 Agent 内部的 Tool Calling 完成。</p>
  */
 public class KnowledgeQaAgent {
@@ -40,9 +39,7 @@ public class KnowledgeQaAgent {
 
     private static final Logger log = LoggerFactory.getLogger(KnowledgeQaAgent.class);
 
-    private final ReactAgent reactAgent;
-
-    private final SkillsAgentHook skillsAgentHook;
+    private final HarnessAgent reactAgent;
 
     private final AgentMemoryService agentMemoryService;
 
@@ -50,14 +47,12 @@ public class KnowledgeQaAgent {
 
     private final ReactAgentStreamingExecutor streamingExecutor;
 
-    /** 创建知识问答业务入口并组合 ReactAgent、Skill、Memory 和审计配置。 */
-    public KnowledgeQaAgent(ReactAgent reactAgent,
-                            SkillsAgentHook skillsAgentHook,
+    /** 创建知识问答业务入口并组合 HarnessAgent、Skill、Memory 和审计配置。 */
+    public KnowledgeQaAgent(HarnessAgent reactAgent,
                             AgentMemoryService agentMemoryService,
                             AiModelProperties aiModelProperties,
                             ReactAgentStreamingExecutor streamingExecutor) {
         this.reactAgent = reactAgent;
-        this.skillsAgentHook = skillsAgentHook;
         this.agentMemoryService = agentMemoryService;
         this.aiModelProperties = aiModelProperties;
         this.streamingExecutor = streamingExecutor;
@@ -70,7 +65,7 @@ public class KnowledgeQaAgent {
     }
 
     /**
-     * 执行完整知识问答链路：按上下文选择历史记忆和 call/stream，由 ReactAgent 渐进加载知识 Skill 并通过
+     * 执行完整知识问答链路：按上下文选择历史记忆和事件流，由 HarnessAgent 渐进加载知识 Skill 并通过
      * Tool 获取事实；成功时独立模式原子保存问答记忆，DAG 模式只写调用流水，失败时尽力写 FAILED 审计。
      * Workflow/step/task 和用户原话均从 executionContext 进入审计，模型仍使用标准化子问题推理。
      */
@@ -86,7 +81,7 @@ public class KnowledgeQaAgent {
                     AGENT_NAME, invocationId, request.conversationId(), memoryContext.enabled(),
                     memoryContext.historyMessageCount());
             AssistantMessage assistantMessage = callReactAgent(request, memoryContext, executionContext);
-            String answer = assistantMessage.getText();
+            String answer = assistantMessage.getTextContent();
             long durationMs = elapsedMillis(startNanos);
             Instant answeredAt = Instant.now();
             AgentInvocationRecord invocationRecord = invocationRecord(
@@ -98,7 +93,8 @@ public class KnowledgeQaAgent {
                         AGENT_NAME,
                         memoryContext.persistedUserMessage(),
                         assistantMessage,
-                        answeredAt), invocationRecord);
+                        answeredAt,
+                        executionContext.identity()), invocationRecord);
             }
             else if (agentMemoryService.isEnabled() && StringUtils.hasText(request.conversationId())) {
                 agentMemoryService.saveSuccessfulInvocation(invocationRecord);
@@ -126,24 +122,19 @@ public class KnowledgeQaAgent {
         }
     }
 
-    /** 返回 ReactAgent 注册名称。 */
+    /** 返回 HarnessAgent 注册名称。 */
     public String name() {
-        return reactAgent.name();
+        return reactAgent.getName();
     }
 
-    /** 返回 ReactAgent 能力描述。 */
+    /** 返回 HarnessAgent 能力描述。 */
     public String description() {
-        return reactAgent.description();
+        return reactAgent.getDescription();
     }
 
-    /** 返回底层 ReactAgent，供装配验证和测试使用。 */
-    public ReactAgent reactAgent() {
+    /** 返回底层 HarnessAgent，供装配验证和测试使用。 */
+    public HarnessAgent reactAgent() {
         return reactAgent;
-    }
-
-    /** 返回知识问答专属 Skill Hook，供 Skill 隔离验证使用。 */
-    public SkillsAgentHook skillsAgentHook() {
-        return skillsAgentHook;
     }
 
     /** 根据记忆与 Token 开关选择输入和 call/stream，并从同一次 ReAct/Tool 执行获得增量正文与最终回答。 */
@@ -159,9 +150,9 @@ public class KnowledgeQaAgent {
             return streamingExecutor.execute(reactAgent, memoryContext.requestMessages(), streamContext);
         }
         if (!memoryContext.enabled()) {
-            return reactAgent.call(request.message());
+            return streamingExecutor.execute(reactAgent, request.message());
         }
-        return reactAgent.call(memoryContext.requestMessages());
+        return streamingExecutor.execute(reactAgent, memoryContext.requestMessages());
     }
 
     /** 将编排上下文收敛为前端可识别的知识 Agent Token 流标识。 */
@@ -187,8 +178,8 @@ public class KnowledgeQaAgent {
                 || !StringUtils.hasText(request.conversationId())) {
             return MemoryCallContext.disabled();
         }
-        List<Message> history = agentMemoryService.getHistory(request.conversationId());
-        List<Message> requestMessages = new ArrayList<>(history);
+        List<Msg> history = agentMemoryService.getHistory(request.conversationId());
+        List<Msg> requestMessages = new ArrayList<>(history);
         requestMessages.add(new UserMessage(request.message()));
         return new MemoryCallContext(
                 true,
@@ -249,15 +240,16 @@ public class KnowledgeQaAgent {
         return new AgentInvocationRecord(
                 invocationId,
                 request.conversationId(),
+                executionContext.identity().tenantId(),
                 AGENT_NAME,
                 TraceIdUtil.currentTraceId(),
                 executionContext.workflowInstanceId(),
                 executionContext.workflowStepId(),
                 "openai-compatible",
                 modelName(),
-                "mock-user",
-                "mock-customer",
-                "mock-operator",
+                executionContext.identity().userId(),
+                executionContext.identity().customerId(),
+                executionContext.identity().operatorId(),
                 executionContext.auditedUserMessage(request.message()),
                 answer,
                 durationMs,
@@ -272,10 +264,7 @@ public class KnowledgeQaAgent {
 
     /** 从全局模型配置读取当前模型名称。 */
     private String modelName() {
-        if (aiModelProperties.getChat() == null || aiModelProperties.getChat().getOptions() == null) {
-            return null;
-        }
-        return aiModelProperties.getChat().getOptions().getModel();
+        return aiModelProperties.getModelName();
     }
 
     /** 将异常消息截断到审计字段允许的长度。 */
@@ -300,7 +289,7 @@ public class KnowledgeQaAgent {
             boolean enabled,
             String conversationId,
             UserMessage persistedUserMessage,
-            List<Message> requestMessages,
+            List<Msg> requestMessages,
             int historyMessageCount) {
 
         /** 创建不携带历史消息的调用上下文。 */

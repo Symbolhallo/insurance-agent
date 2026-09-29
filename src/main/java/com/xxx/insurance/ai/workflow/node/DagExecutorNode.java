@@ -7,6 +7,8 @@ import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
 import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
 import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
+import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
+import com.xxx.insurance.common.security.RequestIdentity;
 import com.xxx.insurance.ai.workflow.model.WorkflowNodeDefinition;
 import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
 import com.xxx.insurance.ai.workflow.execution.WorkflowDagExecutor;
@@ -54,6 +56,9 @@ public class DagExecutorNode implements NodeAction {
         boolean tokenStreamingEnabled = state
                 .value(MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, Boolean.class)
                 .orElse(false);
+        MainWorkflowRequest request = state
+                .value(MainWorkflowStateKeys.REQUEST, MainWorkflowRequest.class)
+                .orElseThrow(() -> new IllegalStateException("Missing original request in graph state"));
 
         // 主工作流链路 14：执行 Planner DAG；任一任务完成即释放后继，失败只影响其依赖分支。
         DagExecutionResult result = workflowDagExecutor.execute(
@@ -63,7 +68,10 @@ public class DagExecutorNode implements NodeAction {
                 workflowInstanceId,
                 executionFenceToken,
                 workflowStepId,
-                tokenStreamingEnabled);
+                tokenStreamingEnabled,
+                request.identity() == null
+                        ? RequestIdentity.localDefault()
+                        : request.identity());
         return Map.of(MainWorkflowStateKeys.DAG_EXECUTION_RESULT, result);
     }
 }

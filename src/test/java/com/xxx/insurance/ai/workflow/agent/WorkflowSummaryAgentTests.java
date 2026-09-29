@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.workflow.agent;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
@@ -10,7 +11,6 @@ import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.ai.chat.messages.AssistantMessage;
 
 import java.time.Instant;
 import java.util.List;
@@ -27,7 +27,7 @@ class WorkflowSummaryAgentTests {
 
     @Test
     void passesThroughSingleSuccessfulTaskWithoutCallingModel() throws Exception {
-        ReactAgent reactAgent = mock(ReactAgent.class);
+        HarnessAgent reactAgent = mock(HarnessAgent.class);
         WorkflowSummaryAgent agent = new WorkflowSummaryAgent(reactAgent, mock(ReactAgentStreamingExecutor.class));
 
         WorkflowSummaryResult result = agent.summarize(dagResult(List.of(successTask("task-1", 1, "回答一"))));
@@ -41,9 +41,11 @@ class WorkflowSummaryAgentTests {
 
     @Test
     void invokesModelWhenMultipleTaskResultsNeedSynthesis() throws Exception {
-        ReactAgent reactAgent = mock(ReactAgent.class);
-        when(reactAgent.call(anyString())).thenReturn(AssistantMessage.builder().content("统一汇总回答").build());
-        WorkflowSummaryAgent agent = new WorkflowSummaryAgent(reactAgent, mock(ReactAgentStreamingExecutor.class));
+        HarnessAgent reactAgent = mock(HarnessAgent.class);
+        ReactAgentStreamingExecutor executor = mock(ReactAgentStreamingExecutor.class);
+        when(executor.execute(eq(reactAgent), anyString(), org.mockito.ArgumentMatchers.isNull()))
+                .thenReturn(new AssistantMessage("统一汇总回答"));
+        WorkflowSummaryAgent agent = new WorkflowSummaryAgent(reactAgent, executor);
 
         WorkflowSummaryResult result = agent.summarize(dagResult(List.of(
                 successTask("task-1", 1, "产品分析回答"),
@@ -53,16 +55,16 @@ class WorkflowSummaryAgentTests {
         assertThat(result.sourceTaskCount()).isEqualTo(2);
         assertThat(result.successfulTaskCount()).isEqualTo(2);
         assertThat(result.answer()).isEqualTo("统一汇总回答");
-        verify(reactAgent).call(anyString());
+        verify(executor).execute(eq(reactAgent), anyString(), org.mockito.ArgumentMatchers.isNull());
     }
 
     @Test
     void usesStreamingExecutorForMultiTaskSseRun() throws Exception {
-        ReactAgent reactAgent = mock(ReactAgent.class);
+        HarnessAgent reactAgent = mock(HarnessAgent.class);
         ReactAgentStreamingExecutor streamingExecutor = mock(ReactAgentStreamingExecutor.class);
         when(streamingExecutor.execute(
                 eq(reactAgent), anyString(), org.mockito.ArgumentMatchers.any(AgentTokenStreamContext.class)))
-                .thenReturn(AssistantMessage.builder().content("流式执行后的完整汇总").build());
+                .thenReturn(new AssistantMessage("流式执行后的完整汇总"));
         WorkflowSummaryAgent agent = new WorkflowSummaryAgent(reactAgent, streamingExecutor);
 
         WorkflowSummaryResult result = agent.summarize(dagResult(List.of(
@@ -81,7 +83,7 @@ class WorkflowSummaryAgentTests {
 
     @Test
     void returnsDeterministicMessageWhenAllTasksFailed() throws Exception {
-        ReactAgent reactAgent = mock(ReactAgent.class);
+        HarnessAgent reactAgent = mock(HarnessAgent.class);
         AgentTaskExecutionResult failed = new AgentTaskExecutionResult(
                 "task-1", 1, "knowledge-qa-agent", AgentTaskStatus.FAILED, null,
                 "AGENT_FAILED", "调用失败", instant(0), instant(1), 100);
@@ -98,8 +100,10 @@ class WorkflowSummaryAgentTests {
 
     @Test
     void summaryInputDisclosesSuccessfulFailedAndSkippedTasks() throws Exception {
-        ReactAgent reactAgent = mock(ReactAgent.class);
-        when(reactAgent.call(anyString())).thenReturn(AssistantMessage.builder().content("部分成功汇总").build());
+        HarnessAgent reactAgent = mock(HarnessAgent.class);
+        ReactAgentStreamingExecutor executor = mock(ReactAgentStreamingExecutor.class);
+        when(executor.execute(eq(reactAgent), anyString(), org.mockito.ArgumentMatchers.isNull()))
+                .thenReturn(new AssistantMessage("部分成功汇总"));
         Instant now = instant(1);
         AgentTaskExecutionResult failed = new AgentTaskExecutionResult(
                 "task-2", 2, "policy-query-agent", AgentTaskStatus.FAILED, null,
@@ -109,11 +113,11 @@ class WorkflowSummaryAgentTests {
                 "DEPENDENCY_FAILED", "上游失败", now, now, 0, 0);
 
         WorkflowSummaryResult result = new WorkflowSummaryAgent(
-                reactAgent, mock(ReactAgentStreamingExecutor.class))
+                reactAgent, executor)
                 .summarize(dagResult(List.of(successTask("task-1", 1, "产品回答"), failed, skipped)));
 
         ArgumentCaptor<String> input = ArgumentCaptor.forClass(String.class);
-        verify(reactAgent).call(input.capture());
+        verify(executor).execute(eq(reactAgent), input.capture(), org.mockito.ArgumentMatchers.isNull());
         assertThat(input.getValue())
                 .contains("task-1", "SUCCESS", "产品回答")
                 .contains("task-2", "FAILED", "保单服务不可用")

@@ -1,6 +1,8 @@
 package com.xxx.insurance.ai.workflow.service;
 
-import com.xxx.insurance.ai.agent.ChatModelStreamingExecutor;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xxx.insurance.ai.agent.AgentScopeModelExecutor;
+import com.xxx.insurance.ai.agent.AgentScopeStructuredOutput;
 import com.xxx.insurance.ai.memory.model.ChatMemoryMessageView;
 import com.xxx.insurance.ai.memory.model.ConversationMemorySnapshot;
 import com.xxx.insurance.ai.memory.service.AgentMemoryQueryService;
@@ -12,9 +14,6 @@ import com.xxx.insurance.ai.workflow.model.ProductRecallTrigger;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
 import com.xxx.insurance.product.model.ConfirmedProduct;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
 
 import java.time.Instant;
 import java.util.List;
@@ -28,8 +27,8 @@ class ContextAlignmentServiceTests {
 
     @Test
     void rewritesCurrentQuestionWithConversationMemory() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.call(any(SystemMessage.class), any(UserMessage.class))).thenReturn("""
+        AgentScopeModelExecutor modelExecutor = mock(AgentScopeModelExecutor.class);
+        when(modelExecutor.execute(any(), any())).thenReturn("""
                 {
                   "topicRelation": "CONTINUE",
                   "rewrittenQuestion": "请分析鑫享人生的收益情况",
@@ -57,7 +56,7 @@ class ContextAlignmentServiceTests {
                 List.of(),
                 List.of());
         ContextAlignmentService service = new ContextAlignmentService(
-                chatModel, memoryQueryService, mock(ChatModelStreamingExecutor.class));
+                memoryQueryService, modelExecutor, structuredOutput());
 
         MainWorkflowRequest request = new MainWorkflowRequest("它收益怎么样？", "conversation-001");
         ConfirmedProduct confirmedProduct = confirmedProduct("conversation-001", "PA-001", "鑫享人生");
@@ -85,8 +84,8 @@ class ContextAlignmentServiceTests {
 
     @Test
     void requestsRecallForFirstExplicitProductWithoutHistory() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.call(any(SystemMessage.class), any(UserMessage.class))).thenReturn("""
+        AgentScopeModelExecutor modelExecutor = mock(AgentScopeModelExecutor.class);
+        when(modelExecutor.execute(any(), any())).thenReturn("""
                 {
                   "topicRelation": "NO_HISTORY",
                   "rewrittenQuestion": "盛世典藏产品特点分析",
@@ -100,7 +99,7 @@ class ContextAlignmentServiceTests {
                 new ConversationMemorySnapshot(false, conversationId, null,
                         List.of(), List.of(), List.of(), List.of());
         ContextAlignmentService service = new ContextAlignmentService(
-                chatModel, memoryQueryService, mock(ChatModelStreamingExecutor.class));
+                memoryQueryService, modelExecutor, structuredOutput());
 
         MainWorkflowRequest request = new MainWorkflowRequest("盛世典藏怎么样？", "conversation-002");
         AlignedWorkflowContext result = service.align(request, new ProductReferenceResolution(
@@ -120,8 +119,8 @@ class ContextAlignmentServiceTests {
 
     @Test
     void skipsCandidateRecallForConditionOnlyProductSearch() {
-        ChatModel chatModel = mock(ChatModel.class);
-        when(chatModel.call(any(SystemMessage.class), any(UserMessage.class))).thenReturn("""
+        AgentScopeModelExecutor modelExecutor = mock(AgentScopeModelExecutor.class);
+        when(modelExecutor.execute(any(), any())).thenReturn("""
                 {
                   "topicRelation": "NO_HISTORY",
                   "rewrittenQuestion": "35岁男性 年交50万元 分红险筛选",
@@ -137,7 +136,7 @@ class ContextAlignmentServiceTests {
                 new ConversationMemorySnapshot(false, conversationId, null,
                         List.of(), List.of(), List.of(), List.of());
         ContextAlignmentService service = new ContextAlignmentService(
-                chatModel, memoryQueryService, mock(ChatModelStreamingExecutor.class));
+                memoryQueryService, modelExecutor, structuredOutput());
 
         MainWorkflowRequest request = new MainWorkflowRequest(
                 "35岁男性，年交50万，找收益高的分红险", "conversation-003");
@@ -165,5 +164,9 @@ class ContextAlignmentServiceTests {
                 "recall-001",
                 "workflow-001",
                 Instant.parse("2026-08-07T00:00:00Z"));
+    }
+
+    private AgentScopeStructuredOutput structuredOutput() {
+        return new AgentScopeStructuredOutput(new ObjectMapper());
     }
 }

@@ -1,6 +1,9 @@
 package com.xxx.insurance.knowledge.controller;
 
 import com.xxx.insurance.common.result.ApiResponse;
+import com.xxx.insurance.common.security.RequestIdentity;
+import com.xxx.insurance.common.security.ResourceAccessService;
+import com.xxx.insurance.ai.agent.AgentExecutionContext;
 import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
 import com.xxx.insurance.knowledge.model.KnowledgeQaChatRequest;
 import com.xxx.insurance.knowledge.model.KnowledgeQaChatResponse;
@@ -19,15 +22,22 @@ public class KnowledgeQaAgentController {
 
     private final KnowledgeQaAgent knowledgeQaAgent;
 
-    public KnowledgeQaAgentController(KnowledgeQaAgent knowledgeQaAgent) {
+    private final ResourceAccessService resourceAccessService;
+
+    public KnowledgeQaAgentController(KnowledgeQaAgent knowledgeQaAgent,
+                                      ResourceAccessService resourceAccessService) {
         this.knowledgeQaAgent = knowledgeQaAgent;
+        this.resourceAccessService = resourceAccessService;
     }
 
     @Operation(
             summary = "调用保险业务知识问答智能体",
-            description = "触发 KnowledgeQAAgent 的 ReactAgent 和 insurance_knowledge_search Tool Calling 闭环。")
+            description = "触发 KnowledgeQAAgent 的 AgentScope HarnessAgent 和 insurance_knowledge_search Tool Calling 闭环。")
     @PostMapping("/chat")
-    public ApiResponse<KnowledgeQaChatResponse> chat(@Valid @RequestBody KnowledgeQaChatRequest request) {
-        return ApiResponse.success(knowledgeQaAgent.chat(request));
+    public ApiResponse<KnowledgeQaChatResponse> chat(@Valid @RequestBody KnowledgeQaChatRequest request,
+                                                     RequestIdentity identity) {
+        resourceAccessService.claimConversation(identity, request.conversationId());
+        return ApiResponse.success(knowledgeQaAgent.chat(
+                request, AgentExecutionContext.standalone(request.message(), identity)));
     }
 }

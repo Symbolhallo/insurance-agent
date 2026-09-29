@@ -5,6 +5,8 @@ import com.xxx.insurance.ai.workflow.model.MainWorkflowResponse;
 import com.xxx.insurance.ai.workflow.model.WorkflowResumeRequest;
 import com.xxx.insurance.ai.workflow.service.MainWorkflowService;
 import com.xxx.insurance.common.result.ApiResponse;
+import com.xxx.insurance.common.security.RequestIdentity;
+import com.xxx.insurance.common.security.ResourceAccessService;
 import com.xxx.insurance.product.model.ProductConfirmationRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,9 +27,13 @@ public class MainWorkflowController {
 
     private final MainWorkflowService mainWorkflowService;
 
+    private final ResourceAccessService resourceAccessService;
+
     /** 创建同步工作流 Controller；业务状态机、Graph 和持久化均由 MainWorkflowService 统一处理。 */
-    public MainWorkflowController(MainWorkflowService mainWorkflowService) {
+    public MainWorkflowController(MainWorkflowService mainWorkflowService,
+                                  ResourceAccessService resourceAccessService) {
         this.mainWorkflowService = mainWorkflowService;
+        this.resourceAccessService = resourceAccessService;
     }
 
     /**
@@ -38,9 +44,10 @@ public class MainWorkflowController {
             summary = "运行 Main Graph v1",
             description = "先解析当前会话产品线索；需要召回时返回候选并等待确认，否则执行上下文对齐、意图识别、子智能体、总结和输出审核节点。")
     @PostMapping("/runs")
-    public ApiResponse<MainWorkflowResponse> run(@Valid @RequestBody MainWorkflowRequest request) {
+    public ApiResponse<MainWorkflowResponse> run(@Valid @RequestBody MainWorkflowRequest request,
+                                                 RequestIdentity identity) {
         // 同步兼容入口：复用同一 Main Graph，但不启用 SSE Token 流。
-        return ApiResponse.success(mainWorkflowService.run(request));
+        return ApiResponse.success(mainWorkflowService.run(request.withIdentity(identity)));
     }
 
     /**
@@ -53,7 +60,9 @@ public class MainWorkflowController {
     @PostMapping("/runs/{workflowInstanceId}/product-confirmations")
     public ApiResponse<MainWorkflowResponse> confirmProducts(
             @PathVariable String workflowInstanceId,
-            @Valid @RequestBody ProductConfirmationRequest request) {
+            @Valid @RequestBody ProductConfirmationRequest request,
+            RequestIdentity identity) {
+        resourceAccessService.requireWorkflowAccess(identity, workflowInstanceId);
         return ApiResponse.success(mainWorkflowService.confirmProducts(workflowInstanceId, request));
     }
 
@@ -67,7 +76,9 @@ public class MainWorkflowController {
     @PostMapping("/runs/{workflowInstanceId}/resume")
     public ApiResponse<MainWorkflowResponse> resume(
             @PathVariable String workflowInstanceId,
-            @Valid @RequestBody WorkflowResumeRequest request) {
+            @Valid @RequestBody WorkflowResumeRequest request,
+            RequestIdentity identity) {
+        resourceAccessService.requireWorkflowAccess(identity, workflowInstanceId);
         return ApiResponse.success(mainWorkflowService.resume(workflowInstanceId, request));
     }
 }

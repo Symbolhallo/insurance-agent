@@ -1,136 +1,48 @@
 package com.xxx.insurance.product.config;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
-import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
-import com.xxx.insurance.ai.config.AiModelProperties;
+import com.xxx.insurance.ai.agent.AgentScopeAgentFactory;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
-import com.xxx.insurance.ai.config.AgentSafetyConfig;
+import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.config.SkillConfig;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
+import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
-import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.service.ProductAnalysisService;
 import com.xxx.insurance.product.tool.ProductAnalysisTool;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.support.ToolCallbacks;
-import org.springframework.ai.tool.ToolCallback;
+import io.agentscope.core.skill.repository.AgentSkillRepository;
+import io.agentscope.harness.agent.HarnessAgent;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Arrays;
-import java.util.List;
-
-/**
- * 产品分析智能体装配配置。
- *
- * <p>使用全局 {@link ChatModel}、产品专属 {@link SkillsAgentHook}、ModelCallLimitHook 和
- * ProductAnalysisToolCallback 装配 {@link ReactAgent}，再通过业务门面接入 Memory、流式输出和审计。</p>
- *
- * <p>产品域装配边界：</p>
- *
- * <ul>
- *     <li>只注册产品分析 ToolCallback；</li>
- *     <li>local-db profile 下接入 Spring AI ChatMemory 与 OceanBase 审计；</li>
- *     <li>既支持独立 API，也作为 Main Workflow 动态 DAG 子智能体；</li>
- *     <li>模型调用次数由 Spring AI Alibaba 原生 Hook 限制。</li>
- * </ul>
- *
- */
+/** 使用 AgentScope 装配产品分析 HarnessAgent 与业务门面。 */
 @Configuration
 public class ProductAnalysisAgentConfig {
 
     public static final String PRODUCT_ANALYSIS_REACT_AGENT = "productAnalysisReactAgent";
-
     public static final String PRODUCT_ANALYSIS_AGENT = "productAnalysisAgent";
 
-    private static final String PRODUCT_ANALYSIS_AGENT_INSTRUCTION = """
+    private static final String INSTRUCTION = """
             你是金融保险产品分析智能体，负责围绕保险产品条款、保障责任、适用客群和风险提示进行结构化分析。
-
-            当前阶段你只能在已加载的产品分析 Skill 边界内回答问题。
-            Skill 的名称、描述、适用场景和详细规则由 Spring AI Alibaba SkillsAgentHook 渐进式注入，
-            不要依赖本系统提示中的硬编码 Skill 清单。
-
-            合规要求：
-            - 不承诺收益；
-            - 不替代人工投顾、核保、法务或合规审查；
-            - 对缺失信息明确说明，不编造产品条款；
-            - 输出时区分事实、推断和建议。
-
-            如果需要分析具体产品，必须优先使用可用的产品分析工具获取产品数据，再基于工具结果回答。
+            当前阶段只能在 AgentScope 渐进加载的产品分析 Skill 边界内回答问题。
+            不承诺收益，不替代人工投顾、核保、法务或合规审查；缺失信息必须明确说明。
+            分析具体产品前必须调用 product_analysis 获取确定性产品数据，并区分事实、推断和建议。
             """;
 
-    /**
-     * 将产品分析业务 Tool 转换为 Spring AI ToolCallback。
-     *
-     * <p>这里使用 Spring AI 的 @Tool 注解与 ToolCallbacks.from(...) 生成 ToolCallback，
-     * 再交给 ReactAgent Builder。ReactAgent 会把 ToolCallback 暴露给模型，并由
-     * Agent Framework 统一处理工具调用和工具结果回填。</p>
-     *
-     * @param productAnalysisTool 产品分析业务 Tool
-     * @return 产品分析 ToolCallback 列表
-     */
-    @Bean
-    public List<ToolCallback> productAnalysisToolCallbacks(ProductAnalysisTool productAnalysisTool) {
-        return Arrays.asList(ToolCallbacks.from(productAnalysisTool));
-    }
-
-    /**
-     * 装配产品分析 ReactAgent。
-     *
-     * <p>ReactAgent 是 Spring AI Alibaba Agent Framework 中的推理执行单元。
-     * 它会使用 ChatModel 完成模型调用，并通过 hooks 接收 Skill、Memory、Human
-     * Confirm 等扩展能力。本阶段注入 SkillsAgentHook 与产品分析 ToolCallback，让模型
-     * 能够读取产品分析 Skill，并在需要确定性产品数据时调用 product_analysis 工具。</p>
-     *
-     * <p>只允许产品分析 Tool，不接入保单查询、资产查询、知识库检索等其他业务 Tool，
-     * 避免 ProductAnalysisAgent 越过自身业务边界。</p>
-     *
-     * @param chatModel 全局复用的单模型 ChatModel Bean
-     * @param skillsAgentHook 产品分析智能体专属 Skill Hook
-     * @param productAnalysisToolCallbacks 产品分析业务 ToolCallback 列表
-     * @return 产品分析智能体底层 ReactAgent
-     */
+    /** 创建只装载产品 Skill 与 product_analysis Tool 的 AgentScope HarnessAgent。 */
     @Bean(PRODUCT_ANALYSIS_REACT_AGENT)
-    public ReactAgent productAnalysisReactAgent(
-            ChatModel chatModel,
-            @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
-            @Qualifier(AgentSafetyConfig.DOMAIN_AGENT_MODEL_CALL_LIMIT_HOOK)
-            ModelCallLimitHook modelCallLimitHook,
-            @Qualifier("productAnalysisToolCallbacks") List<ToolCallback> productAnalysisToolCallbacks) {
-        return ReactAgent.builder()
-                .name(ProductAnalysisAgent.AGENT_NAME)
-                .description(ProductAnalysisAgent.AGENT_DESCRIPTION)
-                .model(chatModel)
-                .instruction(PRODUCT_ANALYSIS_AGENT_INSTRUCTION)
-                .hooks(skillsAgentHook, modelCallLimitHook)
-                .tools(productAnalysisToolCallbacks)
-                .enableLogging(true)
-                .build();
+    public HarnessAgent productAnalysisReactAgent(
+            AgentScopeAgentFactory factory,
+            @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILL_REPOSITORY) AgentSkillRepository skills,
+            ProductAnalysisTool tool) {
+        return factory.create(ProductAnalysisAgent.AGENT_NAME, ProductAnalysisAgent.AGENT_DESCRIPTION,
+                INSTRUCTION, skills, tool);
     }
 
-    /**
-     * 创建业务侧产品分析智能体入口。
-     *
-     * <p>该 Bean 让 product 业务域不直接暴露 ReactAgent 细节，并组合确定性 Service/Formatter、
-     * 输出合同检查、Memory、审计和流式执行。未来升级为 Agent -> Model Router -> 多模型选择时，
-     * 或者把该边界包装成 ProductAnalysisTool，都可以优先在业务入口中演进。</p>
-     *
-     * @param reactAgent 产品分析 ReactAgent
-     * @param skillsAgentHook 产品分析 Skill Hook
-     * @param productAnalysisService 产品分析业务数据服务
-     * @param productAnalysisFormatter 产品分析输出格式转换器
-     * @param productAnalysisAnswerInspector 产品分析模型回答检查器
-     * @param agentMemoryService Agent 记忆协调服务
-     * @param aiModelProperties 当前 ChatModel 配置，用于写入 Agent 调用审计
-     * @return 产品分析业务智能体
-     */
     @Bean(PRODUCT_ANALYSIS_AGENT)
     public ProductAnalysisAgent productAnalysisAgent(
-            @Qualifier(PRODUCT_ANALYSIS_REACT_AGENT) ReactAgent reactAgent,
-            @Qualifier(SkillConfig.PRODUCT_ANALYSIS_SKILLS_AGENT_HOOK) SkillsAgentHook skillsAgentHook,
+            @Qualifier(PRODUCT_ANALYSIS_REACT_AGENT) HarnessAgent reactAgent,
             ProductAnalysisService productAnalysisService,
             ProductAnalysisFormatter productAnalysisFormatter,
             ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
@@ -138,13 +50,7 @@ public class ProductAnalysisAgentConfig {
             AiModelProperties aiModelProperties,
             ReactAgentStreamingExecutor streamingExecutor) {
         return new ProductAnalysisAgent(
-                reactAgent,
-                skillsAgentHook,
-                productAnalysisService,
-                productAnalysisFormatter,
-                productAnalysisAnswerInspector,
-                agentMemoryService,
-                aiModelProperties,
-                streamingExecutor);
+                reactAgent, productAnalysisService, productAnalysisFormatter,
+                productAnalysisAnswerInspector, agentMemoryService, aiModelProperties, streamingExecutor);
     }
 }

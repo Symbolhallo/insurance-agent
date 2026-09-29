@@ -1,13 +1,13 @@
 package com.xxx.insurance.ai.agent;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.ai.chat.messages.AssistantMessage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -21,13 +21,14 @@ class AuditedReactAgentExecutorTests {
 
     @Test
     void invokesRealReactAgentAndSavesSuccessfulAudit() throws Exception {
-        ReactAgent reactAgent = mock(ReactAgent.class);
+        HarnessAgent reactAgent = mock(HarnessAgent.class);
         AgentMemoryService memoryService = mock(AgentMemoryService.class);
         when(memoryService.isEnabled()).thenReturn(true);
-        when(reactAgent.call("查询有效保单"))
-                .thenReturn(AssistantMessage.builder().content("基于保单Tool生成的回答").build());
+        ReactAgentStreamingExecutor streamingExecutor = mock(ReactAgentStreamingExecutor.class);
+        when(streamingExecutor.execute(reactAgent, "查询有效保单", null))
+                .thenReturn(new AssistantMessage("基于保单Tool生成的回答"));
         AuditedReactAgentExecutor executor = new AuditedReactAgentExecutor(
-                memoryService, modelProperties(), mock(ReactAgentStreamingExecutor.class));
+                memoryService, modelProperties(), streamingExecutor);
 
         SubAgentExecutionResult result = executor.execute(
                 reactAgent,
@@ -49,11 +50,11 @@ class AuditedReactAgentExecutorTests {
 
     @Test
     void usesStreamingExecutorWithTaskIdentityForSseRun() throws Exception {
-        ReactAgent reactAgent = mock(ReactAgent.class);
+        HarnessAgent reactAgent = mock(HarnessAgent.class);
         ReactAgentStreamingExecutor streamingExecutor = mock(ReactAgentStreamingExecutor.class);
         when(streamingExecutor.execute(
                 eq(reactAgent), eq("查询资产余额"), any(AgentTokenStreamContext.class)))
-                .thenReturn(AssistantMessage.builder().content("基于资产Tool生成的回答").build());
+                .thenReturn(new AssistantMessage("基于资产Tool生成的回答"));
         AuditedReactAgentExecutor executor = new AuditedReactAgentExecutor(
                 mock(AgentMemoryService.class), modelProperties(), streamingExecutor);
 
@@ -72,12 +73,11 @@ class AuditedReactAgentExecutorTests {
                                 && "task-2".equals(context.taskId())
                                 && "asset-query-agent".equals(context.agentName())
                                 && "SUB_AGENT".equals(context.phase())));
-        verify(reactAgent, never()).call(any(String.class));
     }
 
     private AiModelProperties modelProperties() {
         AiModelProperties properties = new AiModelProperties();
-        properties.getChat().getOptions().setModel("deepseek-chat");
+        properties.setModelName("deepseek-chat");
         return properties;
     }
 }

@@ -25,29 +25,6 @@ spring:
   lifecycle:
     # 优雅停机每个阶段最多等待30秒，超时后 Spring 继续关闭应用上下文。
     timeout-per-shutdown-phase: 30s
-  ai:
-    # 使用 Spring AI OpenAI-compatible 协议连接模型服务；DeepSeek、DashScope兼容模式均可复用。
-    openai:
-      # 模型密钥从环境变量读取；Spring AI 自动配置要求启动时必须提供非空 AI_API_KEY。
-      api-key: ${AI_API_KEY:}
-      # 模型服务基础地址；未配置时使用 DashScope OpenAI 兼容地址。
-      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
-      chat:
-        options:
-          # 对话模型名称，可通过 AI_MODEL 切换，例如 deepseek-chat 或 qwen-plus。
-          model: ${AI_MODEL:qwen-plus}
-          # 采样温度；当前0.2偏向稳定、可复现的金融业务回答，而非高随机创作。
-          temperature: ${AI_TEMPERATURE:0.2}
-    # 显式指定只启用 OpenAI-compatible ChatModel，关闭当前阶段未使用的模型能力，
-    # 避免引入对应自动配置、凭据校验和无关 Bean。
-    model:
-      chat: openai
-      embedding: none
-      image: none
-      moderation: none
-      audio:
-        speech: none
-        transcription: none
 
 # Spring Boot Actuator 运维端点配置。
 management:
@@ -88,10 +65,31 @@ logging:
     # 当前项目代码默认记录 INFO 及以上日志；本地排障可临时改为 DEBUG。
     com.xxx.insurance: INFO
 
-# 项目级 ReactAgent 运行保护；使用 Spring AI Alibaba 1.1.2.0 原生 Hook 实施。
+# AgentScope 模型、AG-UI 和 HarnessAgent 运行配置。
 insurance:
+  # 可信网关身份配置。本地默认允许回退值；生产部署必须把 IDENTITY_HEADERS_REQUIRED 设为 true。
+  security:
+    identity:
+      require-headers: ${IDENTITY_HEADERS_REQUIRED:false}
+      default-tenant-id: ${DEFAULT_TENANT_ID:local-tenant}
+      default-user-id: ${DEFAULT_USER_ID:mock-user}
+      default-customer-id: ${DEFAULT_CUSTOMER_ID:MOCK-CUSTOMER-001}
+      default-operator-id: ${DEFAULT_OPERATOR_ID:mock-operator}
   ai:
+    # AgentScope OpenAI-compatible Model 配置；DeepSeek、DashScope兼容模式均可复用。
+    model:
+      # 模型密钥从环境变量读取，禁止在配置文件或代码中提交真实密钥。
+      api-key: ${AI_API_KEY:}
+      # 模型服务基础地址；AgentScope 会自动拼接 /v1/chat/completions。
+      base-url: ${AI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode}
+      # 对话模型名称，可通过 AI_MODEL 切换，例如 deepseek-chat 或 qwen-plus。
+      model-name: ${AI_MODEL:qwen-plus}
+      # 采样温度；0.2偏向稳定、可复现的金融业务回答。
+      temperature: ${AI_TEMPERATURE:0.2}
+    agui:
+      # 领域 Agent AG-UI SSE 单次最长运行10分钟；该入口不提供 Main Graph 事件重放。
+      run-timeout: 10m
     agent:
       safety:
-        # 单次领域 Agent 最多调用模型8次；正常一次 Tool 循环通常只需2次。
-        model-call-limit: 8
+        # 单次领域 HarnessAgent 最多执行8轮 ReAct；正常一次 Tool 循环通常只需2轮。
+        max-iterations: 8

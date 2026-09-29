@@ -1,7 +1,9 @@
 package com.xxx.insurance.product.agent;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
+import io.agentscope.core.message.AssistantMessage;
+import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.UserMessage;
+import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
 import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
@@ -21,9 +23,6 @@ import com.xxx.insurance.product.model.ProductAnalysisResult;
 import com.xxx.insurance.product.service.ProductAnalysisService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
@@ -35,16 +34,16 @@ import java.util.UUID;
 /**
  * 产品分析业务智能体入口。
  *
- * <p>该类把“产品分析智能体”业务概念与 Spring AI Alibaba {@link ReactAgent} 绑定，
+ * <p>该类把“产品分析智能体”业务概念与 AgentScope {@link HarnessAgent} 绑定，
  * 对外隐藏 Skill、Tool、流式执行、Memory 和调用审计细节。这样做有两个原因：</p>
  *
  * <ul>
- *     <li>业务代码只依赖 ProductAnalysisAgent，不直接散落使用 ReactAgent；</li>
+ *     <li>业务代码只依赖 ProductAnalysisAgent，不直接散落使用 HarnessAgent；</li>
  *     <li>Tool、Memory、Formatter 或未来 Model Router 演进时，可以保持业务入口稳定。</li>
  * </ul>
  *
  * <p>当前同时提供两个边界：确定性分析入口用于直接验证 Mock Service/Formatter；自然语言入口执行
- * ReactAgent、渐进式 Skill、产品 Tool Calling、可选会话记忆、逐 Token 输出和成功/失败审计，并可被
+ * HarnessAgent、渐进式 Skill、产品 Tool Calling、可选会话记忆、逐 Token 输出和成功/失败审计，并可被
  * Main Workflow 动态 DAG 作为产品子智能体调用。</p>
  */
 public class ProductAnalysisAgent {
@@ -55,9 +54,7 @@ public class ProductAnalysisAgent {
 
     private static final Logger log = LoggerFactory.getLogger(ProductAnalysisAgent.class);
 
-    private final ReactAgent reactAgent;
-
-    private final SkillsAgentHook skillsAgentHook;
+    private final HarnessAgent reactAgent;
 
     private final ProductAnalysisService productAnalysisService;
 
@@ -71,9 +68,8 @@ public class ProductAnalysisAgent {
 
     private final ReactAgentStreamingExecutor streamingExecutor;
 
-    /** 创建产品分析业务入口并组合 ReactAgent、Skill、Tool、Formatter、Memory 和审计能力。 */
-    public ProductAnalysisAgent(ReactAgent reactAgent,
-                                SkillsAgentHook skillsAgentHook,
+    /** 创建产品分析业务入口并组合 HarnessAgent、Skill、Tool、Formatter、Memory 和审计能力。 */
+    public ProductAnalysisAgent(HarnessAgent reactAgent,
                                 ProductAnalysisService productAnalysisService,
                                 ProductAnalysisFormatter productAnalysisFormatter,
                                 ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
@@ -81,7 +77,6 @@ public class ProductAnalysisAgent {
                                 AiModelProperties aiModelProperties,
                                 ReactAgentStreamingExecutor streamingExecutor) {
         this.reactAgent = reactAgent;
-        this.skillsAgentHook = skillsAgentHook;
         this.productAnalysisService = productAnalysisService;
         this.productAnalysisFormatter = productAnalysisFormatter;
         this.productAnalysisAnswerInspector = productAnalysisAnswerInspector;
@@ -90,21 +85,21 @@ public class ProductAnalysisAgent {
         this.streamingExecutor = streamingExecutor;
     }
 
-    /** 返回 ReactAgent 注册名称。 */
+    /** 返回 HarnessAgent 注册名称。 */
     public String name() {
-        return reactAgent.name();
+        return reactAgent.getName();
     }
 
-    /** 返回 ReactAgent 能力描述。 */
+    /** 返回 HarnessAgent 能力描述。 */
     public String description() {
-        return reactAgent.description();
+        return reactAgent.getDescription();
     }
 
     /**
      * 受控产品分析入口。
      *
      * <p>该方法只执行确定性 Mock 数据查询和格式化，不调用模型；同一 ProductAnalysisService 与
-     * Formatter 已由 ProductAnalysisTool 复用，供 ReactAgent 在需要产品事实时通过 Tool Calling 获取。</p>
+     * Formatter 已由 ProductAnalysisTool 复用，供 HarnessAgent 在需要产品事实时通过 Tool Calling 获取。</p>
      */
     public ProductAnalysisResult analyze(ProductAnalysisRequest request) {
         validateRequest(request);
@@ -114,12 +109,11 @@ public class ProductAnalysisAgent {
     /**
      * 受控模型调用入口。
      *
-     * <p>这是独立单 Agent HTTP 调用边界。调用该方法会触发
-     * {@link ReactAgent#call(String)}，ReactAgent 会根据 Skill 上下文决定是否读取
-     * SKILL.md，并在需要产品数据时调用 product_analysis Tool。</p>
+     * <p>这是独立单 Agent HTTP 调用边界。调用该方法会触发 AgentScope ReAct 循环；Agent 会根据
+     * Skill 上下文决定是否读取 SKILL.md，并在需要产品数据时调用 product_analysis Tool。</p>
      *
      * <p>当应用启用 local-db profile 并创建 MyBatis/OceanBase AgentMemoryService 实现时，该方法会使用
-     * conversationId 读取历史消息，并通过 {@link ReactAgent#call(List)} 携带上下文调用模型。
+     * conversationId 读取历史消息，转换为 AgentScope Message 后携带上下文调用模型。
      * 成功调用后，窗口记忆与长期记忆会在同一个事务内写入。默认 profile 下使用 no-op
      * 记忆服务，仍保持无记忆单轮调用。</p>
      */
@@ -151,7 +145,7 @@ public class ProductAnalysisAgent {
                     memoryCallContext.historyMessageCount());
             AssistantMessage assistantMessage = callReactAgent(request, memoryCallContext, executionContext);
             long durationMs = elapsedMillis(startNanos);
-            String answer = assistantMessage.getText();
+            String answer = assistantMessage.getTextContent();
             Instant answeredAt = Instant.now();
             ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect(answer);
             AgentInvocationRecord invocationRecord = successInvocationRecord(
@@ -162,7 +156,7 @@ public class ProductAnalysisAgent {
                     durationMs,
                     inspection,
                     answeredAt);
-            saveMemory(memoryCallContext, invocationRecord, assistantMessage, answeredAt);
+            saveMemory(memoryCallContext, invocationRecord, assistantMessage, answeredAt, executionContext);
             log.info("[Agent] name={} action=chat status=success invocationId={} conversationId={} durationMs={} answerLength={} memoryEnabled={} outputFormatValid={}",
                     AGENT_NAME,
                     invocationId,
@@ -199,23 +193,13 @@ public class ProductAnalysisAgent {
     }
 
     /**
-     * 返回底层 Spring AI Alibaba ReactAgent。
+     * 返回底层 AgentScope HarnessAgent。
      *
      * <p>该方法主要给后续 Workflow 或测试使用。普通业务层优先通过 ProductAnalysisAgent
      * 暴露的业务方法交互，避免未来替换 Agent 编排方式时扩大改造范围。</p>
      */
-    public ReactAgent reactAgent() {
+    public HarnessAgent reactAgent() {
         return reactAgent;
-    }
-
-    /**
-     * 返回当前智能体绑定的 Skill Hook。
-     *
-     * <p>该访问点用于装配测试和 Skill 隔离验证；实际 Skill 渐进式加载与 Tool Calling 由底层
-     * ReactAgent 在 chat 执行期间完成。</p>
-     */
-    public SkillsAgentHook skillsAgentHook() {
-        return skillsAgentHook;
     }
 
     /** 校验确定性产品分析请求至少包含一个产品编码。 */
@@ -246,10 +230,10 @@ public class ProductAnalysisAgent {
                 || !StringUtils.hasText(request.conversationId())) {
             return MemoryCallContext.disabled();
         }
-        List<Message> historyMessages = agentMemoryService.getHistory(request.conversationId());
+        List<Msg> historyMessages = agentMemoryService.getHistory(request.conversationId());
         UserMessage modelUserMessage = new UserMessage(request.message());
         UserMessage persistedUserMessage = new UserMessage(executionContext.auditedUserMessage(request.message()));
-        List<Message> requestMessages = new ArrayList<>(historyMessages);
+        List<Msg> requestMessages = new ArrayList<>(historyMessages);
         requestMessages.add(modelUserMessage);
         return new MemoryCallContext(
                 true,
@@ -276,9 +260,9 @@ public class ProductAnalysisAgent {
             return streamingExecutor.execute(reactAgent, memoryCallContext.requestMessages(), streamContext);
         }
         if (!memoryCallContext.memoryEnabled()) {
-            return reactAgent.call(request.message());
+            return streamingExecutor.execute(reactAgent, request.message());
         }
-        return reactAgent.call(memoryCallContext.requestMessages());
+        return streamingExecutor.execute(reactAgent, memoryCallContext.requestMessages());
     }
 
     /** 将编排上下文收敛为前端可识别的产品 Agent Token 流标识。 */
@@ -303,7 +287,8 @@ public class ProductAnalysisAgent {
     private void saveMemory(MemoryCallContext memoryCallContext,
                             AgentInvocationRecord invocationRecord,
                             AssistantMessage assistantMessage,
-                            Instant answeredAt) {
+                            Instant answeredAt,
+                            AgentExecutionContext executionContext) {
         if (!memoryCallContext.memoryEnabled()) {
             if (agentMemoryService.isEnabled() && StringUtils.hasText(invocationRecord.conversationId())) {
                 agentMemoryService.saveSuccessfulInvocation(invocationRecord);
@@ -316,7 +301,8 @@ public class ProductAnalysisAgent {
                 AGENT_NAME,
                 memoryCallContext.userMessage(),
                 assistantMessage,
-                answeredAt), invocationRecord);
+                answeredAt,
+                executionContext.identity()), invocationRecord);
     }
 
     /** 尝试保存失败调用审计，持久化异常不会覆盖原始模型异常。 */
@@ -356,15 +342,16 @@ public class ProductAnalysisAgent {
         return new AgentInvocationRecord(
                 invocationId,
                 request.conversationId(),
+                executionContext.identity().tenantId(),
                 AGENT_NAME,
                 TraceIdUtil.currentTraceId(),
                 executionContext.workflowInstanceId(),
                 executionContext.workflowStepId(),
                 "openai-compatible",
                 modelName(),
-                "mock-user",
-                "mock-customer",
-                "mock-operator",
+                executionContext.identity().userId(),
+                executionContext.identity().customerId(),
+                executionContext.identity().operatorId(),
                 executionContext.auditedUserMessage(request.message()),
                 answer,
                 durationMs,
@@ -386,15 +373,16 @@ public class ProductAnalysisAgent {
         return new AgentInvocationRecord(
                 invocationId,
                 request.conversationId(),
+                executionContext.identity().tenantId(),
                 AGENT_NAME,
                 TraceIdUtil.currentTraceId(),
                 executionContext.workflowInstanceId(),
                 executionContext.workflowStepId(),
                 "openai-compatible",
                 modelName(),
-                "mock-user",
-                "mock-customer",
-                "mock-operator",
+                executionContext.identity().userId(),
+                executionContext.identity().customerId(),
+                executionContext.identity().operatorId(),
                 executionContext.auditedUserMessage(request.message()),
                 null,
                 durationMs,
@@ -409,10 +397,7 @@ public class ProductAnalysisAgent {
 
     /** 从全局模型配置读取当前模型名称。 */
     private String modelName() {
-        if (aiModelProperties.getChat() == null || aiModelProperties.getChat().getOptions() == null) {
-            return null;
-        }
-        return aiModelProperties.getChat().getOptions().getModel();
+        return aiModelProperties.getModelName();
     }
 
     /** 将异常消息截断到审计字段允许的长度。 */
@@ -446,7 +431,7 @@ public class ProductAnalysisAgent {
             boolean memoryEnabled,
             String conversationId,
             UserMessage userMessage,
-            List<Message> requestMessages,
+            List<Msg> requestMessages,
             int historyMessageCount) {
 
         /** 创建不携带历史消息的调用上下文。 */

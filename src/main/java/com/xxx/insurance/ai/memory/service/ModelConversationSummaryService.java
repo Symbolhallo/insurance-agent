@@ -6,11 +6,11 @@ import com.xxx.insurance.ai.memory.model.AgentConversationRecord;
 import com.xxx.insurance.ai.memory.model.ConversationSummaryRecord;
 import com.xxx.insurance.ai.memory.model.ConversationSummaryResponse;
 import com.xxx.insurance.ai.memory.model.LongTermMemoryView;
+import com.xxx.insurance.ai.agent.AgentScopeModelExecutor;
+import io.agentscope.core.message.SystemMessage;
+import io.agentscope.core.message.UserMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -24,9 +24,9 @@ import java.util.UUID;
  *
  * <p>本服务只在 {@code local-db} profile 下启用。摘要素材来自长期记忆表
  * `ai_long_term_memory`，而不是窗口记忆表 `ai_chat_memory`。这样即使窗口记忆被
- * {@code MessageWindowChatMemory} 裁剪，也可以基于永久历史生成摘要。</p>
+     * 业务窗口容量策略裁剪，也可以基于永久历史生成摘要。</p>
  *
- * <p>摘要生成使用全局 {@link ChatModel} Bean，保持当前单模型模式。后续升级为
+ * <p>摘要生成使用全局 AgentScope Model，保持当前单模型模式。后续升级为
  * Model Router 后，本服务可改为依赖 Router，由 Router 根据摘要任务选择低成本模型。</p>
  */
 @Service
@@ -56,16 +56,16 @@ public class ModelConversationSummaryService implements ConversationSummaryServi
               ## 待补充信息
             """;
 
-    private final ChatModel chatModel;
+    private final AgentScopeModelExecutor modelExecutor;
 
     private final AgentMemoryQueryMapper agentMemoryQueryMapper;
 
     private final ConversationSummaryMapper conversationSummaryMapper;
 
-    public ModelConversationSummaryService(ChatModel chatModel,
+    public ModelConversationSummaryService(AgentScopeModelExecutor modelExecutor,
                                            AgentMemoryQueryMapper agentMemoryQueryMapper,
                                            ConversationSummaryMapper conversationSummaryMapper) {
-        this.chatModel = chatModel;
+        this.modelExecutor = modelExecutor;
         this.agentMemoryQueryMapper = agentMemoryQueryMapper;
         this.conversationSummaryMapper = conversationSummaryMapper;
     }
@@ -90,9 +90,9 @@ public class ModelConversationSummaryService implements ConversationSummaryServi
                 conversationId,
                 summaryId,
                 memories.size());
-        String summary = chatModel.call(
+        String summary = modelExecutor.execute(List.of(
                 new SystemMessage(SUMMARY_SYSTEM_PROMPT),
-                new UserMessage(buildUserPrompt(conversationId, memories)));
+                new UserMessage(buildUserPrompt(conversationId, memories))), null);
         if (!StringUtils.hasText(summary)) {
             throw new IllegalStateException("Conversation summary model returned blank content");
         }

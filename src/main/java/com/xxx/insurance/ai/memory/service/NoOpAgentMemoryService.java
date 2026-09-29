@@ -2,7 +2,7 @@ package com.xxx.insurance.ai.memory.service;
 
 import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
 import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
-import org.springframework.ai.chat.messages.Message;
+import io.agentscope.core.message.Msg;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
@@ -23,7 +23,7 @@ public class NoOpAgentMemoryService implements AgentMemoryService {
 
     /** 默认 profile 返回空历史，保持单轮无状态调用。 */
     @Override
-    public List<Message> getHistory(String conversationId) {
+    public List<Msg> getHistory(String conversationId) {
         return List.of();
     }
 

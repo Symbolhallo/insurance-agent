@@ -4,6 +4,7 @@ import com.xxx.insurance.ai.memory.mapper.ConversationManagementMapper;
 import com.xxx.insurance.ai.memory.model.ConversationListItem;
 import com.xxx.insurance.common.exception.BusinessException;
 import com.xxx.insurance.common.exception.ErrorCode;
+import com.xxx.insurance.common.security.RequestIdentity;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,9 +30,9 @@ public class MyBatisConversationManagementService implements ConversationManagem
 
     /** 对列表条数执行服务端上限保护后，按最近更新时间返回有效会话。 */
     @Override
-    public List<ConversationListItem> listConversations(int limit) {
+    public List<ConversationListItem> listConversations(RequestIdentity identity, int limit) {
         int queryLimit = limit <= 0 ? DEFAULT_LIMIT : Math.min(limit, MAX_LIMIT);
-        return List.copyOf(conversationManagementMapper.findActiveConversations(queryLimit));
+        return List.copyOf(conversationManagementMapper.findActiveConversations(identity, queryLimit));
     }
 
     /**
@@ -40,12 +41,12 @@ public class MyBatisConversationManagementService implements ConversationManagem
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public boolean archiveConversation(String conversationId) {
+    public boolean archiveConversation(RequestIdentity identity, String conversationId) {
         Instant now = Instant.now();
-        if (conversationManagementMapper.archiveConversation(conversationId, now) == 1) {
+        if (conversationManagementMapper.archiveConversation(identity, conversationId, now) == 1) {
             return true;
         }
-        if (conversationManagementMapper.countActiveUsage(conversationId, now) > 0) {
+        if (conversationManagementMapper.countActiveUsage(identity, conversationId, now) > 0) {
             throw new BusinessException(
                     ErrorCode.WORKFLOW_STATE_CONFLICT,
                     "conversation is still owned by an active workflow");

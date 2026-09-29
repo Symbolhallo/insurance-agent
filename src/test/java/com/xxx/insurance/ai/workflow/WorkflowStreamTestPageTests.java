@@ -17,7 +17,10 @@ class WorkflowStreamTestPageTests {
         String script = resource("static/workflow-test/assets/app.js");
         String styles = resource("static/workflow-test/assets/styles.css");
         String source = source("frontend/workflow-test/src/App.jsx");
+        String workflowProgress = source("frontend/workflow-test/src/WorkflowProgress.jsx");
         String packageJson = source("frontend/workflow-test/package.json");
+        String resourceConfig = source(
+                "src/main/java/com/xxx/insurance/common/config/WorkflowTestResourceConfig.java");
 
         assertThat(html)
                 .contains("保险智能体工作流测试台")
@@ -28,19 +31,25 @@ class WorkflowStreamTestPageTests {
         assertThat(script)
                 .contains("/api/v1/workflows/main")
                 .contains("/runs/stream")
+                .contains("/events")
                 .contains("/product-confirmations/stream")
                 .contains("/api/v1/ai/memory")
+                .contains("X-Workflow-Instance-Id")
                 .contains("Last-Event-ID")
+                .contains("sessionStorage")
                 .contains("streamId")
                 .contains("chunkIndex");
         assertThat(source)
                 .contains("function App()")
                 .contains("function useAutoFollow(changeToken)")
                 .contains("response.body")
-                .contains("requestAnimationFrame(scrollToLatest)")
-                .contains("onWheel: pauseForUser")
-                .contains("onPointerDown: pauseForUser")
-                .contains("onTouchStart: pauseForUser")
+                .contains("pendingFrameRef.current = requestAnimationFrame")
+                .contains("onWheel: handleWheel")
+                .contains("event.deltaY < 0")
+                .contains("onTouchMove: handleTouchMove")
+                .contains("currentY > startY + 4")
+                .contains("followingRef.current = false")
+                .contains("cancelAnimationFrame(pendingFrameRef.current)")
                 .contains("distanceFromBottom <= 12")
                 .contains("aria-label=\"恢复自动跟随\"")
                 .contains("function ConversationSidebar(")
@@ -51,13 +60,34 @@ class WorkflowStreamTestPageTests {
                 .contains("method: \"DELETE\"")
                 .contains("toHistoryMessages(snapshot)")
                 .contains("limit=200")
+                .contains("ReactMarkdown")
+                .contains("remarkGfm")
+                .contains("function MarkdownContent(")
+                .contains("stream.finished")
+                .contains("stream-markdown")
+                .contains("WORKFLOW_STATUS_WAITING_CONFIRM")
+                .contains("readActiveWorkflow")
+                .contains("updateActiveWorkflow")
+                .contains("abortableDelay")
+                .contains("MAX_RECONNECT_ATTEMPTS")
                 .contains("id=\"queryForm\"")
                 .contains("id=\"confirmForm\"")
                 .doesNotContain("innerHTML", "dangerouslySetInnerHTML", "eval(", "window.confirm");
+        assertThat(workflowProgress)
+                .contains("visibleNodeCodes")
+                .contains("stages.forEach(event => appendNode(event.node))")
+                .contains("streams.forEach(stream => appendNode(PHASE_NODES.get(stream.phase)))")
+                .doesNotContain("NODES.map");
         assertThat(packageJson)
                 .contains("\"react\": \"18.3.1\"")
                 .contains("\"vite\": \"6.4.3\"")
+                .contains("\"react-markdown\"")
+                .contains("\"remark-gfm\"")
                 .contains("\"lucide-react\"");
+        assertThat(resourceConfig)
+                .contains("/workflow-test/**")
+                .contains("classpath:/static/workflow-test/")
+                .contains("CacheControl.noStore()");
         assertThat(styles)
                 .contains("@media(max-width:680px)")
                 .contains("overflow-wrap:anywhere")

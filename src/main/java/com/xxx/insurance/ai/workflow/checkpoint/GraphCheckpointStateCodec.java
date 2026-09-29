@@ -9,9 +9,10 @@ import java.util.Objects;
 /**
  * Graph State 二进制编解码边界。
  *
- * <p>必须复用 Spring AI Alibaba 的 StateSerializer，而不是直接调用普通
- * ObjectMapper。框架 Serializer 已注册 Spring AI Message、Document 和 Graph 输出
- * 类型，能够保证 Checkpoint 恢复后的 State 类型与节点读取合同一致。</p>
+ * <p>必须复用 Spring AI Alibaba Graph 的 StateSerializer，而不是直接调用普通
+ * ObjectMapper。主图状态只保存工作流 DTO、标量和集合；AgentScope 消息由业务窗口和
+ * AgentStateStore 管理，不复制进 Graph Checkpoint。专用 Serializer 确保恢复后的业务 DTO
+ * 类型仍符合节点读取合同。</p>
  */
 public class GraphCheckpointStateCodec {
 

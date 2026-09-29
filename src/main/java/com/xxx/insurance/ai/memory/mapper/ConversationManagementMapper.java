@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.memory.mapper;
 
 import com.xxx.insurance.ai.memory.model.ConversationListItem;
+import com.xxx.insurance.common.security.RequestIdentity;
 import org.apache.ibatis.annotations.Arg;
 import org.apache.ibatis.annotations.ConstructorArgs;
 import org.apache.ibatis.annotations.Mapper;
@@ -36,6 +37,9 @@ public interface ConversationManagementMapper {
                 group by conversation_id
             ) m on m.conversation_id = c.conversation_id
             where c.status <> 'DELETED'
+              and c.tenant_id = #{identity.tenantId}
+              and c.user_id = #{identity.userId}
+              and coalesce(m.message_count, 0) > 0
             order by c.updated_at desc, c.conversation_id asc
             limit #{limit}
             """)
@@ -46,7 +50,8 @@ public interface ConversationManagementMapper {
             @Arg(column = "message_count", javaType = long.class),
             @Arg(column = "updated_at", javaType = Instant.class)
     })
-    List<ConversationListItem> findActiveConversations(@Param("limit") int limit);
+    List<ConversationListItem> findActiveConversations(@Param("identity") RequestIdentity identity,
+                                                       @Param("limit") int limit);
 
     /**
      * 将不再被活跃工作流占用的会话标记为已删除。SQL 同时校验实例状态与有效 conversation lock，
@@ -57,6 +62,8 @@ public interface ConversationManagementMapper {
             set status = 'DELETED',
                 updated_at = #{deletedAt}
             where conversation_id = #{conversationId}
+              and tenant_id = #{identity.tenantId}
+              and user_id = #{identity.userId}
               and status <> 'DELETED'
               and not exists (
                   select 1
@@ -71,7 +78,8 @@ public interface ConversationManagementMapper {
                     and l.lease_until > #{deletedAt}
               )
             """)
-    int archiveConversation(@Param("conversationId") String conversationId,
+    int archiveConversation(@Param("identity") RequestIdentity identity,
+                            @Param("conversationId") String conversationId,
                             @Param("deletedAt") Instant deletedAt);
 
     /** 查询会话是否仍被活跃实例或有效租约占用，用于区分幂等删除与状态冲突。 */
@@ -79,6 +87,8 @@ public interface ConversationManagementMapper {
             select count(*)
             from ai_conversation c
             where c.conversation_id = #{conversationId}
+              and c.tenant_id = #{identity.tenantId}
+              and c.user_id = #{identity.userId}
               and c.status <> 'DELETED'
               and (
                   exists (
@@ -95,6 +105,7 @@ public interface ConversationManagementMapper {
                   )
               )
             """)
-    int countActiveUsage(@Param("conversationId") String conversationId,
+    int countActiveUsage(@Param("identity") RequestIdentity identity,
+                         @Param("conversationId") String conversationId,
                          @Param("now") Instant now);
 }
