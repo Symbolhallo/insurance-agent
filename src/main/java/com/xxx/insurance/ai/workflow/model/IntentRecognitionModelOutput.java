@@ -5,7 +5,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 /**
  * 意图识别模型结构化输出。
  *
- * @param intentions 识别并拆分出的业务意图，当前最多两个
+ * @param intentions 识别并拆分出的业务意图，当前最多四个且每种意图编码最多一次
  * @param reason 整体分类理由，不包含模型内部思维过程
  */
 @Schema(description = "意图识别模型输出")

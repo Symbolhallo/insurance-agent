@@ -15,20 +15,23 @@ import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.asset.agent.AssetQueryAgent;
 import io.agentscope.core.message.SystemMessage;
 import io.agentscope.core.message.UserMessage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * 基于对齐后问题的受控意图识别服务。
  */
 @Service
 public class IntentRecognitionService {
+
+    private static final Logger log = LoggerFactory.getLogger(IntentRecognitionService.class);
 
     private static final String SYSTEM_PROMPT = """
             你是保险智能体主工作流的意图识别与拆分组件，只能使用以下意图：
@@ -42,7 +45,8 @@ public class IntentRecognitionService {
             - 问题包含已标准化的具体产品名称或编码时，优先 PRODUCT_ANALYSIS；
             - 仅询问“犹豫期、等待期、现金价值、退保金、受益人”等一般概念时，选择 KNOWLEDGE_QA；
             - 同一问题包含多个业务目标时，按上述四类拆分 intentions；
-            - 相同意图的多个要求合并为一个 intentionQuery，最多输出四个 intentions；
+            - 每种意图编码最多输出一次；相同意图的多个要求必须合并为一个 intentionQuery；
+            - 最多输出四个 intentions；
             - intentionQuery 必须自包含、可独立交给对应智能体执行，不得遗漏产品编码或关键条件；
             - 不得输出目标智能体名称；目标智能体由应用白名单映射；
             - 每个意图和整体 reason 只简述分类依据，不输出内部思维过程；
@@ -89,16 +93,26 @@ public class IntentRecognitionService {
                 modelOutput, IntentRecognitionModelOutput.class);
         validateModelOutput(output);
 
-        Set<String> uniqueIntents = new HashSet<>();
-        List<IntentRoute> routes = new ArrayList<>();
+        Map<String, IntentRoute> routesByIntent = new LinkedHashMap<>();
+        int duplicateCount = 0;
         for (RecognizedIntent recognizedIntent : output.intentions()) {
             IntentRoute route = validateAndMap(recognizedIntent);
-            if (!uniqueIntents.add(route.intent())) {
-                throw new IllegalStateException("Intent recognition model returned duplicate intent");
+            IntentRoute existing = routesByIntent.get(route.intent());
+            if (existing == null) {
+                routesByIntent.put(route.intent(), route);
             }
-            routes.add(route);
+            else {
+                routesByIntent.put(route.intent(), mergeRoutes(existing, route));
+                duplicateCount++;
+            }
+        }
+        if (duplicateCount > 0) {
+            log.warn("[Workflow] node=intent-recognition action=merge-duplicate status=recovered "
+                            + "duplicateCount={} distinctIntentCount={}",
+                    duplicateCount, routesByIntent.size());
         }
 
+        List<IntentRoute> routes = new ArrayList<>(routesByIntent.values());
         if (routes.size() == 1) {
             IntentRoute route = routes.getFirst();
             return new IntentRoutingResult(route.intent(), route.targetAgent(), output.reason().trim(), routes);
@@ -144,5 +158,21 @@ public class IntentRecognitionService {
                 TARGET_AGENTS.get(recognizedIntent.intent()),
                 recognizedIntent.intentionQuery().trim(),
                 recognizedIntent.reason().trim());
+    }
+
+    /**
+     * 合并模型误拆出的同类意图。两个条目已经分别通过白名单、非空查询和理由校验，因此这里只按
+     * 原始出现顺序合并不同文本；完全相同的查询或理由保持一份，避免重复内容继续传给 Planner。
+     */
+    private IntentRoute mergeRoutes(IntentRoute existing, IntentRoute duplicate) {
+        return new IntentRoute(
+                existing.intent(),
+                existing.targetAgent(),
+                mergeDistinctText(existing.intentionQuery(), duplicate.intentionQuery()),
+                mergeDistinctText(existing.reason(), duplicate.reason()));
+    }
+
+    private String mergeDistinctText(String first, String second) {
+        return first.equals(second) ? first : first + "；" + second;
     }
 }

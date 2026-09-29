@@ -56,6 +56,49 @@ const EVENT_NAMES = {
     error: "工作流异常"
 };
 
+const USER_PROGRESS_STEPS = [
+    {
+        key: "understand-product",
+        title: "识别问题中的产品信息",
+        activeDescription: "正在判断是否涉及具体保险产品，以及是否需要你确认产品。",
+        completedDescription: "已完成产品信息识别。",
+        nodes: ["resolve-product-reference", "retrieve-product-candidates", "human-confirm-product"],
+        phases: ["PRODUCT_REFERENCE_RESOLUTION"]
+    },
+    {
+        key: "align-context",
+        title: "结合对话理解你的问题",
+        activeDescription: "正在结合本次问题和当前会话信息，消除指代并补全必要条件。",
+        completedDescription: "已完成问题理解和上下文整理。",
+        nodes: ["context-alignment"],
+        phases: ["CONTEXT_ALIGNMENT"]
+    },
+    {
+        key: "plan-work",
+        title: "选择合适的专业能力",
+        activeDescription: "正在识别业务意图，并安排需要参与处理的专业智能体。",
+        completedDescription: "已确定本次处理方式。",
+        nodes: ["intent-recognition", "planner-agent"],
+        phases: ["INTENT_RECOGNITION", "PLANNER"]
+    },
+    {
+        key: "run-agents",
+        title: "查询并分析业务信息",
+        activeDescription: "专业智能体正在查询资料并分析结果，请稍候。",
+        completedDescription: "专业智能体已完成查询和分析。",
+        nodes: ["dag-executor"],
+        phases: ["SUB_AGENT"]
+    },
+    {
+        key: "prepare-answer",
+        title: "整理最终答复",
+        activeDescription: "正在汇总分析结果并进行发布前检查。",
+        completedDescription: "答复已整理完成。",
+        nodes: ["summary", "output-review"],
+        phases: ["SUMMARY"]
+    }
+];
+
 function useAutoFollow(changeToken) {
     const containerRef = useRef(null);
     const [following, setFollowing] = useState(true);
@@ -765,8 +808,9 @@ function App() {
                         {!hasConversationContent && <WelcomePanel onSuggestion={setQuestion}/>}
                         <ConversationHistory messages={historyMessages} loading={historyLoading}/>
                         {submittedQuestion && <CurrentQuestion text={submittedQuestion}/>}
-                        {(running || streams.length > 0) && (
-                            <LiveExecution streams={streams} running={running} onOpenActivity={() => setActivityOpen(true)}/>
+                        {(running || (streams.length > 0 && !finalResult)) && (
+                            <LiveExecution stages={stages} streams={streams} running={running}
+                                           onOpenActivity={() => setActivityOpen(true)}/>
                         )}
                         {waitingForConfirmation && (
                             <ProductConfirmation
@@ -822,6 +866,13 @@ function App() {
                             {stages.map(stage => <StageItem key={stage.key} stage={stage}/>) }
                             {stages.length === 0 && <li className="empty-state compact">工作流启动后会显示节点事件</li>}
                         </ol>
+                    </details>
+                    <details className="model-output-details">
+                        <summary>模型原始输出 <span>{streams.length}</span></summary>
+                        <div className="raw-stream-list">
+                            {streams.map(stream => <RawStreamItem key={stream.streamId} stream={stream}/>) }
+                            {streams.length === 0 && <div className="empty-state compact">收到模型输出后可在这里排查原始内容</div>}
+                        </div>
                     </details>
                 </div>
                 <AutoFollowButton following={stageFollow.following} onResume={stageFollow.resume}/>
@@ -956,7 +1007,11 @@ function CurrentQuestion({text}) {
     );
 }
 
-function LiveExecution({streams, running, onOpenActivity}) {
+function LiveExecution({stages, streams, running, onOpenActivity}) {
+    const progressItems = buildUserProgress(stages, streams, running);
+    const currentItem = [...progressItems].reverse().find(item => item.status === "RUNNING")
+        || progressItems.at(-1);
+    const answerStreams = streams.filter(stream => stream.phase === "SUMMARY" && stream.text);
     return (
         <article className="message-row assistant-message live-execution">
             <div className="message-avatar"><Bot size={17}/></div>
@@ -964,15 +1019,49 @@ function LiveExecution({streams, running, onOpenActivity}) {
                 <div className="message-label">保险智能助理</div>
                 <div className="execution-status">
                     {running ? <LoaderCircle size={16} className="spin"/> : <CircleCheck size={16}/>}
-                    <span>{running ? "正在分析并协调专业智能体" : "模型处理过程已完成"}</span>
-                    <button type="button" onClick={onOpenActivity}><GitBranch size={14}/>查看流程</button>
+                    <span>{running ? "正在处理你的问题" : "处理过程已完成"}</span>
+                    <button type="button" onClick={onOpenActivity}><GitBranch size={14}/>查看处理详情</button>
                 </div>
-                <div className="live-stream-list">
-                    {streams.map(stream => <StreamItem key={stream.streamId} stream={stream}/>) }
-                    {streams.length === 0 && running && (
+                <div className="user-progress-card" role="status" aria-live="polite">
+                    <div className="user-progress-current">
+                        <span className="user-progress-icon">
+                            {running ? <LoaderCircle size={16} className="spin"/> : <CircleCheck size={16}/>}
+                        </span>
+                        <div>
+                            <strong>{currentItem?.title || "正在建立安全连接"}</strong>
+                            <p>{currentItem
+                                ? currentItem.status === "RUNNING"
+                                    ? currentItem.activeDescription
+                                    : currentItem.completedDescription
+                                : "连接建立后会实时显示处理进度。"}</p>
+                        </div>
+                    </div>
+                    {progressItems.length > 0 && (
+                        <ol className="user-progress-steps">
+                            {progressItems.map(item => (
+                                <li key={item.key} data-status={item.status}>
+                                    <span>{item.status === "COMPLETED"
+                                        ? <Check size={12}/>
+                                        : <LoaderCircle size={12} className="spin"/>}</span>
+                                    <strong>{item.title}</strong>
+                                </li>
+                            ))}
+                        </ol>
+                    )}
+                    {progressItems.length === 0 && running && (
                         <div className="stream-placeholder"><i/><i/><i/></div>
                     )}
                 </div>
+                {answerStreams.length > 0 && (
+                    <section className="live-answer-draft" aria-label="正在生成的回答">
+                        <header><Sparkles size={14}/><strong>正在生成答复</strong><span>内容仍可能调整</span></header>
+                        {answerStreams.map(stream => (
+                            <MarkdownContent key={stream.streamId}
+                                             className="live-answer-markdown markdown-content"
+                                             content={stream.text}/>
+                        ))}
+                    </section>
+                )}
             </div>
         </article>
     );
@@ -1093,7 +1182,7 @@ function StageItem({stage}) {
     );
 }
 
-function StreamItem({stream}) {
+function RawStreamItem({stream}) {
     return (
         <article className="stream-item" data-phase={stream.phase}
                  data-finished={stream.finished ? "true" : "false"}>
@@ -1106,9 +1195,7 @@ function StreamItem({stream}) {
                 </div>
                 <span className="stream-state">{stream.finished ? "生成结束 · 待最终审核" : "生成中"}</span>
             </header>
-            {stream.finished
-                ? <MarkdownContent className="stream-content stream-markdown" content={stream.text}/>
-                : <pre className="stream-content">{stream.text}</pre>}
+            <pre className="stream-content">{stream.text}</pre>
         </article>
     );
 }
@@ -1135,10 +1222,45 @@ function MarkdownContent({content, className}) {
                                    <a {...props} target="_blank" rel="noreferrer noopener"/>
                                )
                            }}>
-                {content || ""}
+                {normalizeModelMarkdown(content)}
             </ReactMarkdown>
         </div>
     );
+}
+
+/** 将模型常见的不规范标题、列表写法修正为 CommonMark 可识别格式，不解释原始 HTML。 */
+function normalizeModelMarkdown(content) {
+    return (content || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/[\u200B\uFEFF]/g, "")
+        .replace(/^[\t ]*(?:&nbsp;|\u00A0)+[\t ]*$/gim, "")
+        .replace(/\n[\t ]*\n(?:[\t ]*\n)+/g, "\n\n")
+        .replace(/^(#{1,6})([^\s#])/gm, "$1 $2")
+        .replace(/^([-*+])([^\s*-])/gm, "$1 $2")
+        .replace(/^(\d+\.)([^\s])/gm, "$1 $2")
+        .trim();
+}
+
+/** 把 Graph/Agent 技术事件投影为用户能够理解的少量业务阶段，原始内容仍保留在运行详情。 */
+function buildUserProgress(stages, streams, running) {
+    return USER_PROGRESS_STEPS.flatMap(step => {
+        const relatedStages = stages.filter(stage => step.nodes.includes(stage.node));
+        const relatedStreams = streams.filter(stream => step.phases.includes(stream.phase));
+        if (relatedStages.length === 0 && relatedStreams.length === 0) return [];
+
+        const latestStage = relatedStages.at(-1);
+        const hasRunningStage = latestStage?.status === "RUNNING";
+        const hasUnfinishedStream = relatedStreams.some(stream => !stream.finished);
+        const stageCompleted = latestStage
+            && ["SUCCESS", "COMPLETED"].includes(latestStage.status);
+        const streamsCompleted = relatedStreams.length > 0
+            && relatedStreams.every(stream => stream.finished);
+        const completed = !hasRunningStage && !hasUnfinishedStream && (stageCompleted || streamsCompleted);
+
+        return [{...step, status: completed || !running && step === USER_PROGRESS_STEPS.at(-1)
+            ? "COMPLETED"
+            : "RUNNING"}];
+    });
 }
 
 function CandidateItem({candidate, checked, onChange}) {

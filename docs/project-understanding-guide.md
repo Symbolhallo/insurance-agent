@@ -330,7 +330,7 @@ Last-Event-ID、跨实例 Poller 或人工确认恢复接口。
 | `LocalDbMainWorkflowService` | `run()`、`confirmProducts()`、`claimProductConfirmation()`、`confirmClaimedProducts()`、`releaseProductConfirmationClaim()`、`resume()`、`waitingConfirmResponse()`、`complete()`、`fail()` | 创建实例/步骤、调用 Graph、中断响应、原子确认恢复、最终记忆和状态收口。 |
 | `NoOpMainWorkflowService` | 同接口禁用响应 | 非 local-db profile 的可启动替代。 |
 | `ContextAlignmentService` | `align()` 重载、Prompt 拼装和确定性校验函数 | 加载会话快照，调用模型完成话题判断、指代消解、问题改写和确认信息合并。 |
-| `IntentRecognitionService` | `recognize()` 重载、`validateAndMap()` | 结构化识别意图，并只允许四个白名单 Agent。 |
+| `IntentRecognitionService` | `recognize()` 重载、`validateAndMap()`、`mergeRoutes()` | 结构化识别意图，并只允许四个白名单 Agent；模型误把同类目标拆成重复意图时，在每条都通过白名单和非空字段校验后按原顺序合并，完全相同文本去重。未知意图、空查询和空理由仍拒绝，不因容错放宽路由边界。 |
 | `ProductReferenceResolutionService` | `resolve()` 重载、Prompt 与校验函数 | 当前问题先行产品实体判断，输出召回决定和历史产品映射。 |
 
 ### `workflow.execution`
@@ -532,13 +532,13 @@ Model 文件：
 
 历史侧栏的“管理”模式支持多选和全选。前端不会使用一条宽泛的批量数据库更新，而是顺序调用既有单会话删除接口，确保每个 conversationId 都独立经过可信身份、所有权、活跃 Workflow 和有效 conversation lease 校验。批量操作允许部分成功：成功项从列表移除，失败项继续保持选中并提示数量；删除当前会话后自动生成新的 conversationId。工作流处于 `RUNNING` 或 `WAITING_CONFIRM` 时，管理入口和删除动作均保持禁用。
 
-产品召回需要人工确认时，候选不会切换到独立页面，而是作为助手消息内的确认卡片展示；确认按钮仍调用既有 `/product-confirmations/stream`，并带 Last-Event-ID 从当前 Checkpoint 继续执行。前置节点和子智能体 Token 以流式消息持续追加，节点状态同时进入运行详情。对话与流程区域都默认跟随最新内容；鼠标滚轮、触摸或指针干预后暂停自动跟随，用户回到底部或点击恢复按钮后再继续。
+产品召回需要人工确认时，候选不会切换到独立页面，而是作为助手消息内的确认卡片展示；确认按钮仍调用既有 `/product-confirmations/stream`，并带 Last-Event-ID 从当前 Checkpoint 继续执行。中央对话区不会直接暴露产品解析、上下文对齐、意图识别和 Planner 的结构化 JSON，而是将实际收到的 Graph/Agent 事件投影为“识别产品信息、理解问题、选择专业能力、查询分析、整理答复”等用户可理解阶段；Summary Token 作为 Markdown 草稿实时展示。全部原始模型输出仍保留在右侧运行详情的折叠排障区。对话与流程区域都默认跟随最新内容；鼠标滚轮、触摸或指针干预后暂停自动跟随，用户回到底部或点击恢复按钮后再继续。
 
 启动流的响应头 `X-Workflow-Instance-Id` 会在首个数据事件前提供恢复主键。页面把实例编号、最后事件 ID、请求号和 `RUNNING/WAITING_CONFIRM` 状态写入 `sessionStorage`：运行中断线会以指数退避调用 `GET /runs/{workflowInstanceId}/events`；刷新运行中的页面会自动重连；刷新等待确认的页面会恢复候选和勾选结果。等待确认不是终态，期间禁止切换或删除会话、清空页面和启动另一轮工作流，避免前端丢失仍占有 conversation lock 的后端实例。
 
 页面维护执行阶段和对话输出两个独立的自动跟随状态：内容新增时默认滚到底部；只有向上滚轮或向下拖动触摸等明确阅读历史的手势才会立即停止跟随并取消已排队的动画帧；已经到底后继续向下滚动、程序滚动及 DOM 重排不会切换状态，避免恢复按钮和对话内容闪动。用户滚回底部或点击恢复按钮后继续自动跟随。
 
-历史助手消息、已收到结束标记的模型流和最终回答通过 `react-markdown` 与 `remark-gfm` 转换为语义化 HTML，支持常用 Markdown 标题、列表、表格、引用、代码块和链接。渲染器启用 `skipHtml`，不会执行模型输出中的原始 HTML；外部链接使用 `target="_blank"` 以及 `rel="noopener noreferrer"`。生成中的 Token 暂以纯文本增量展示，流结束后再切换到 Markdown，避免每个 Token 都重建复杂 DOM。
+历史助手消息、实时 Summary 草稿和最终回答通过 `react-markdown` 与 `remark-gfm` 转换为语义化 HTML，支持常用 Markdown 标题、列表、表格、引用、代码块和链接。进入渲染器前会清理零宽空格、空白占位行和超过一个的连续空行，并修正常见的 `##标题`、`-列表`、`1.列表` 缺空格格式；CSS 对 Markdown 直接子区块使用确定的相邻间距并清除空段落，避免模型标准双换行被浏览器默认 margin 放大成大片留白。渲染器启用 `skipHtml`，不会执行模型输出中的原始 HTML，外部链接使用 `target="_blank"` 以及 `rel="noopener noreferrer"`。产品解析、上下文对齐、意图识别和 Planner 的原始 Token 不作为用户答案渲染，仅在运行详情中按纯文本提供技术排障。
 
 `WorkflowTestResourceConfig` 只为 `/workflow-test/**` 注册 classpath 静态资源并返回 `Cache-Control: no-store`。联调页构建产物使用固定 `assets/app.js` 和 `assets/styles.css` 文件名，因此该配置用于防止重新构建、重启 Spring Boot 后浏览器仍运行旧 bundle；其他业务静态资源缓存策略不受影响。
 

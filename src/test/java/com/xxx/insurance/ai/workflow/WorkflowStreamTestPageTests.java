@@ -69,8 +69,17 @@ class WorkflowStreamTestPageTests {
                 .contains("ReactMarkdown")
                 .contains("remarkGfm")
                 .contains("function MarkdownContent(")
-                .contains("stream.finished")
-                .contains("stream-markdown")
+                .contains("normalizeModelMarkdown(content)")
+                .contains("replace(/[\\u200B\\uFEFF]/g")
+                .contains("replace(/\\n[\\t ]*\\n(?:[\\t ]*\\n)+/g")
+                .contains("replace(/^(#{1,6})([^\\s#])/gm")
+                .contains("function buildUserProgress(")
+                .contains("识别问题中的产品信息")
+                .contains("选择合适的专业能力")
+                .contains("正在生成答复")
+                .contains("streams.filter(stream => stream.phase === \"SUMMARY\"")
+                .contains("模型原始输出")
+                .contains("function RawStreamItem(")
                 .contains("WORKFLOW_STATUS_WAITING_CONFIRM")
                 .contains("readActiveWorkflow")
                 .contains("updateActiveWorkflow")
@@ -97,7 +106,13 @@ class WorkflowStreamTestPageTests {
         assertThat(styles)
                 .contains("@media(max-width:680px)")
                 .contains("overflow-wrap:anywhere")
-                .contains("scrollbar-gutter:stable");
+                .contains("scrollbar-gutter:stable")
+                .contains(".user-progress-card")
+                .contains(".live-answer-markdown")
+                .contains(".model-output-details")
+                .contains(".markdown-content>*+*")
+                .contains(".history-markdown>*+*")
+                .contains("p:empty");
     }
 
     /** 读取打包前的类路径资源，避免测试依赖外部浏览器或运行中的服务。 */

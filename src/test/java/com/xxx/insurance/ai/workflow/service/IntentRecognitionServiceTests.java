@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -82,6 +83,83 @@ class IntentRecognitionServiceTests {
         assertThat(result.targetAgent()).isNull();
         assertThat(result.routes()).extracting(route -> route.targetAgent())
                 .containsExactly(KnowledgeQaAgent.AGENT_NAME, ProductAnalysisAgent.AGENT_NAME);
+    }
+
+    @Test
+    void mergesDuplicateIntentEntriesIntoOneControlledRoute() {
+        IntentRoutingResult result = recognize("""
+                {
+                  "intentions": [
+                    {
+                      "intent": "KNOWLEDGE_QA",
+                      "intentionQuery": "解释保险等待期的含义",
+                      "reason": "一般保险概念"
+                    },
+                    {
+                      "intent": "KNOWLEDGE_QA",
+                      "intentionQuery": "说明等待期内出险如何处理",
+                      "reason": "等待期业务规则"
+                    }
+                  ],
+                  "reason": "用户询问等待期"
+                }
+                """, "解释保险等待期，并说明等待期内出险如何处理");
+
+        assertThat(result.intent()).isEqualTo(IntentRecognitionNode.KNOWLEDGE_QA_INTENT);
+        assertThat(result.routes()).hasSize(1);
+        assertThat(result.routes().getFirst().intentionQuery())
+                .isEqualTo("解释保险等待期的含义；说明等待期内出险如何处理");
+        assertThat(result.routes().getFirst().reason())
+                .isEqualTo("一般保险概念；等待期业务规则");
+    }
+
+    @Test
+    void deduplicatesIdenticalIntentEntriesWithoutRepeatingText() {
+        IntentRoutingResult result = recognize("""
+                {
+                  "intentions": [
+                    {
+                      "intent": "KNOWLEDGE_QA",
+                      "intentionQuery": "保险等待期是什么意思？",
+                      "reason": "一般保险概念"
+                    },
+                    {
+                      "intent": "KNOWLEDGE_QA",
+                      "intentionQuery": "保险等待期是什么意思？",
+                      "reason": "一般保险概念"
+                    }
+                  ],
+                  "reason": "用户询问保险等待期"
+                }
+                """, "保险等待期是什么意思？");
+
+        assertThat(result.routes()).singleElement().satisfies(route -> {
+            assertThat(route.intentionQuery()).isEqualTo("保险等待期是什么意思？");
+            assertThat(route.reason()).isEqualTo("一般保险概念");
+        });
+    }
+
+    @Test
+    void stillRejectsUnknownIntentWhenAnotherEntryIsValid() {
+        assertThatThrownBy(() -> recognize("""
+                {
+                  "intentions": [
+                    {
+                      "intent": "KNOWLEDGE_QA",
+                      "intentionQuery": "解释保险等待期",
+                      "reason": "一般保险概念"
+                    },
+                    {
+                      "intent": "UNSUPPORTED",
+                      "intentionQuery": "执行未知任务",
+                      "reason": "未知分类"
+                    }
+                  ],
+                  "reason": "混合输出"
+                }
+                """, "解释保险等待期"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Intent recognition model returned invalid intention");
     }
 
     private IntentRoutingResult recognize(String modelOutput, String rewrittenQuestion) {
