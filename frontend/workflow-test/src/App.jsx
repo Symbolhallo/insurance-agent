@@ -6,8 +6,8 @@ import {
     ArrowDownToLine,
     Bot,
     Check,
+    CircleAlert,
     ChevronRight,
-    CircleCheck,
     GitBranch,
     LoaderCircle,
     ListChecks,
@@ -42,6 +42,52 @@ const PHASE_NAMES = {
     PLANNER: "执行规划",
     SUB_AGENT: "子智能体",
     SUMMARY: "结果总结"
+};
+
+const STRUCTURED_MODEL_PHASES = new Set([
+    "PRODUCT_REFERENCE_RESOLUTION",
+    "CONTEXT_ALIGNMENT",
+    "INTENT_RECOGNITION",
+    "PLANNER"
+]);
+
+const INTENT_NAMES = {
+    PRODUCT_ANALYSIS: "产品分析",
+    KNOWLEDGE_QA: "保险知识问答",
+    POLICY_QUERY: "保单查询",
+    ASSET_QUERY: "资产查询",
+    UNSUPPORTED: "超出当前支持范围"
+};
+
+const MODEL_AGENT_NAMES = {
+    "product-reference-resolution-model": "产品识别模型",
+    "context-alignment-model": "对话理解模型",
+    "intent-recognition-model": "意图识别模型",
+    "workflow-planner-agent": "任务规划模型",
+    "workflow-summary-agent": "答复整理模型"
+};
+
+const TOPIC_RELATION_NAMES = {
+    NO_HISTORY: "新话题，无需引用历史对话",
+    CONTINUE: "延续上一轮话题",
+    SWITCH: "已切换到新话题"
+};
+
+const ENTITY_TYPE_NAMES = {
+    PRODUCT: "产品",
+    POLICY: "保单",
+    ASSET: "资产",
+    KNOWLEDGE: "保险知识",
+    OTHER: "其他条件"
+};
+
+const CONFIRMED_INFORMATION_NAMES = {
+    products: "已确认产品",
+    product: "已确认产品",
+    policies: "已确认保单",
+    policy: "已确认保单",
+    assets: "已确认资产",
+    asset: "已确认资产"
 };
 
 const EVENT_NAMES = {
@@ -106,6 +152,8 @@ function useAutoFollow(changeToken) {
     const pendingFrameRef = useRef(null);
     const programmaticScrollRef = useRef(false);
     const touchStartYRef = useRef(null);
+    const pointerScrollingRef = useRef(false);
+    const lastScrollTopRef = useRef(0);
 
     const scrollToLatest = useCallback(() => {
         const container = containerRef.current;
@@ -161,11 +209,26 @@ function useAutoFollow(changeToken) {
         const container = containerRef.current;
         if (!container || programmaticScrollRef.current) return;
         const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-        // 只负责“回到底部后恢复”。离开底部必须由明确的用户手势触发，DOM 重排不能暂停跟随。
+        if (pointerScrollingRef.current && distanceFromBottom > 12
+            && Math.abs(container.scrollTop - lastScrollTopRef.current) > 2) {
+            pauseForUser();
+        }
+        lastScrollTopRef.current = container.scrollTop;
+        // 回到底部后恢复跟随；普通 DOM 重排不会误判为用户回看。
         if (distanceFromBottom <= 12 && !followingRef.current) {
             followingRef.current = true;
             setFollowing(true);
         }
+    }, [pauseForUser]);
+
+    const handlePointerDown = useCallback(event => {
+        if (event.pointerType !== "mouse") return;
+        pointerScrollingRef.current = true;
+        lastScrollTopRef.current = containerRef.current?.scrollTop || 0;
+    }, []);
+
+    const handlePointerEnd = useCallback(() => {
+        pointerScrollingRef.current = false;
     }, []);
 
     const handleTouchStart = useCallback(event => {
@@ -195,6 +258,10 @@ function useAutoFollow(changeToken) {
         resume,
         interactionProps: {
             onWheel: handleWheel,
+            onPointerDown: handlePointerDown,
+            onPointerUp: handlePointerEnd,
+            onPointerCancel: handlePointerEnd,
+            onPointerLeave: handlePointerEnd,
             onTouchStart: handleTouchStart,
             onTouchMove: handleTouchMove,
             onScroll: handleScroll
@@ -237,6 +304,7 @@ function App() {
     const [selectedProductCodes, setSelectedProductCodes] = useState(
         () => restoredWorkflow?.selectedProductCodes || []);
     const [finalResult, setFinalResult] = useState(null);
+    const [workflowNotice, setWorkflowNotice] = useState(null);
     const [conversations, setConversations] = useState([]);
     const [historyMessages, setHistoryMessages] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
@@ -257,14 +325,24 @@ function App() {
     const lastEventIdRef = useRef(restoredWorkflow?.lastEventId || null);
     const requestIdRef = useRef(restoredWorkflow?.requestId || null);
     const historyRequestRef = useRef(0);
+    const composerTextareaRef = useRef(null);
+
+    useEffect(() => {
+        const textarea = composerTextareaRef.current;
+        if (!textarea) return;
+        textarea.style.height = "auto";
+        textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+    }, [question]);
 
     const streamChangeToken = useMemo(() => streams.reduce(
         (total, stream) => total + stream.text.length + (stream.finished ? 1 : 0),
-        (finalResult?.answer.length || 0) + historyMessages.reduce(
+        stages.length + submittedQuestion.length + (workflowNotice?.message.length || 0)
+        + (finalResult?.answer.length || 0) + historyMessages.reduce(
             (total, message) => total + message.content.length, 0)),
-    [streams, finalResult, historyMessages]);
+    [streams, stages, submittedQuestion, workflowNotice, finalResult, historyMessages]);
     const stageFollow = useAutoFollow(stages.length);
     const streamFollow = useAutoFollow(streamChangeToken);
+    const visibleStreamedAnswer = streamedAnswerText(streams);
 
     const setRunState = useCallback((isRunning, message, stateName = isRunning ? "running" : "idle") => {
         runningRef.current = isRunning;
@@ -357,6 +435,7 @@ function App() {
         setCandidates([]);
         setSelectedProductCodes([]);
         setFinalResult(null);
+        setWorkflowNotice(null);
         setSubmittedQuestion("");
         clearActiveWorkflow();
     }, [abortCurrentRequest]);
@@ -563,21 +642,29 @@ function App() {
             const answer = event.data?.finalAnswer || "";
             setFinalResult({
                 answer,
-                status: event.data?.status || "COMPLETED"
+                status: event.data?.status || "COMPLETED",
+                requestId: requestIdRef.current,
+                completedAt: event.occurredAt || new Date().toISOString()
             });
             setRunState(false, "工作流已完成", "idle");
             setActivityOpen(false);
             clearActiveWorkflow();
             void loadConversations();
-            void loadConversationHistory(conversationIdRef.current).then(loaded => {
-                if (loaded) setSubmittedQuestion("");
-            });
         }
         else if (event.type === "error") {
-            setRunState(false, event.data?.message || "工作流执行失败", "error");
+            const message = event.data?.message || "工作流执行失败，请稍后重试";
+            const unsupported = event.data?.status === "UNSUPPORTED";
+            setWorkflowNotice({
+                kind: unsupported ? "unsupported" : "error",
+                message,
+                requestId: requestIdRef.current,
+                occurredAt: event.occurredAt || new Date().toISOString()
+            });
+            setRunState(false, unsupported ? "暂不支持该功能" : message, unsupported ? "idle" : "error");
             clearActiveWorkflow();
+            if (unsupported) void loadConversations();
         }
-    }, [addLocalError, addStage, loadConversationHistory, loadConversations, renderStream,
+    }, [addLocalError, addStage, loadConversations, renderStream,
         setRunState, setWaitingState]);
 
     const openSse = useCallback(async (url, body = null, extraHeaders = {}, options = {}) => {
@@ -688,6 +775,27 @@ function App() {
         const normalizedConversationId = conversationId.trim();
         if (running || waitingForConfirmation || !message || !normalizedConversationId) return;
 
+        const previousAnswer = finalResult?.answer || workflowNotice?.message;
+        if (submittedQuestion && previousAnswer) {
+            const completedAt = finalResult?.completedAt || workflowNotice?.occurredAt || new Date().toISOString();
+            const completedRequestId = finalResult?.requestId || workflowNotice?.requestId || createRequestId();
+            setHistoryMessages(current => [...current,
+                {
+                    id: `local-${completedRequestId}-user`,
+                    role: "USER",
+                    content: submittedQuestion,
+                    occurredAt: completedAt
+                },
+                {
+                    id: `local-${completedRequestId}-assistant`,
+                    role: "ASSISTANT",
+                    content: previousAnswer,
+                    occurredAt: completedAt
+                }
+            ]);
+        }
+        // 发送新问题代表用户回到当前轮；之后的主动滚动仍可随时暂停跟随。
+        streamFollow.resume();
         resetRun();
         setSubmittedQuestion(message);
         setQuestion("");
@@ -755,7 +863,7 @@ function App() {
     const workflowLocked = running || waitingForConfirmation;
 
     const hasConversationContent = historyLoading || historyMessages.length > 0 || submittedQuestion
-        || streams.length > 0 || finalResult || waitingForConfirmation;
+        || streams.length > 0 || finalResult || workflowNotice || waitingForConfirmation;
 
     return (
         <div className="app-shell" data-history-open={historyOpen} data-activity-open={activityOpen}>
@@ -821,26 +929,35 @@ function App() {
                                 onSubmit={confirmProducts}
                             />
                         )}
-                        {finalResult && <FinalResult result={finalResult}/>}
+                        {workflowNotice && <WorkflowNotice notice={workflowNotice}/>}
+                        {finalResult && <FinalResult result={finalResult}
+                                                     initialText={visibleStreamedAnswer}
+                                                     onOpenActivity={() => setActivityOpen(true)}/>}
                     </div>
                     <AutoFollowButton following={streamFollow.following} onResume={streamFollow.resume}/>
                 </section>
 
                 <div className="composer-dock">
-                    <form id="queryForm" className="composer" onSubmit={submitRun}>
+                    <form id="queryForm" className="composer" data-has-content={Boolean(question.trim())}
+                          onSubmit={submitRun}>
                         <label className="sr-only" htmlFor="question">输入保险问题</label>
-                        <textarea id="question" maxLength={2000} rows={1} value={question}
-                                  onChange={event => setQuestion(event.target.value)}
+                        <textarea ref={composerTextareaRef} id="question" maxLength={2000} rows={1} value={question}
+                                  onChange={event => {
+                                      setQuestion(event.target.value);
+                                      event.currentTarget.style.height = "auto";
+                                      event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 180)}px`;
+                                  }}
                                   onKeyDown={event => {
                                       if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                                           event.preventDefault();
                                           event.currentTarget.form?.requestSubmit();
                                       }
                                   }}
-                                  placeholder={waitingForConfirmation ? "请先完成上方产品确认" : "询问产品对比、保险知识、保单或资产信息"}
+                                  placeholder={waitingForConfirmation ? "请先完成上方产品确认" : "给保险智能助理发送消息"}
                                   disabled={workflowLocked} required/>
                         <div className="composer-footer">
-                            <span title={requestMeta}>{question.length} / 2000 · Enter 发送，Shift + Enter 换行</span>
+                            <span title={requestMeta}>Enter 发送 · Shift + Enter 换行</span>
+                            <span className="character-count">{question.length} / 2000</span>
                             <button className="send-button" type="submit" disabled={workflowLocked || !question.trim()}
                                     aria-label={running ? "处理中" : "发送问题"}>
                                 {running ? <LoaderCircle size={18} className="spin"/> : <Send size={18}/>}
@@ -868,10 +985,10 @@ function App() {
                         </ol>
                     </details>
                     <details className="model-output-details">
-                        <summary>模型原始输出 <span>{streams.length}</span></summary>
+                        <summary>模型处理结果 <span>{streams.length}</span></summary>
                         <div className="raw-stream-list">
                             {streams.map(stream => <RawStreamItem key={stream.streamId} stream={stream}/>) }
-                            {streams.length === 0 && <div className="empty-state compact">收到模型输出后可在这里排查原始内容</div>}
+                            {streams.length === 0 && <div className="empty-state compact">模型开始处理后，这里会显示各阶段结果</div>}
                         </div>
                     </details>
                 </div>
@@ -1011,57 +1128,44 @@ function LiveExecution({stages, streams, running, onOpenActivity}) {
     const progressItems = buildUserProgress(stages, streams, running);
     const currentItem = [...progressItems].reverse().find(item => item.status === "RUNNING")
         || progressItems.at(-1);
-    const answerStreams = streams.filter(stream => stream.phase === "SUMMARY" && stream.text);
+    const streamedAnswer = streamedAnswerText(streams);
     return (
         <article className="message-row assistant-message live-execution">
             <div className="message-avatar"><Bot size={17}/></div>
             <div className="message-content">
                 <div className="message-label">保险智能助理</div>
-                <div className="execution-status">
-                    {running ? <LoaderCircle size={16} className="spin"/> : <CircleCheck size={16}/>}
-                    <span>{running ? "正在处理你的问题" : "处理过程已完成"}</span>
-                    <button type="button" onClick={onOpenActivity}><GitBranch size={14}/>查看处理详情</button>
+                <div className="assistant-thinking" role="status" aria-live="polite">
+                    <span className="thinking-shimmer">
+                        {currentItem?.activeDescription || "正在分析你的问题"}
+                    </span>
+                    <button type="button" onClick={onOpenActivity} title="查看运行详情">
+                        <GitBranch size={13}/><span>查看过程</span>
+                    </button>
                 </div>
-                <div className="user-progress-card" role="status" aria-live="polite">
-                    <div className="user-progress-current">
-                        <span className="user-progress-icon">
-                            {running ? <LoaderCircle size={16} className="spin"/> : <CircleCheck size={16}/>}
-                        </span>
-                        <div>
-                            <strong>{currentItem?.title || "正在建立安全连接"}</strong>
-                            <p>{currentItem
-                                ? currentItem.status === "RUNNING"
-                                    ? currentItem.activeDescription
-                                    : currentItem.completedDescription
-                                : "连接建立后会实时显示处理进度。"}</p>
-                        </div>
-                    </div>
-                    {progressItems.length > 0 && (
-                        <ol className="user-progress-steps">
-                            {progressItems.map(item => (
-                                <li key={item.key} data-status={item.status}>
-                                    <span>{item.status === "COMPLETED"
+                {progressItems.length > 0 && (
+                    <ol className="assistant-activity-feed" aria-label="实时处理进度">
+                        {progressItems.map(item => (
+                            <li key={item.key} data-status={item.status}>
+                                <span className="activity-feed-icon">
+                                    {item.status === "COMPLETED"
                                         ? <Check size={12}/>
-                                        : <LoaderCircle size={12} className="spin"/>}</span>
-                                    <strong>{item.title}</strong>
-                                </li>
-                            ))}
-                        </ol>
-                    )}
-                    {progressItems.length === 0 && running && (
-                        <div className="stream-placeholder"><i/><i/><i/></div>
-                    )}
-                </div>
-                {answerStreams.length > 0 && (
-                    <section className="live-answer-draft" aria-label="正在生成的回答">
-                        <header><Sparkles size={14}/><strong>正在生成答复</strong><span>内容仍可能调整</span></header>
-                        {answerStreams.map(stream => (
-                            <MarkdownContent key={stream.streamId}
-                                             className="live-answer-markdown markdown-content"
-                                             content={stream.text}/>
+                                        : <LoaderCircle size={12} className="spin"/>}
+                                </span>
+                                <span>{item.status === "COMPLETED"
+                                    ? item.completedDescription
+                                    : item.activeDescription}</span>
+                            </li>
                         ))}
-                    </section>
+                    </ol>
                 )}
+                {streamedAnswer ? (
+                    <div className="assistant-stream" aria-label="正在生成的回答">
+                        <MarkdownContent className="assistant-answer markdown-content" content={streamedAnswer}/>
+                        {running && <span className="streaming-caret" aria-hidden="true"/>}
+                    </div>
+                ) : running ? (
+                    <div className="response-shimmer" aria-hidden="true"><i/><i/><i/></div>
+                ) : null}
             </div>
         </article>
     );
@@ -1090,6 +1194,22 @@ function ProductConfirmation({candidates, selectedProductCodes, running, onToggl
                         </button>
                     )}
                 </form>
+            </div>
+        </article>
+    );
+}
+
+function WorkflowNotice({notice}) {
+    const unsupported = notice.kind === "unsupported";
+    return (
+        <article className="message-row assistant-message workflow-notice" data-kind={notice.kind} role="status">
+            <div className="message-avatar"><CircleAlert size={17}/></div>
+            <div className="message-content">
+                <div className="message-label">保险智能助理</div>
+                <div className="workflow-notice-body">
+                    <strong>{unsupported ? "暂不支持该功能" : "本次处理未完成"}</strong>
+                    <p>{notice.message}</p>
+                </div>
             </div>
         </article>
     );
@@ -1183,33 +1303,221 @@ function StageItem({stage}) {
 }
 
 function RawStreamItem({stream}) {
+    const presentation = describeModelOutput(stream);
+    const agentLabel = MODEL_AGENT_NAMES[stream.agentName] || AGENT_NAMES[stream.agentName]
+        || "业务处理模型";
     return (
         <article className="stream-item" data-phase={stream.phase}
                  data-finished={stream.finished ? "true" : "false"}>
             <header className="stream-header">
                 <div>
                     <strong className="stream-phase">{PHASE_NAMES[stream.phase] || stream.phase || "模型输出"}</strong>
-                    <span className="stream-agent">
-                        {[AGENT_NAMES[stream.agentName] || stream.agentName, stream.taskId].filter(Boolean).join(" · ")}
-                    </span>
+                    <span className="stream-agent">{agentLabel}</span>
                 </div>
-                <span className="stream-state">{stream.finished ? "生成结束 · 待最终审核" : "生成中"}</span>
+                <span className="stream-state">{stream.finished ? "已生成" : "生成中"}</span>
             </header>
-            <pre className="stream-content">{stream.text}</pre>
+            <p className="model-output-summary">{presentation.summary}</p>
+            {presentation.rows.length > 0 && (
+                <dl className="model-output-fields">
+                    {presentation.rows.map(row => (
+                        <div key={row.label}>
+                            <dt>{row.label}</dt>
+                            <dd>{Array.isArray(row.value)
+                                ? <ul>{row.value.map((value, index) => <li key={`${row.label}-${index}`}>{value}</li>)}</ul>
+                                : row.value}</dd>
+                        </div>
+                    ))}
+                </dl>
+            )}
+            {presentation.markdown && (
+                <MarkdownContent className="model-readable-output markdown-content"
+                                 content={presentation.markdown}/>
+            )}
+            {stream.text && (
+                <details className="technical-output">
+                    <summary>查看技术原文</summary>
+                    <pre className="stream-content">{stream.text}</pre>
+                </details>
+            )}
         </article>
     );
 }
 
-function FinalResult({result}) {
+function describeModelOutput(stream) {
+    if (!STRUCTURED_MODEL_PHASES.has(stream.phase)) {
+        return {
+            summary: stream.finished ? "已完成本阶段的业务分析。" : "正在生成业务分析内容。",
+            rows: [],
+            markdown: stream.text
+        };
+    }
+
+    const data = parseStructuredModelOutput(stream.text);
+    if (!data) {
+        return {
+            summary: stream.finished
+                ? "已收到模型结果，技术原文可供排查。"
+                : "正在理解并整理本阶段结果。",
+            rows: [],
+            markdown: ""
+        };
+    }
+
+    if (stream.phase === "PRODUCT_REFERENCE_RESOLUTION") {
+        const decision = data.productRecallDecision || {};
+        return {
+            summary: decision.required ? "识别到产品线索，需要进一步确认产品。" : "产品信息已完成初步识别。",
+            rows: compactRows([
+                ["识别到的产品", readableList(data.detectedProductClues, "未识别到具体产品")],
+                ["已关联的产品", readableList(data.matchedConfirmedProductCodes, "暂无")],
+                ["后续处理", decision.required ? "需要召回候选产品并请用户确认" : "无需额外确认，继续分析"],
+                ["判断依据", decision.reason]
+            ]),
+            markdown: ""
+        };
+    }
+
+    if (stream.phase === "CONTEXT_ALIGNMENT") {
+        const entities = Array.isArray(data.entities) ? data.entities.map(entity => {
+            const type = ENTITY_TYPE_NAMES[entity.type] || "业务信息";
+            const source = entity.source === "MEMORY" ? "来自历史对话" : "来自当前问题";
+            return `${type}：${entity.value}（${source}）`;
+        }) : [];
+        const confirmed = Object.entries(data.confirmedInformation || {}).flatMap(([key, values]) =>
+            (Array.isArray(values) ? values : [values]).filter(Boolean)
+                .map(value => `${CONFIRMED_INFORMATION_NAMES[key] || "已确认信息"}：${value}`));
+        return {
+            summary: "已结合当前问题和会话上下文完成理解。",
+            rows: compactRows([
+                ["话题关系", TOPIC_RELATION_NAMES[data.topicRelation] || data.topicRelation],
+                ["理解后的问题", data.rewrittenQuestion],
+                ["识别到的信息", entities.length > 0 ? entities : "未识别到额外业务信息"],
+                ["已确认信息", confirmed.length > 0 ? confirmed : "暂无"]
+            ]),
+            markdown: ""
+        };
+    }
+
+    if (stream.phase === "INTENT_RECOGNITION") {
+        const rawIntentions = Array.isArray(data.intentions) ? data.intentions : [];
+        const unsupported = rawIntentions.some(intention => intention.intent === "UNSUPPORTED");
+        const intentions = rawIntentions.map(intention => {
+            const name = INTENT_NAMES[intention.intent] || intention.intent || "未知业务类型";
+            return intention.intentionQuery ? `${name}：${intention.intentionQuery}` : name;
+        });
+        return {
+            summary: unsupported || intentions.length === 0
+                ? "该问题超出当前支持的保险业务范围。"
+                : "已识别本次问题需要的业务能力。",
+            rows: compactRows([
+                ["业务类型", intentions.length > 0 ? intentions : "其他功能暂不支持"],
+                ["分类依据", data.reason]
+            ]),
+            markdown: ""
+        };
+    }
+
+    const tasks = Array.isArray(data.tasks) ? [...data.tasks]
+        .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0))
+        .map(task => `${task.sequence || "-"}. ${AGENT_NAMES[task.agentType] || task.agentType || "专业智能体"}：${task.query}`) : [];
+    return {
+        summary: "已将问题拆分为可执行的专业处理任务。",
+        rows: compactRows([
+            ["处理目标", data.objective],
+            ["执行安排", tasks.length > 0 ? tasks : "暂无执行任务"],
+            ["安排依据", data.rationale]
+        ]),
+        markdown: ""
+    };
+}
+
+function parseStructuredModelOutput(content) {
+    const normalized = String(content || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const start = normalized.indexOf("{");
+    const end = normalized.lastIndexOf("}");
+    if (start < 0 || end <= start) return null;
+    try {
+        return JSON.parse(normalized.slice(start, end + 1));
+    }
+    catch {
+        return null;
+    }
+}
+
+function compactRows(rows) {
+    return rows.filter(([, value]) => value !== undefined && value !== null && value !== "")
+        .map(([label, value]) => ({label, value}));
+}
+
+function readableList(values, emptyText) {
+    return Array.isArray(values) && values.length > 0 ? values : emptyText;
+}
+
+function FinalResult({result, initialText, onOpenActivity}) {
+    const progressiveAnswer = useProgressiveText(result.answer, initialText);
+    const revealing = progressiveAnswer.length < result.answer.length;
     return (
-        <section className="final-section">
-            <div className="panel-title">
-                <h2>最终回答</h2>
-                <span className="status-label">{result.status}</span>
+        <article className="message-row assistant-message final-message">
+            <div className="message-avatar"><Bot size={17}/></div>
+            <div className="message-content">
+                <div className="message-label">保险智能助理</div>
+                <div className="assistant-complete-meta">
+                    <span>{revealing
+                        ? <><LoaderCircle size={13} className="spin"/>正在完成回答</>
+                        : <><Check size={13}/>已完成</>}</span>
+                    <button type="button" onClick={onOpenActivity} title="查看运行详情">
+                        <GitBranch size={13}/><span>查看过程</span>
+                    </button>
+                </div>
+                <div className="assistant-stream">
+                    <MarkdownContent className="assistant-answer markdown-content" content={progressiveAnswer}/>
+                    {revealing && <span className="streaming-caret" aria-hidden="true"/>}
+                </div>
             </div>
-            <MarkdownContent className="final-answer markdown-content" content={result.answer}/>
-        </section>
+        </article>
     );
+}
+
+/** 正常单任务直接展示子智能体正文，多任务在 Summary 开始后切换为最终汇总正文。 */
+function streamedAnswerText(streams) {
+    const summaryStreams = streams.filter(stream => stream.phase === "SUMMARY" && stream.text);
+    if (summaryStreams.length > 0) {
+        return summaryStreams.map(stream => stream.text).join("");
+    }
+
+    const subAgentStreams = streams.filter(stream => stream.phase === "SUB_AGENT" && stream.text);
+    const taskIds = new Set(subAgentStreams.map(stream => stream.taskId || stream.streamId));
+    return taskIds.size === 1 ? subAgentStreams.map(stream => stream.text).join("") : "";
+}
+
+/** complete 事件没有可复用 Token 时，小批次补齐剩余文本，避免完整结论瞬间弹出。 */
+function useProgressiveText(targetText, initialText = "") {
+    const target = targetText || "";
+    const initial = target.startsWith(initialText) ? initialText : commonPrefix(target, initialText);
+    const [visibleText, setVisibleText] = useState(initial);
+
+    useEffect(() => {
+        setVisibleText(initial);
+    }, [initial, target]);
+
+    useEffect(() => {
+        if (visibleText.length >= target.length) return undefined;
+        const timer = window.setTimeout(() => {
+            const remaining = target.length - visibleText.length;
+            const chunkSize = Math.max(1, Math.min(8, Math.ceil(remaining / 70)));
+            setVisibleText(target.slice(0, visibleText.length + chunkSize));
+        }, 20);
+        return () => window.clearTimeout(timer);
+    }, [target, visibleText]);
+
+    return visibleText;
+}
+
+function commonPrefix(first, second) {
+    const limit = Math.min(first.length, second.length);
+    let index = 0;
+    while (index < limit && first[index] === second[index]) index += 1;
+    return first.slice(0, index);
 }
 
 /** 使用 React 节点渲染模型 Markdown；原始 HTML 不会被解释，避免把模型文本注入 DOM。 */
@@ -1350,9 +1658,11 @@ function toHistoryMessages(snapshot) {
                 && message.content)
             .map(message => ({
                 id: message.memoryId,
+                invocationId: message.invocationId,
                 role: message.role,
                 content: message.content,
-                occurredAt: message.occurredAt || message.createdAt
+                occurredAt: message.occurredAt || message.createdAt,
+                createdAt: message.createdAt
             }))
             .sort(compareMessages)
         : [];
@@ -1374,7 +1684,30 @@ function toHistoryMessages(snapshot) {
 }
 
 function compareMessages(left, right) {
-    return new Date(left.occurredAt || 0).getTime() - new Date(right.occurredAt || 0).getTime();
+    const occurredAtDifference = timestamp(left.occurredAt) - timestamp(right.occurredAt);
+    if (occurredAtDifference !== 0) return occurredAtDifference;
+
+    const createdAtDifference = timestamp(left.createdAt) - timestamp(right.createdAt);
+    if (createdAtDifference !== 0) return createdAtDifference;
+
+    const invocationDifference = String(left.invocationId || "")
+        .localeCompare(String(right.invocationId || ""));
+    if (invocationDifference !== 0) return invocationDifference;
+
+    const roleDifference = messageRoleOrder(left.role) - messageRoleOrder(right.role);
+    if (roleDifference !== 0) return roleDifference;
+    return String(left.id).localeCompare(String(right.id));
+}
+
+function timestamp(value) {
+    const parsed = new Date(value || 0).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function messageRoleOrder(role) {
+    if (role === "USER") return 0;
+    if (role === "ASSISTANT") return 1;
+    return 2;
 }
 
 function createConversationId() {

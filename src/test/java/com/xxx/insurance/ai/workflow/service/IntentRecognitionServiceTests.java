@@ -162,6 +162,33 @@ class IntentRecognitionServiceTests {
                 .hasMessage("Intent recognition model returned invalid intention");
     }
 
+    @Test
+    void treatsExplicitUnsupportedIntentAsBusinessBoundary() {
+        assertThatThrownBy(() -> recognize("""
+                {
+                  "intentions": [{
+                    "intent": "UNSUPPORTED",
+                    "intentionQuery": "帮我预订明天的机票",
+                    "reason": "不属于当前四类保险业务能力"
+                  }],
+                  "reason": "请求超出当前支持范围"
+                }
+                """, "帮我预订明天的机票"))
+                .isInstanceOf(UnsupportedWorkflowIntentException.class)
+                .hasMessage("Workflow intent is not currently supported");
+    }
+
+    @Test
+    void treatsEmptyIntentionsAsBusinessBoundary() {
+        assertThatThrownBy(() -> recognize("""
+                {
+                  "intentions": [],
+                  "reason": "请求不属于当前四类保险业务能力"
+                }
+                """, "今天天气怎么样？"))
+                .isInstanceOf(UnsupportedWorkflowIntentException.class);
+    }
+
     private IntentRoutingResult recognize(String modelOutput, String rewrittenQuestion) {
         AgentScopeModelExecutor modelExecutor = mock(AgentScopeModelExecutor.class);
         when(modelExecutor.execute(any(), any())).thenReturn(modelOutput);

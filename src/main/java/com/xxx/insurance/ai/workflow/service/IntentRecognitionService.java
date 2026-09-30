@@ -41,6 +41,9 @@ public class IntentRecognitionService {
             POLICY_QUERY：查询当前客户持有的保单、保额、保费、保单状态或缴费信息；
             ASSET_QUERY：查询当前客户的资产余额、资产结构或账户资产信息。
 
+            如果用户请求完全不属于上述四类，输出一个 intent 为 UNSUPPORTED 的 intention；
+            UNSUPPORTED 只是“不支持”的边界标记，不得与上述四类受支持意图同时输出。
+
             识别规则：
             - 问题包含已标准化的具体产品名称或编码时，优先 PRODUCT_ANALYSIS；
             - 仅询问“犹豫期、等待期、现金价值、退保金、受益人”等一般概念时，选择 KNOWLEDGE_QA；
@@ -93,6 +96,11 @@ public class IntentRecognitionService {
                 modelOutput, IntentRecognitionModelOutput.class);
         validateModelOutput(output);
 
+        if (isUnsupported(output)) {
+            log.info("[Workflow] node=intent-recognition action=recognize status=unsupported");
+            throw new UnsupportedWorkflowIntentException();
+        }
+
         Map<String, IntentRoute> routesByIntent = new LinkedHashMap<>();
         int duplicateCount = 0;
         for (RecognizedIntent recognizedIntent : output.intentions()) {
@@ -129,7 +137,7 @@ public class IntentRecognitionService {
         if (output == null) {
             throw new IllegalStateException("Intent recognition model returned unsupported output");
         }
-        if (output.intentions() == null || output.intentions().isEmpty()) {
+        if (output.intentions() == null) {
             throw new IllegalStateException("Intent recognition model returned unsupported output");
         }
         if (output.intentions().size() > 4) {
@@ -138,6 +146,16 @@ public class IntentRecognitionService {
         if (!StringUtils.hasText(output.reason())) {
             throw new IllegalStateException("Intent recognition model returned unsupported output");
         }
+    }
+
+    /** 兼容模型返回显式 UNSUPPORTED 或空意图列表，两者都表示未命中当前四类业务能力。 */
+    private boolean isUnsupported(IntentRecognitionModelOutput output) {
+        if (output.intentions().isEmpty()) {
+            return true;
+        }
+        return output.intentions().size() == 1
+                && output.intentions().getFirst() != null
+                && "UNSUPPORTED".equals(output.intentions().getFirst().intent());
     }
 
     private IntentRoute validateAndMap(RecognizedIntent recognizedIntent) {

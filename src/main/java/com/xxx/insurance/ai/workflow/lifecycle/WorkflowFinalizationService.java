@@ -112,6 +112,17 @@ public class WorkflowFinalizationService {
                         String errorMessage,
                         long executionFenceToken,
                         Instant endedAt) {
+        return fail(workflowInstanceId, conversationId, errorMessage, null, executionFenceToken, endedAt);
+    }
+
+    /** 系统失败仍使用统一脱敏文案；已识别的业务边界可传入明确、无内部细节的前端提示。 */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean fail(String workflowInstanceId,
+                        String conversationId,
+                        String errorMessage,
+                        String frontendMessage,
+                        long executionFenceToken,
+                        Instant endedAt) {
         if (workflowExecutionMapper.failInstanceIfNonTerminal(
                 workflowInstanceId, errorMessage, lifecycleProperties.getInstanceId(),
                 executionFenceToken, endedAt) == 0) {
@@ -122,7 +133,43 @@ public class WorkflowFinalizationService {
         sseEventService.persistTransactionalEvent(
                 workflowInstanceId, conversationId, executionFenceToken,
                 WorkflowSseEventType.ERROR, null,
-                Map.of("status", "FAILED", "message", "主工作流执行失败，请稍后重试或联系人工支持"));
+                Map.of(
+                        "status", frontendMessage == null ? "FAILED" : "UNSUPPORTED",
+                        "message", frontendMessage == null
+                                ? "主工作流执行失败，请稍后重试或联系人工支持"
+                                : frontendMessage));
+        workflowExecutionMapper.deleteConversationLock(workflowInstanceId);
+        return true;
+    }
+
+    /**
+     * 原子收口已识别的业务边界，并把用户问题与可展示提示作为完整一轮对话写入 Memory。
+     * 它仍以 UNSUPPORTED 状态记录调用审计，不会与正常模型答复混淆。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean failUnsupported(String workflowInstanceId,
+                                   String conversationId,
+                                   String errorMessage,
+                                   String frontendMessage,
+                                   String originalQuestion,
+                                   String modelName,
+                                   RequestIdentity identity,
+                                   long executionFenceToken,
+                                   Instant endedAt) {
+        if (workflowExecutionMapper.failInstanceIfNonTerminal(
+                workflowInstanceId, errorMessage, lifecycleProperties.getInstanceId(),
+                executionFenceToken, endedAt) == 0) {
+            return false;
+        }
+        saveUnsupportedConversation(
+                workflowInstanceId, conversationId, originalQuestion, frontendMessage,
+                modelName, identity == null ? RequestIdentity.localDefault() : identity, endedAt);
+        workflowExecutionMapper.skipPendingSteps(workflowInstanceId, endedAt);
+        checkpointSaver.markWorkflowFailed(workflowInstanceId, executionFenceToken);
+        sseEventService.persistTransactionalEvent(
+                workflowInstanceId, conversationId, executionFenceToken,
+                WorkflowSseEventType.ERROR, null,
+                Map.of("status", "UNSUPPORTED", "message", frontendMessage));
         workflowExecutionMapper.deleteConversationLock(workflowInstanceId);
         return true;
     }
@@ -176,6 +223,48 @@ public class WorkflowFinalizationService {
                         response.conversationId(), invocationId, "main-workflow",
                         new UserMessage(response.originalQuestion()),
                         new AssistantMessage(response.finalAnswer()), response.endedAt(), identity),
+                invocationRecord);
+    }
+
+    private void saveUnsupportedConversation(String workflowInstanceId,
+                                             String conversationId,
+                                             String originalQuestion,
+                                             String frontendMessage,
+                                             String modelName,
+                                             RequestIdentity identity,
+                                             Instant endedAt) {
+        if (!agentMemoryService.isEnabled()) {
+            return;
+        }
+        String invocationId = "wfu-" + workflowInstanceId;
+        AgentInvocationRecord invocationRecord = new AgentInvocationRecord(
+                invocationId,
+                conversationId,
+                identity.tenantId(),
+                "main-workflow",
+                TraceIdUtil.currentTraceId(),
+                workflowInstanceId,
+                null,
+                "openai-compatible",
+                modelName,
+                identity.userId(),
+                identity.customerId(),
+                identity.operatorId(),
+                originalQuestion,
+                frontendMessage,
+                null,
+                frontendMessage.length(),
+                null,
+                List.of(),
+                "UNSUPPORTED",
+                "UNSUPPORTED_INTENT",
+                null,
+                endedAt);
+        agentMemoryService.saveSuccessfulExchange(
+                new AgentMemoryExchange(
+                        conversationId, invocationId, "main-workflow",
+                        new UserMessage(originalQuestion),
+                        new AssistantMessage(frontendMessage), endedAt, identity),
                 invocationRecord);
     }
 }

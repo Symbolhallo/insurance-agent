@@ -229,7 +229,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             return complete(graphOutput.state(), workflowInstanceId, startedAt);
         }
         catch (Exception ex) {
-            fail(workflowInstanceId, executionFenceToken, ex);
+            fail(workflowInstanceId, executionFenceToken, ex, request);
             throw new IllegalStateException("Main workflow execution failed", ex);
         }
     }
@@ -745,12 +745,34 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
      * 绝不覆盖已提交终态。
      */
     private void fail(String workflowInstanceId, long executionFenceToken, Exception exception) {
+        fail(workflowInstanceId, executionFenceToken, exception, null);
+    }
+
+    private void fail(String workflowInstanceId,
+                      long executionFenceToken,
+                      Exception exception,
+                      MainWorkflowRequest originalRequest) {
         Instant endedAt = Instant.now();
         String errorMessage = truncateErrorMessage(exception);
+        boolean unsupported = hasCause(exception, UnsupportedWorkflowIntentException.class);
+        String frontendMessage = unsupported
+                ? UnsupportedWorkflowIntentException.USER_MESSAGE
+                : null;
         WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
-        boolean failed = instance != null && workflowFinalizationService.fail(
-                workflowInstanceId, instance.conversationId(), errorMessage,
-                executionFenceToken, endedAt);
+        boolean failed = false;
+        if (instance != null) {
+            if (unsupported && originalRequest != null) {
+                failed = workflowFinalizationService.failUnsupported(
+                        workflowInstanceId, instance.conversationId(), errorMessage, frontendMessage,
+                        originalRequest.message(), modelName(), originalRequest.identity(),
+                        executionFenceToken, endedAt);
+            }
+            else {
+                failed = workflowFinalizationService.fail(
+                        workflowInstanceId, instance.conversationId(), errorMessage,
+                        frontendMessage, executionFenceToken, endedAt);
+            }
+        }
         if (!failed) {
             log.warn("[Workflow] code={} action=fail status=terminal-preserved workflowInstanceId={}",
                     WORKFLOW_CODE, workflowInstanceId);
@@ -760,6 +782,17 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         }
         log.error("[Workflow] code={} action=execute status=failed workflowInstanceId={}",
                 WORKFLOW_CODE, workflowInstanceId, exception);
+    }
+
+    private boolean hasCause(Throwable error, Class<? extends Throwable> type) {
+        Throwable current = error;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     /**
