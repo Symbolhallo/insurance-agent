@@ -1,10 +1,8 @@
 package com.xxx.insurance.knowledge.config;
 
 import com.xxx.insurance.ai.agent.AgentScopeAgentFactory;
-import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
-import com.xxx.insurance.ai.config.AiModelProperties;
+import com.xxx.insurance.ai.agent.ConversationAwareAgentExecutor;
 import com.xxx.insurance.ai.config.SkillConfig;
-import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.knowledge.agent.KnowledgeQaAgent;
 import com.xxx.insurance.knowledge.tool.InsuranceKnowledgeTool;
 import io.agentscope.core.skill.repository.AgentSkillRepository;
@@ -39,9 +37,7 @@ public class KnowledgeQaAgentConfig {
     @Bean(KNOWLEDGE_QA_AGENT)
     public KnowledgeQaAgent knowledgeQaAgent(
             @Qualifier(KNOWLEDGE_QA_REACT_AGENT) HarnessAgent reactAgent,
-            AgentMemoryService agentMemoryService,
-            AiModelProperties aiModelProperties,
-            ReactAgentStreamingExecutor streamingExecutor) {
-        return new KnowledgeQaAgent(reactAgent, agentMemoryService, aiModelProperties, streamingExecutor);
+            ConversationAwareAgentExecutor conversationExecutor) {
+        return new KnowledgeQaAgent(reactAgent, conversationExecutor);
     }
 }

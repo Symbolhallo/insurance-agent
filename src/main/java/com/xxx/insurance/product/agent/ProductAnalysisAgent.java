@@ -1,18 +1,13 @@
 package com.xxx.insurance.product.agent;
 
-import io.agentscope.core.message.AssistantMessage;
-import io.agentscope.core.message.Msg;
-import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
-import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
+import com.xxx.insurance.ai.agent.ConversationAgentExecutionResult;
+import com.xxx.insurance.ai.agent.ConversationAgentOutputInspection;
+import com.xxx.insurance.ai.agent.ConversationAwareAgentExecutor;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.AiModelProperties;
-import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
-import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
-import com.xxx.insurance.common.exception.ErrorCode;
-import com.xxx.insurance.common.util.TraceIdUtil;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
 import com.xxx.insurance.product.model.ProductAnalysisAnswerInspection;
@@ -21,15 +16,10 @@ import com.xxx.insurance.product.model.ProductAnalysisChatResponse;
 import com.xxx.insurance.product.model.ProductAnalysisRequest;
 import com.xxx.insurance.product.model.ProductAnalysisResult;
 import com.xxx.insurance.product.service.ProductAnalysisService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 
-import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * 产品分析业务智能体入口。
@@ -52,8 +42,6 @@ public class ProductAnalysisAgent {
 
     public static final String AGENT_DESCRIPTION = "保险产品条款、保障责任、适用客群和风险提示的结构化分析智能体";
 
-    private static final Logger log = LoggerFactory.getLogger(ProductAnalysisAgent.class);
-
     private final HarnessAgent reactAgent;
 
     private final ProductAnalysisService productAnalysisService;
@@ -62,11 +50,7 @@ public class ProductAnalysisAgent {
 
     private final ProductAnalysisAnswerInspector productAnalysisAnswerInspector;
 
-    private final AgentMemoryService agentMemoryService;
-
-    private final AiModelProperties aiModelProperties;
-
-    private final ReactAgentStreamingExecutor streamingExecutor;
+    private final ConversationAwareAgentExecutor conversationExecutor;
 
     /** 创建产品分析业务入口并组合 HarnessAgent、Skill、Tool、Formatter、Memory 和审计能力。 */
     public ProductAnalysisAgent(HarnessAgent reactAgent,
@@ -80,9 +64,21 @@ public class ProductAnalysisAgent {
         this.productAnalysisService = productAnalysisService;
         this.productAnalysisFormatter = productAnalysisFormatter;
         this.productAnalysisAnswerInspector = productAnalysisAnswerInspector;
-        this.agentMemoryService = agentMemoryService;
-        this.aiModelProperties = aiModelProperties;
-        this.streamingExecutor = streamingExecutor;
+        this.conversationExecutor = new ConversationAwareAgentExecutor(
+                agentMemoryService, aiModelProperties, streamingExecutor);
+    }
+
+    /** 创建复用统一会话执行器的产品分析业务入口。 */
+    public ProductAnalysisAgent(HarnessAgent reactAgent,
+                                ProductAnalysisService productAnalysisService,
+                                ProductAnalysisFormatter productAnalysisFormatter,
+                                ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
+                                ConversationAwareAgentExecutor conversationExecutor) {
+        this.reactAgent = reactAgent;
+        this.productAnalysisService = productAnalysisService;
+        this.productAnalysisFormatter = productAnalysisFormatter;
+        this.productAnalysisAnswerInspector = productAnalysisAnswerInspector;
+        this.conversationExecutor = conversationExecutor;
     }
 
     /** 返回 HarnessAgent 注册名称。 */
@@ -132,64 +128,24 @@ public class ProductAnalysisAgent {
                                             AgentExecutionContext executionContext) {
         validateChatRequest(request);
         Objects.requireNonNull(executionContext, "Agent execution context must not be null");
-        String invocationId = newInvocationId();
-        long startNanos = System.nanoTime();
-        MemoryCallContext memoryCallContext = buildMemoryCallContext(request, executionContext);
-        try {
-            log.info("[Agent] name={} action=chat status=start invocationId={} conversationId={} messageLength={} memoryEnabled={} memoryMessageCount={}",
-                    AGENT_NAME,
-                    invocationId,
-                    request.conversationId(),
-                    request.message().length(),
-                    memoryCallContext.memoryEnabled(),
-                    memoryCallContext.historyMessageCount());
-            AssistantMessage assistantMessage = callReactAgent(request, memoryCallContext, executionContext);
-            long durationMs = elapsedMillis(startNanos);
-            String answer = assistantMessage.getTextContent();
-            Instant answeredAt = Instant.now();
-            ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect(answer);
-            AgentInvocationRecord invocationRecord = successInvocationRecord(
-                    request,
-                    executionContext,
-                    invocationId,
-                    answer,
-                    durationMs,
-                    inspection,
-                    answeredAt);
-            saveMemory(memoryCallContext, invocationRecord, assistantMessage, answeredAt, executionContext);
-            log.info("[Agent] name={} action=chat status=success invocationId={} conversationId={} durationMs={} answerLength={} memoryEnabled={} outputFormatValid={}",
-                    AGENT_NAME,
-                    invocationId,
-                    request.conversationId(),
-                    durationMs,
-                    answerLength(answer),
-                    memoryCallContext.memoryEnabled(),
-                    inspection.outputFormatValid());
-            return new ProductAnalysisChatResponse(
-                    AGENT_NAME,
-                    request.conversationId(),
-                    invocationId,
-                    answer,
-                    true,
-                    durationMs,
-                    answeredAt,
-                    answerLength(answer),
-                    memoryCallContext.memoryEnabled(),
-                    memoryCallContext.historyMessageCount(),
-                    inspection.outputFormatValid(),
-                    inspection.missingSections());
-        }
-        catch (Exception ex) {
-            long durationMs = elapsedMillis(startNanos);
-            saveFailedInvocation(request, executionContext, invocationId, durationMs, ex);
-            log.error("[Agent] name={} action=chat status=failed invocationId={} conversationId={} durationMs={}",
-                    AGENT_NAME,
-                    invocationId,
-                    request.conversationId(),
-                    durationMs,
-                    ex);
-            throw new IllegalStateException("Product analysis model invocation failed", ex);
-        }
+        ConversationAgentExecutionResult result = conversationExecutor.execute(
+                reactAgent,
+                AGENT_NAME,
+                "pai-",
+                request.message(),
+                request.conversationId(),
+                executionContext,
+                answer -> {
+                    ProductAnalysisAnswerInspection inspection = productAnalysisAnswerInspector.inspect(answer);
+                    return new ConversationAgentOutputInspection(
+                            inspection.outputFormatValid(), inspection.missingSections());
+                },
+                "Product analysis model invocation failed");
+        return new ProductAnalysisChatResponse(
+                AGENT_NAME, request.conversationId(), result.invocationId(), result.answer(), true,
+                result.durationMs(), result.answeredAt(), result.answerLength(), result.memoryEnabled(),
+                result.historyMessageCount(), Boolean.TRUE.equals(result.outputFormatValid()),
+                result.missingSections());
     }
 
     /**
@@ -222,221 +178,4 @@ public class ProductAnalysisAgent {
         }
     }
 
-    /** 构建模型消息和持久化用户原话；DAG 子任务会显式禁用会话记忆。 */
-    private MemoryCallContext buildMemoryCallContext(ProductAnalysisChatRequest request,
-                                                     AgentExecutionContext executionContext) {
-        if (!executionContext.conversationMemoryEnabled()
-                || !agentMemoryService.isEnabled()
-                || !StringUtils.hasText(request.conversationId())) {
-            return MemoryCallContext.disabled();
-        }
-        List<Msg> historyMessages = agentMemoryService.getHistory(request.conversationId());
-        UserMessage modelUserMessage = new UserMessage(request.message());
-        UserMessage persistedUserMessage = new UserMessage(executionContext.auditedUserMessage(request.message()));
-        List<Msg> requestMessages = new ArrayList<>(historyMessages);
-        requestMessages.add(modelUserMessage);
-        return new MemoryCallContext(
-                true,
-                request.conversationId(),
-                persistedUserMessage,
-                requestMessages,
-                historyMessages.size());
-    }
-
-    /**
-     * 根据会话记忆和 Token 开关选择字符串/历史消息输入及 call/stream；流式路径发布模型正文并从同一次
-     * ReAct/Tool 最终 State 提取权威回答，避免为拿最终内容再次执行 Tool。
-     */
-    private AssistantMessage callReactAgent(ProductAnalysisChatRequest request,
-                                            MemoryCallContext memoryCallContext,
-                                            AgentExecutionContext executionContext)
-            throws Exception {
-        if (executionContext.tokenStreamingEnabled()) {
-            AgentTokenStreamContext streamContext = tokenStreamContext(
-                    request.conversationId(), executionContext);
-            if (!memoryCallContext.memoryEnabled()) {
-                return streamingExecutor.execute(reactAgent, request.message(), streamContext);
-            }
-            return streamingExecutor.execute(reactAgent, memoryCallContext.requestMessages(), streamContext);
-        }
-        if (!memoryCallContext.memoryEnabled()) {
-            return streamingExecutor.execute(reactAgent, request.message());
-        }
-        return streamingExecutor.execute(reactAgent, memoryCallContext.requestMessages());
-    }
-
-    /** 将编排上下文收敛为前端可识别的产品 Agent Token 流标识。 */
-    private AgentTokenStreamContext tokenStreamContext(String conversationId,
-                                                       AgentExecutionContext executionContext) {
-        if (!StringUtils.hasText(executionContext.workflowInstanceId())) {
-            return null;
-        }
-        return new AgentTokenStreamContext(
-                executionContext.workflowInstanceId(),
-                conversationId,
-                executionContext.executionFenceToken(),
-                executionContext.taskId(),
-                AGENT_NAME,
-                AgentTokenStreamContext.PHASE_SUB_AGENT);
-    }
-
-    /**
-     * 独立会话模式通过 AgentMemoryService 原子写窗口消息、长期 USER/ASSISTANT 历史和成功调用流水；
-     * DAG 模式禁用会话消息写入，只追加 invocation，避免并行子任务覆盖同一 conversation 窗口。
-     */
-    private void saveMemory(MemoryCallContext memoryCallContext,
-                            AgentInvocationRecord invocationRecord,
-                            AssistantMessage assistantMessage,
-                            Instant answeredAt,
-                            AgentExecutionContext executionContext) {
-        if (!memoryCallContext.memoryEnabled()) {
-            if (agentMemoryService.isEnabled() && StringUtils.hasText(invocationRecord.conversationId())) {
-                agentMemoryService.saveSuccessfulInvocation(invocationRecord);
-            }
-            return;
-        }
-        agentMemoryService.saveSuccessfulExchange(new AgentMemoryExchange(
-                memoryCallContext.conversationId(),
-                invocationRecord.invocationId(),
-                AGENT_NAME,
-                memoryCallContext.userMessage(),
-                assistantMessage,
-                answeredAt,
-                executionContext.identity()), invocationRecord);
-    }
-
-    /** 尝试保存失败调用审计，持久化异常不会覆盖原始模型异常。 */
-    private void saveFailedInvocation(ProductAnalysisChatRequest request,
-                                      AgentExecutionContext executionContext,
-                                      String invocationId,
-                                      long durationMs,
-                                      Exception exception) {
-        if (!agentMemoryService.isEnabled() || !StringUtils.hasText(request.conversationId())) {
-            return;
-        }
-        try {
-            agentMemoryService.saveFailedInvocation(failedInvocationRecord(
-                    request,
-                    executionContext,
-                    invocationId,
-                    durationMs,
-                    exception));
-        }
-        catch (Exception persistenceException) {
-            log.warn("[Agent] name={} action=saveFailedInvocation status=failed invocationId={} conversationId={}",
-                    AGENT_NAME,
-                    invocationId,
-                    request.conversationId(),
-                    persistenceException);
-        }
-    }
-
-    /** 构造包含回答格式检查结果的成功调用审计记录。 */
-    private AgentInvocationRecord successInvocationRecord(ProductAnalysisChatRequest request,
-                                                          AgentExecutionContext executionContext,
-                                                          String invocationId,
-                                                          String answer,
-                                                          long durationMs,
-                                                          ProductAnalysisAnswerInspection inspection,
-                                                          Instant createdAt) {
-        return new AgentInvocationRecord(
-                invocationId,
-                request.conversationId(),
-                executionContext.identity().tenantId(),
-                AGENT_NAME,
-                TraceIdUtil.currentTraceId(),
-                executionContext.workflowInstanceId(),
-                executionContext.workflowStepId(),
-                "openai-compatible",
-                modelName(),
-                executionContext.identity().userId(),
-                executionContext.identity().customerId(),
-                executionContext.identity().operatorId(),
-                executionContext.auditedUserMessage(request.message()),
-                answer,
-                durationMs,
-                answerLength(answer),
-                inspection.outputFormatValid(),
-                inspection.missingSections(),
-                "SUCCESS",
-                null,
-                null,
-                createdAt);
-    }
-
-    /** 构造不包含助手回答的失败调用审计记录。 */
-    private AgentInvocationRecord failedInvocationRecord(ProductAnalysisChatRequest request,
-                                                         AgentExecutionContext executionContext,
-                                                         String invocationId,
-                                                         long durationMs,
-                                                         Exception exception) {
-        return new AgentInvocationRecord(
-                invocationId,
-                request.conversationId(),
-                executionContext.identity().tenantId(),
-                AGENT_NAME,
-                TraceIdUtil.currentTraceId(),
-                executionContext.workflowInstanceId(),
-                executionContext.workflowStepId(),
-                "openai-compatible",
-                modelName(),
-                executionContext.identity().userId(),
-                executionContext.identity().customerId(),
-                executionContext.identity().operatorId(),
-                executionContext.auditedUserMessage(request.message()),
-                null,
-                durationMs,
-                null,
-                null,
-                List.of(),
-                "FAILED",
-                ErrorCode.AGENT_INVOKE_FAILED.code(),
-                truncateErrorMessage(exception),
-                Instant.now());
-    }
-
-    /** 从全局模型配置读取当前模型名称。 */
-    private String modelName() {
-        return aiModelProperties.getModelName();
-    }
-
-    /** 将异常消息截断到审计字段允许的长度。 */
-    private String truncateErrorMessage(Exception exception) {
-        if (exception == null || exception.getMessage() == null) {
-            return null;
-        }
-        String message = exception.getMessage();
-        if (message.length() <= 1024) {
-            return message;
-        }
-        return message.substring(0, 1024);
-    }
-
-    /** 根据单调时钟计算 Agent 调用耗时。 */
-    private long elapsedMillis(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000;
-    }
-
-    /** 计算回答字符数量，空回答记为零。 */
-    private int answerLength(String answer) {
-        return answer == null ? 0 : answer.length();
-    }
-
-    /** 生成产品分析 Agent 调用编号。 */
-    private String newInvocationId() {
-        return "pai-" + UUID.randomUUID().toString().replace("-", "");
-    }
-
-    private record MemoryCallContext(
-            boolean memoryEnabled,
-            String conversationId,
-            UserMessage userMessage,
-            List<Msg> requestMessages,
-            int historyMessageCount) {
-
-        /** 创建不携带历史消息的调用上下文。 */
-        static MemoryCallContext disabled() {
-            return new MemoryCallContext(false, null, null, List.of(), 0);
-        }
-    }
 }

@@ -210,13 +210,15 @@ class LocalDbWorkflowSseEventServiceTests {
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         when(transactionManager.getTransaction(any(TransactionDefinition.class)))
                 .thenReturn(mock(TransactionStatus.class));
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         return new LocalDbWorkflowSseEventService(
                 eventMapper,
                 executionMapper,
-                new ObjectMapper().findAndRegisterModules(),
                 new WorkflowSseProperties(
                         Duration.ofMinutes(5), Duration.ofMinutes(10), Duration.ofMillis(500), null, 0),
                 new WorkflowLifecycleProperties(),
-                transactionManager);
+                transactionManager,
+                new WorkflowSseSubscriberRegistry(),
+                new WorkflowSseEventCodec(objectMapper));
     }
 }

@@ -123,7 +123,9 @@ Workflow 可以调用领域 Agent；领域 Agent 不应反向依赖主 Workflow�
 | `ReactAgentStreamingExecutor` | 多个 `execute()` 重载；`runtimeContext()`、`putIfPresent()`、事件映射与消息转换辅助函数 | 消费一次 AgentScope `streamEvents(...)`，发布 `TextBlockDeltaEvent` Token，并从 `AgentResultEvent` 提取最终 AssistantMessage。构造 RuntimeContext 时只写入非空扩展字段，因为 Planner、Summary 等非 DAG 流允许 taskId 为空，而 AgentScope 底层 ConcurrentHashMap 不接受 null。 |
 | `AgentScopeModelExecutor` | `execute()`、`appendResponse()`、`repairMissingObjectStart()` | 前置 LLM 节点直接消费 AgentScope `Model.stream(...)`；聚合 TextBlock、发布 Token 并受控修复已知 DeepSeek JSON 起始边界问题。 |
 | `AgentScopeStructuredOutput` | `schema()`、`convert()` | 用 AgentScope `JsonSchemaUtils` 生成结构合同，并用项目 Jackson 严格转换模型 JSON；兼容 OpenAI-compatible 模型偶发生成的 `type/object + properties` Schema 外壳，解包后仍进入原有强类型和业务 Validator 校验。 |
-| `AuditedReactAgentExecutor` | `execute()`；`call()`、`saveFailure()`、`invocation()` | 保单和资产 Agent 的公共执行器，统一同步/流式调用、耗时统计、成功/失败审计。 |
+| `AuditedReactAgentExecutor` | `execute()`、输入校验与无记忆上下文转换 | 保单和资产 Agent 的轻量适配器；强制只写调用流水，并把同步/流式调用、耗时及成功/失败审计委托给统一执行器。 |
+| `ConversationAwareAgentExecutor` | `execute()`；记忆装载、模型调用、成功/失败保存辅助函数 | 产品分析和知识问答 Agent 的公共会话执行器；独立模式原子保存问答与调用流水，DAG 模式只写调用流水，并统一流式上下文与失败补偿。 |
+| `ConversationAgentExecutionResult` / `ConversationAgentOutputInspection` | Record 字段、`notInspected()` | 隔离公共执行生命周期与领域响应 DTO/产品回答格式检查。 |
 
 `ai.agent.state` 是 Harness 状态持久化层：`OceanBaseAgentStateStore` 实现 AgentScope `AgentStateStore`
 及数据库 CAS，`NamespacedAgentStateStore` 给共享存储附加 Agent 名称，防止相同 userId/threadId 在不同
@@ -262,7 +264,8 @@ Last-Event-ID、跨实例 Poller 或人工确认恢复接口。
 | --- | --- | --- |
 | `GraphCheckpointStateCodec` | `encode()`、`decode()`、`EncodedState` | 对项目 StateSerializer 做二进制编解码包装。 |
 | `OceanBaseCheckpointSaver` | `list()`、`get()`、`put()`、`release()`、`markCompleted()`、`markFailed()`、`markWorkflowCompleted()`、`markWorkflowFailed()`、`purgeExpired()` | 自定义 `BaseCheckpointSaver`；通过线程版本乐观锁保存不可变 Checkpoint，并联表校验 execution owner、fencing token 和 lease。 |
-| `GraphCheckpointConfig` | `mainWorkflowStateSerializer()`、`graphCheckpointStateCodec()`、`mainWorkflowCheckpointSaver()` Bean | 注册工作流 Record 的自定义 Jackson serializer/deserializer，解决 1.1.2.0 嵌套 Record 恢复为 Map 的兼容问题。内部类统一实现 `serialize()`、`serializeWithType()`、`deserialize()` 和类型规范化。 |
+| `GraphCheckpointConfig` | `mainWorkflowStateSerializer()`、`graphCheckpointStateCodec()`、`mainWorkflowCheckpointSaver()` Bean | 只负责 Checkpoint Bean 装配、类型别名和 schema 常量，避免配置类承载协议实现。 |
+| `checkpoint.serialization.MainWorkflowCheckpointSerde` | `createStateSerializer()` 及版本化 serializer/deserializer | 集中处理工作流 Record、类型信息和 schema 规范化，解决 1.1.2.0 嵌套 Record 恢复为 Map 的兼容问题；协议实现与 Spring 配置分离。 |
 | `GraphCheckpointProperties` | Getter/Setter、`validate()` | ACTIVE/FAILED 7 天、COMPLETED 24 小时、State Schema 版本、写冲突重试次数。 |
 | `GraphCheckpointMapper` | 线程插入/查询、`advanceThreadVersion()`、Checkpoint 插入/查询、状态更新、过期删除 | 操作 `ai_graph_thread` 和 `ai_graph_checkpoint`；执行期写入同时校验 `ai_workflow_instance` 执行权。 |
 | `GraphCheckpointRecord` / `GraphCheckpointThreadRecord` | Record 字段 | Checkpoint 快照与线程元数据。 |
@@ -284,6 +287,7 @@ Last-Event-ID、跨实例 Poller 或人工确认恢复接口。
 | `WorkflowSummaryAgentConfig` | `workflowSummaryReactAgent()`、`workflowSummaryAgent()` | Summary HarnessAgent 与门面 Bean。 |
 | `OutputReviewConfig` | `outputReviewGateway()` | 注册当前 Mock 审核网关。 |
 | `WorkflowExecutionConfig` | `workflowDagTaskExecutor()`、`workflowSseTaskExecutor()`、`workflowTokenFlushScheduler()`、`workflowMaintenanceTaskScheduler()`、`createExecutor()` | DAG/SSE 有界线程池；SSE 执行器采用零容量直接交付，最多8路立即运行、满载快速拒绝，不允许已连接请求静默排队；Token 批次刷新和 Spring `@Scheduled` 数据库轮询/清理/租约任务使用相互隔离的调度器；同时负责 MDC 传播、优雅关闭并启用 Scheduling。 |
+| `WorkflowExecutorProperties` | 容量 Getter/Setter、`validate()` | 映射 `insurance.ai.workflow.executor.*`；统一配置 DAG/SSE 线程池、Token/维护调度器和关闭等待时间，避免环境容量参数硬编码在 Bean 工厂中。 |
 | `WorkflowLifecycleProperties` | 租约 Getter/Setter、`validate()` | 配置实例 owner、执行/抢占/等待确认租约和 heartbeat 周期，并保证续租周期短于最短执行租约。 |
 
 ### `workflow.controller`
@@ -327,7 +331,9 @@ Last-Event-ID、跨实例 Poller 或人工确认恢复接口。
 | 文件 | 核心函数 | 作用 |
 | --- | --- | --- |
 | `MainWorkflowService` | run/confirm/claim/resume 接口族 | 主工作流应用端口。 |
-| `LocalDbMainWorkflowService` | `run()`、`confirmProducts()`、`claimProductConfirmation()`、`confirmClaimedProducts()`、`releaseProductConfirmationClaim()`、`resume()`、`waitingConfirmResponse()`、`complete()`、`fail()` | 创建实例/步骤、调用 Graph、中断响应、原子确认恢复、最终记忆和状态收口。 |
+| `LocalDbMainWorkflowService` | `run()`、`confirmProducts()`、`claimProductConfirmation()`、`confirmClaimedProducts()`、`releaseProductConfirmationClaim()`、`resume()`、`waitingConfirmResponse()`、`complete()`、`fail()` | 主工作流应用编排；协调 Graph、Lease/Fence、暂停/恢复和最终事务收口，不再承担基础 State/DTO 组装。 |
+| `MainWorkflowExecutionFactory` | `createWorkflowInstanceId()`、`initialState()`、`runnableConfig()`、`createWorkflowSteps()`、`workflowStepRecords()`、`toJson()` | 无状态执行工厂；集中创建工作流/步骤编号、初始 Graph State、Checkpoint metadata、步骤审计和 JSON 载荷。 |
+| `MainWorkflowResponseAssembler` | `waitingConfirmation()`、`completed()`、`confirmationCandidates()` | 纯响应组装器；强类型读取 Graph State、计算终态并构造等待确认/完成响应，不执行事务或事件发送。 |
 | `NoOpMainWorkflowService` | 同接口禁用响应 | 非 local-db profile 的可启动替代。 |
 | `ContextAlignmentService` | `align()` 重载、Prompt 拼装和确定性校验函数 | 加载会话快照，调用模型完成话题判断、指代消解、问题改写和确认信息合并。 |
 | `IntentRecognitionService` | `recognize()` 重载、`validateAndMap()`、`mergeRoutes()` | 结构化识别意图，并只允许四个白名单 Agent；模型误把同类目标拆成重复意图时，在每条都通过白名单和非空字段校验后按原顺序合并，完全相同文本去重。未知意图、空查询和空理由仍拒绝，不因容错放宽路由边界。 |
@@ -351,6 +357,7 @@ Last-Event-ID、跨实例 Poller 或人工确认恢复接口。
 | 文件 | 核心函数 | 作用 |
 | --- | --- | --- |
 | `WorkflowStartService` | `start()` | 单事务内先条件清理当前 conversation 的过期失效锁，再插入会话锁、实例和步骤；主键冲突是多实例启动互斥的最终防线。 |
+| `WorkflowExecutionClaimService` | `claimProductConfirmation()`、`requireClaimedConfirmation()`、`claimResume()`、`releaseProductConfirmationClaim()` | 集中管理确认/恢复的状态 CAS、owner/lease/fence 回读校验和未消费 Claim 释放；Graph 应用服务只消费已验证的执行代次。 |
 | `WorkflowFinalizationService` | `complete()`、`fail()`、内部 `finalize()` | 单事务收口实例终态、最终 Memory、步骤、Checkpoint、SSE Outbox 和 conversation 锁。 |
 | `WorkflowPauseService` | `pauseForProductConfirmation()` | 单事务写入步骤暂停、WAITING_CONFIRM、会话锁续期和 human_confirm 事实事件。 |
 | `WorkflowNodeExecutionGuard` / `LocalDbWorkflowNodeExecutionGuard` | `execute()`；Lease/Fence 与步骤状态辅助函数 | 装饰主图 Node，强制步骤状态 CAS、Lease/Fence 门禁及结果审计；安全异常必须传播给 Graph。 |
@@ -369,7 +376,9 @@ Last-Event-ID、跨实例 Poller 或人工确认恢复接口。
 | `sse.model.WorkflowSseEvent` / `WorkflowSseEventRecord` | Record 字段 | 前端事件与数据库事件记录。 |
 | `sse.model.WorkflowSseSubscription` | Record 字段 | 绑定预分配 workflowInstanceId 与已注册 SseEmitter，使 Controller 可在首事件前返回恢复主键。 |
 | `WorkflowEventPublisher` | `publish()`、`completeSubscribers()` | Workflow 事件输出端口。 |
-| `LocalDbWorkflowSseEventService` | subscribe/reconnect/publish/poll/deliver/purge/complete；`SseClient.send()` | OceanBase 是事件事实源；每个连接按 sequenceNo 重放、跨实例轮询和幂等推送。 |
+| `LocalDbWorkflowSseEventService` | subscribe/reconnect/publish/poll/deliver/purge/complete | 编排实例校验、事实事件持久化、重放和跨实例轮询，不直接维护 JVM 连接 Map 或 JSON 细节。 |
+| `WorkflowSseSubscriberRegistry` | `registerNew()`、`createClient()`、`sendOrRemove()`、`complete()`、`fail()` | 集中维护本 JVM 的实例锁、SseEmitter、连接游标和清理回调；`SseClient` 串行推进 sequence。 |
+| `WorkflowSseEventCodec` | `toEvent()`、`toJson()` | 隔离数据库事件记录、SSE 协议对象和 JSON 数据之间的转换。 |
 | `NoOpWorkflowEventPublisher` | 空发布 | 非 local-db 替代。 |
 | `WorkflowSseService` | `start()`、`reconnect()`、`confirmProducts()`、后台 execute 函数 | 预分配实例号，先建立或抢占 SSE，再把 Graph 放入有界线程池；启动时返回实例号与连接句柄。 |
 | `WorkflowAgentTokenStreamSink` | `publishToken()`、`complete()`、`abort()`、定时/阈值刷新函数 | 首个 Agent/前置模型块立即发布；后续小块按80ms或128字符合并为持久化 `agent_stream` 事件，结束前强制刷新。 |
@@ -416,7 +425,7 @@ Last-Event-ID、跨实例 Poller 或人工确认恢复接口。
 
 | 子目录 | 文件与函数 |
 | --- | --- |
-| `agent` | `ProductAnalysisAgent`: `analyze()` 走确定性 Service；`chat()` 重载走 AgentScope HarnessAgent、Memory、审计和流式输出；元信息访问器用于状态与装配验证。 |
+| `agent` | `ProductAnalysisAgent`: `analyze()` 走确定性 Service；`chat()` 只做请求校验、产品回答合同检查与响应映射，Memory、审计和流式生命周期委托 `ConversationAwareAgentExecutor`。 |
 | `config` | `ProductAnalysisAgentConfig`: `productAnalysisReactAgent()`、`productAnalysisAgent()` Bean；Tool 由工厂注册进该 HarnessAgent 的独立 Toolkit。 |
 | `controller` | `ProductAnalysisAgentController.chat()`；`ProductRecallController.recall()`。 |
 | `formatter` | `ProductAnalysisFormatter.format()` 将原始产品数据转结果；`ProductAnalysisAnswerInspector.inspect()` 校验 Skill 要求的输出章节。 |
@@ -441,7 +450,7 @@ Model 文件：
 
 | 文件组 | 函数/作用 |
 | --- | --- |
-| `KnowledgeQaAgent` | `chat()` 重载、元信息访问器、HarnessAgent/Memory/审计辅助函数。 |
+| `KnowledgeQaAgent` | `chat()` 重载、元信息访问器；只保留知识域请求/响应边界，共同的 HarnessAgent、Memory、审计和流式生命周期委托 `ConversationAwareAgentExecutor`。 |
 | `KnowledgeQaAgentConfig` | `knowledgeQaReactAgent()`、`knowledgeQaAgent()` Bean；绑定知识域 SkillRepository 与 Tool。 |
 | `KnowledgeQaAgentController` | `chat()` API。 |
 | `InsuranceKnowledgeTool` | `search()` Tool，调用知识查询 Service。 |
@@ -507,9 +516,6 @@ Model 文件：
 | `application.properties` | 当前主配置：默认端口、模型环境变量、Actuator、Swagger、日志、Agent安全限制及 Profile Group。 |
 | `application-local-db.properties` | 当前 local-db 主配置：恢复 DataSource/Flyway/MyBatis；配置 Checkpoint、SSE、维护和租约。 |
 | `application-debug-timing.properties` | 当前 debug-timing 主配置：IDEA 长断点时间覆盖。 |
-| `application.yml` | 保留的基础配置迁移对照；同目录存在 properties 时优先级更低。 |
-| `application-local-db.yml` | 保留的 local-db 配置迁移对照；内容应与 properties 同步。 |
-| `application-debug-timing.yml` | 保留的断点调试配置迁移对照；内容应与 properties 同步。 |
 | `db/migration/V1...V21` | 15 张项目表、Graph/SSE、幂等与租约、AgentScope StateStore、租户所有权及工作流定义演进；V20 新增 AgentScope 状态表，V21 为根资源和审计数据增加 tenant 字段及索引。已执行脚本不能回写修改。 |
 | `skills/product-analysis/...` | 少量/批量产品分析 Skill。 |
 | `skills/knowledge-qa/...` | 保险业务知识问答 Skill。 |
@@ -565,14 +571,14 @@ AgentScope Model、HarnessAgent、Skill、Tool 和 AG-UI，适合不依赖数据
 | 配置组 | 当前值 | 运行语义 |
 | --- | --- | --- |
 | `memory` | 窗口20条 | 控制每个 conversationId 注入 AgentScope Model 的短期消息上限；不删除长期历史。 |
+| `executor` | DAG 2～4线程/队列32；SSE 2～8线程/零队列 | 控制工作流内部执行容量、Token/维护调度器线程数和优雅关闭等待；SSE 满载时快速拒绝。 |
 | `checkpoint` | 活动7天、完成24小时、Schema v1、写重试5次 | 控制 Graph 状态恢复窗口、序列化版本和乐观锁重试。 |
 | `sse` | 连接5分钟、事件10分钟、轮询500ms | 控制单段连接、Last-Event-ID 重放窗口和跨实例跟随延迟。 |
 | `maintenance` | Checkpoint 每小时、SSE 每30秒、恢复每30秒 | 控制过期数据物理删除和失效 claim/lock 回收；调度周期会形成到期后的删除延迟。 |
 | `lifecycle` | 执行15分钟、claim 2分钟、等待确认24小时、心跳1分钟 | 控制多实例 owner 租约、故障接管和同会话并发锁；heartbeat 必须短于执行及claim租约。 |
 
-三份 properties 是当前运行配置，原有三份 YAML 保留为低优先级迁移对照。Spring Boot 在同一位置
-同时发现 `.properties` 和 YAML 时优先采用 properties；`ApplicationPropertiesPriorityTests` 固定基础配置和
-local-db Profile 的优先级及数据库排除项清空语义。两种格式均保留就地注释，后续修改必须同步。
+三份 properties 是唯一运行配置源；`ApplicationPropertiesPriorityTests` 固定基础配置、local-db Profile
+加载及数据库排除项清空语义。后续配置变更只修改 properties，避免多格式副本漂移。
 SSE 的10分钟事件保留期与
 Checkpoint 的7天/24小时保留期是两套独立生命周期，不能混用。
 
@@ -841,7 +847,7 @@ DB_USERNAME
 DB_PASSWORD
 ```
 
-API Key 不能写入代码、YAML、数据库事件或日志。
+API Key 不能写入代码、properties、数据库事件或日志。
 
 ---
 

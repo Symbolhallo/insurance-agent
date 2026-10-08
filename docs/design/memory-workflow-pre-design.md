@@ -293,9 +293,9 @@ DB_PASSWORD=你的本地数据库密码
 ```text
 Spring Boot 启动
 ↓
-加载 application.yml
+加载 application.properties
 ↓
-加载 application-local-db.yml
+加载 application-local-db.properties
 ↓
 取消默认 profile 中的 DataSource/Flyway 排除
 ↓

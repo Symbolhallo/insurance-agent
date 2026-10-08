@@ -10,7 +10,7 @@
 
 Codex 在依据本文修改项目代码前，必须先检查：
 
-1. 项目现有的 `build.gradle`、`application.yml` 和模型配置类。
+1. 项目现有的 `build.gradle`、`application.properties` 和模型配置类。
 2. 实际使用的 Spring AI Alibaba 版本。
 3. 对应版本的源码 JAR 和已有代码，不要机械复制官网示例。
 4. 项目是否已经定义 `ChatModel`、`ReactAgent`、`SkillRegistry`、`Saver` 等 Bean。

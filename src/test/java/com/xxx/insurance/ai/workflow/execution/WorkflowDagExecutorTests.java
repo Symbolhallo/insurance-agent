@@ -1,6 +1,7 @@
 package com.xxx.insurance.ai.workflow.execution;
 
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
+import com.xxx.insurance.ai.workflow.config.WorkflowExecutorProperties;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
 import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
 import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
@@ -48,7 +49,8 @@ class WorkflowDagExecutorTests {
     @BeforeEach
     void setUp() {
         taskGraphRunner = mock(WorkflowTaskGraphRunner.class);
-        taskExecutor = new WorkflowExecutionConfig().workflowDagTaskExecutor();
+        taskExecutor = new WorkflowExecutionConfig()
+                .workflowDagTaskExecutor(new WorkflowExecutorProperties());
         executor = new WorkflowDagExecutor(taskGraphRunner, taskExecutor);
     }
 

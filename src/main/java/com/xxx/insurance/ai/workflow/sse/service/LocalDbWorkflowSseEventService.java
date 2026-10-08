@@ -1,8 +1,5 @@
 package com.xxx.insurance.ai.workflow.sse.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.sse.config.WorkflowSseProperties;
 import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
@@ -11,6 +8,7 @@ import com.xxx.insurance.ai.workflow.model.WorkflowInstanceExecutionView;
 import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseEvent;
 import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseEventRecord;
 import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseEventType;
+import com.xxx.insurance.ai.workflow.sse.service.WorkflowSseSubscriberRegistry.SseClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
@@ -24,12 +22,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * local-db profile 下的 SSE 事件存储、实时广播和断线重放服务。
@@ -43,14 +38,9 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
 
     private static final Logger log = LoggerFactory.getLogger(LocalDbWorkflowSseEventService.class);
 
-    private static final TypeReference<Map<String, Object>> EVENT_DATA_TYPE = new TypeReference<>() {
-    };
-
     private final WorkflowSseEventMapper eventMapper;
 
     private final WorkflowExecutionMapper executionMapper;
-
-    private final ObjectMapper objectMapper;
 
     private final WorkflowSseProperties properties;
 
@@ -58,23 +48,25 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
 
     private final TransactionTemplate transactionTemplate;
 
-    private final Map<String, Object> workflowLocks = new ConcurrentHashMap<>();
+    private final WorkflowSseSubscriberRegistry subscriberRegistry;
 
-    private final Map<String, CopyOnWriteArrayList<SseClient>> subscribers = new ConcurrentHashMap<>();
+    private final WorkflowSseEventCodec eventCodec;
 
     /** 创建 SSE 事件服务并注入持久化、JSON 和连接策略依赖。 */
     public LocalDbWorkflowSseEventService(WorkflowSseEventMapper eventMapper,
                                           WorkflowExecutionMapper executionMapper,
-                                          ObjectMapper objectMapper,
                                           WorkflowSseProperties properties,
                                           WorkflowLifecycleProperties lifecycleProperties,
-                                          PlatformTransactionManager transactionManager) {
+                                          PlatformTransactionManager transactionManager,
+                                          WorkflowSseSubscriberRegistry subscriberRegistry,
+                                          WorkflowSseEventCodec eventCodec) {
         this.eventMapper = eventMapper;
         this.executionMapper = executionMapper;
-        this.objectMapper = objectMapper;
         this.properties = properties;
         this.lifecycleProperties = lifecycleProperties;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.subscriberRegistry = subscriberRegistry;
+        this.eventCodec = eventCodec;
     }
 
     /**
@@ -83,9 +75,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
      * 从而让 START 和首模型块可以在实例创建后立即通过事实表投递，避免先执行后订阅造成首事件丢失。
      */
     public SseEmitter subscribeNewRun(String workflowInstanceId) {
-        SseEmitter emitter = new SseEmitter(properties.connectionTimeout().toMillis());
-        register(workflowInstanceId, emitter);
-        return emitter;
+        return subscriberRegistry.registerNew(workflowInstanceId, properties.connectionTimeout());
     }
 
     /**
@@ -114,7 +104,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                                             String lastEventId,
                                             boolean confirmationResume) {
         long afterSequence = parseLastSequence(workflowInstanceId, lastEventId);
-        Object lock = workflowLocks.computeIfAbsent(workflowInstanceId, ignored -> new Object());
+        Object lock = subscriberRegistry.workflowLock(workflowInstanceId);
         synchronized (lock) {
             WorkflowInstanceExecutionView workflowInstance = requireSubscribableInstance(
                     workflowInstanceId, confirmationResume);
@@ -123,17 +113,16 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                     workflowInstanceId, afterSequence, Instant.now());
             rejectExpiredReplayGap(highWatermark, afterSequence, replayEvents);
 
-            SseEmitter emitter = new SseEmitter(properties.connectionTimeout().toMillis());
-            SseClient client = new SseClient(emitter, afterSequence);
-            configureCallbacks(workflowInstanceId, client);
+            SseClient client = subscriberRegistry.createClient(
+                    workflowInstanceId, afterSequence, properties.connectionTimeout());
             sendReplayEvents(workflowInstanceId, client, replayEvents);
             if (confirmationResume || isOpenStatus(workflowInstance.status())) {
-                subscribers.computeIfAbsent(workflowInstanceId, ignored -> new CopyOnWriteArrayList<>()).add(client);
+                subscriberRegistry.add(workflowInstanceId, client);
             }
             else {
-                emitter.complete();
+                client.emitter().complete();
             }
-            return emitter;
+            return client.emitter();
         }
     }
 
@@ -170,7 +159,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                                   SseClient client,
                                   List<WorkflowSseEventRecord> replayEvents) {
         for (WorkflowSseEventRecord replayEvent : replayEvents) {
-            sendOrRemove(workflowInstanceId, client, toEvent(replayEvent));
+            subscriberRegistry.sendOrRemove(workflowInstanceId, client, eventCodec.toEvent(replayEvent));
         }
     }
 
@@ -181,7 +170,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     public void failSubscribedRun(String workflowInstanceId,
                                   String conversationId,
                                   String message) {
-        if (!subscribers.containsKey(workflowInstanceId)) {
+        if (!subscriberRegistry.contains(workflowInstanceId)) {
             return;
         }
         WorkflowInstanceExecutionView instance = executionMapper.findInstance(workflowInstanceId);
@@ -206,7 +195,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                         WorkflowSseEventType type,
                         String node,
                         Map<String, Object> data) {
-        Object lock = workflowLocks.computeIfAbsent(workflowInstanceId, ignored -> new Object());
+        Object lock = subscriberRegistry.workflowLock(workflowInstanceId);
         synchronized (lock) {
             try {
                 WorkflowSseEvent event = transactionTemplate.execute(status -> persistEvent(
@@ -232,7 +221,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
      */
     @Scheduled(fixedDelayString = "${insurance.ai.workflow.sse.database-poll-interval:500ms}")
     public void pollPersistedEvents() {
-        subscribers.keySet().forEach(this::deliverPersistedEvents);
+        subscriberRegistry.workflowIds().forEach(this::deliverPersistedEvents);
     }
 
     /**
@@ -240,7 +229,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
      * 自行跳过已发送事件。网络成功后才推进连接游标；查询/发送失败不关闭其他连接，下一轮扫描继续补偿。
      */
     private void deliverPersistedEvents(String workflowInstanceId) {
-        List<SseClient> clients = subscribers.get(workflowInstanceId);
+        List<SseClient> clients = subscriberRegistry.clients(workflowInstanceId);
         if (clients == null || clients.isEmpty()) {
             return;
         }
@@ -252,9 +241,9 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
             List<WorkflowSseEventRecord> persistedEvents = eventMapper.findReplayEvents(
                     workflowInstanceId, earliestDeliveredSequence, Instant.now());
             for (WorkflowSseEventRecord persistedEvent : persistedEvents) {
-                WorkflowSseEvent event = toEvent(persistedEvent);
+                WorkflowSseEvent event = eventCodec.toEvent(persistedEvent);
                 for (SseClient client : clients) {
-                    sendOrRemove(workflowInstanceId, client, event);
+                    subscriberRegistry.sendOrRemove(workflowInstanceId, client, event);
                 }
             }
         }
@@ -306,7 +295,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
                 data);
         eventMapper.insert(new WorkflowSseEventRecord(
                 event.eventId(), workflowInstanceId, conversationId, sequence,
-                event.type(), node, toJson(event.data()), occurredAt,
+                event.type(), node, eventCodec.toJson(event.data()), occurredAt,
                 occurredAt.plus(properties.eventRetention())));
         return event;
     }
@@ -369,11 +358,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
     /** 完成并移除当前 JVM 上全部 SseEmitter、订阅游标和实例锁；保留数据库事实供重连与审计。 */
     @Override
     public void completeSubscribers(String workflowInstanceId) {
-        List<SseClient> clients = subscribers.remove(workflowInstanceId);
-        if (clients != null) {
-            clients.forEach(client -> client.emitter().complete());
-        }
-        workflowLocks.remove(workflowInstanceId);
+        subscriberRegistry.complete(workflowInstanceId);
     }
 
     /**
@@ -381,56 +366,7 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
      * 移除订阅和实例锁。此时没有可靠事件事实可重放，因此不伪造数据库 ERROR 事件。
      */
     public void failNewRun(String workflowInstanceId, Throwable error) {
-        List<SseClient> clients = subscribers.remove(workflowInstanceId);
-        if (clients != null) {
-            clients.forEach(client -> client.emitter().completeWithError(error));
-        }
-        workflowLocks.remove(workflowInstanceId);
-    }
-
-    /** 注册客户端并绑定断开、超时和错误清理回调。 */
-    private void register(String workflowInstanceId, SseEmitter emitter) {
-        SseClient client = new SseClient(emitter, 0L);
-        configureCallbacks(workflowInstanceId, client);
-        subscribers.computeIfAbsent(workflowInstanceId, ignored -> new CopyOnWriteArrayList<>()).add(client);
-    }
-
-    /** 配置 SseEmitter 生命周期回调，确保断开后移除客户端引用。 */
-    private void configureCallbacks(String workflowInstanceId, SseClient client) {
-        Runnable remove = () -> removeClient(workflowInstanceId, client);
-        client.emitter().onCompletion(remove);
-        client.emitter().onTimeout(remove);
-        client.emitter().onError(error -> remove.run());
-    }
-
-    /**
-     * 串行调用单连接 emitter.send，并仅在成功后推进游标；HUMAN_CONFIRM/COMPLETE/ERROR 发送成功后完成
-     * 当前连接。I/O、超时或已关闭异常只移除该连接，后台 Graph 和 OceanBase 事件持久化继续运行。
-     */
-    private void sendOrRemove(String workflowInstanceId, SseClient client, WorkflowSseEvent event) {
-        try {
-            boolean sent = client.send(event);
-            if (sent && isStreamTerminalEvent(event.type())) {
-                client.emitter().complete();
-                removeClient(workflowInstanceId, client);
-            }
-        }
-        catch (IOException | IllegalStateException ex) {
-            removeClient(workflowInstanceId, client);
-            log.debug("[Workflow] action=sse-send status=disconnected workflowInstanceId={} eventId={}",
-                    workflowInstanceId, event.eventId());
-        }
-    }
-
-    /** 从订阅集合移除一个已结束连接。 */
-    private void removeClient(String workflowInstanceId, SseClient client) {
-        List<SseClient> clients = subscribers.get(workflowInstanceId);
-        if (clients != null) {
-            clients.remove(client);
-            if (clients.isEmpty()) {
-                subscribers.remove(workflowInstanceId, clients);
-            }
-        }
+        subscriberRegistry.fail(workflowInstanceId, error);
     }
 
     /** 校验 Last-Event-ID 属于当前工作流并提取序号。 */
@@ -465,70 +401,4 @@ public class LocalDbWorkflowSseEventService implements WorkflowEventPublisher {
         };
     }
 
-    /** 判断事件是否结束当前这一次 SSE 连接；人工确认后可通过独立恢复接口建立新连接。 */
-    private boolean isStreamTerminalEvent(String eventType) {
-        return WorkflowSseEventType.COMPLETE.eventName().equals(eventType)
-                || WorkflowSseEventType.ERROR.eventName().equals(eventType)
-                || WorkflowSseEventType.HUMAN_CONFIRM.eventName().equals(eventType);
-    }
-
-    /** 将数据库记录恢复为前端协议事件。 */
-    private WorkflowSseEvent toEvent(WorkflowSseEventRecord record) {
-        try {
-            return new WorkflowSseEvent(
-                    record.eventId(), record.eventType(), record.workflowInstanceId(), record.conversationId(),
-                    record.nodeCode(), record.sequenceNo(), record.createdAt(),
-                    objectMapper.readValue(record.payloadJson(), EVENT_DATA_TYPE));
-        }
-        catch (JsonProcessingException ex) {
-            throw new IllegalStateException("Failed to deserialize workflow SSE event", ex);
-        }
-    }
-
-    /** 序列化脱敏事件数据。 */
-    private String toJson(Map<String, Object> data) {
-        try {
-            return objectMapper.writeValueAsString(data);
-        }
-        catch (JsonProcessingException ex) {
-            throw new IllegalStateException("Failed to serialize workflow SSE event", ex);
-        }
-    }
-
-    /** 对单个 SseEmitter 的 send 操作加锁，避免并行 DAG 节点交叉写响应。 */
-    private static final class SseClient {
-
-        private final SseEmitter emitter;
-
-        private long lastDeliveredSequence;
-
-        private SseClient(SseEmitter emitter, long lastDeliveredSequence) {
-            this.emitter = emitter;
-            this.lastDeliveredSequence = lastDeliveredSequence;
-        }
-
-        private SseEmitter emitter() {
-            return emitter;
-        }
-
-        private synchronized long lastDeliveredSequence() {
-            return lastDeliveredSequence;
-        }
-
-        /**
-         * 在单连接锁内按 sequence 去重并组装标准 SSE id/name/data；只有 emitter.send 正常返回才推进
-         * lastDeliveredSequence，保证即时 flush、定时 Poller 和重连并发时不会重复或越过失败事件。
-         */
-        private synchronized boolean send(WorkflowSseEvent event) throws IOException {
-            if (event.sequence() <= lastDeliveredSequence) {
-                return false;
-            }
-            emitter.send(SseEmitter.event()
-                    .id(event.eventId())
-                    .name(event.type())
-                    .data(event));
-            lastDeliveredSequence = event.sequence();
-            return true;
-        }
-    }
 }

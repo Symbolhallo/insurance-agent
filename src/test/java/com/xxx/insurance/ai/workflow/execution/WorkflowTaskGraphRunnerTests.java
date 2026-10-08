@@ -8,6 +8,7 @@ import com.alibaba.cloud.ai.graph.serializer.StateSerializer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.workflow.checkpoint.config.GraphCheckpointConfig;
 import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
+import com.xxx.insurance.ai.workflow.config.WorkflowExecutorProperties;
 import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.config.WorkflowTaskGraphConfig;
 import com.xxx.insurance.ai.workflow.model.AgentTaskExecutionResult;
@@ -44,7 +45,8 @@ class WorkflowTaskGraphRunnerTests {
     @BeforeEach
     void setUp() throws Exception {
         router = mock(WorkflowSubAgentRouter.class);
-        executor = new WorkflowExecutionConfig().workflowDagTaskExecutor();
+        executor = new WorkflowExecutionConfig()
+                .workflowDagTaskExecutor(new WorkflowExecutorProperties());
         AgentInvokeNode invokeNode = new AgentInvokeNode(router, new NoOpWorkflowEventPublisher());
         StateSerializer serializer = new GraphCheckpointConfig().mainWorkflowStateSerializer(
                 new ObjectMapper().findAndRegisterModules());

@@ -15,8 +15,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class WorkflowExecutionConfigTests {
 
     @Test
+    void rejectsExecutorConfigurationWhoseCorePoolExceedsMaximum() {
+        WorkflowExecutorProperties properties = new WorkflowExecutorProperties();
+        properties.setSseCorePoolSize(9);
+        properties.setSseMaxPoolSize(8);
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sse pool sizes");
+    }
+
+    @Test
     void startsConcurrentSseRunsWithoutWaitingInApplicationQueue() throws InterruptedException {
-        ThreadPoolTaskExecutor executor = new WorkflowExecutionConfig().workflowSseTaskExecutor();
+        ThreadPoolTaskExecutor executor = new WorkflowExecutionConfig()
+                .workflowSseTaskExecutor(new WorkflowExecutorProperties());
         CountDownLatch started = new CountDownLatch(5);
         CountDownLatch release = new CountDownLatch(1);
         try {
@@ -43,7 +55,8 @@ class WorkflowExecutionConfigTests {
 
     @Test
     void rejectsSseRunImmediatelyWhenAllExecutionSlotsAreOccupied() throws InterruptedException {
-        ThreadPoolTaskExecutor executor = new WorkflowExecutionConfig().workflowSseTaskExecutor();
+        ThreadPoolTaskExecutor executor = new WorkflowExecutionConfig()
+                .workflowSseTaskExecutor(new WorkflowExecutorProperties());
         CountDownLatch started = new CountDownLatch(8);
         CountDownLatch release = new CountDownLatch(1);
         try {
@@ -71,7 +84,8 @@ class WorkflowExecutionConfigTests {
 
     @Test
     void isolatesMaintenanceTasksFromTokenFlushScheduler() throws InterruptedException {
-        ThreadPoolTaskScheduler scheduler = new WorkflowExecutionConfig().workflowMaintenanceTaskScheduler();
+        ThreadPoolTaskScheduler scheduler = new WorkflowExecutionConfig()
+                .workflowMaintenanceTaskScheduler(new WorkflowExecutorProperties());
         scheduler.initialize();
         try {
             CountDownLatch executed = new CountDownLatch(1);

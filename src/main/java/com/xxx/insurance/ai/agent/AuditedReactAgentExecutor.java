@@ -1,52 +1,44 @@
 package com.xxx.insurance.ai.agent;
 
-import io.agentscope.core.message.AssistantMessage;
-import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.config.AiModelProperties;
-import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
-import com.xxx.insurance.common.exception.ErrorCode;
-import com.xxx.insurance.common.util.TraceIdUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import io.agentscope.harness.agent.HarnessAgent;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.time.Instant;
-import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * 为不直接维护对话记忆的领域 HarnessAgent 提供统一模型调用、SSE 和调用审计。
  *
  * <p>保单与资产子智能体只保存调用流水；主工作流仍在 Summary 和审核完成后统一写入
-     * 会话窗口与长期记忆，避免并行任务竞争同一个 conversationId。</p>
+ * 会话窗口与长期记忆，避免并行任务竞争同一个 conversationId。公共执行生命周期委托给
+ * {@link ConversationAwareAgentExecutor}，本类只保留无记忆策略、输入限制和结果适配。</p>
  */
 @Component
 public class AuditedReactAgentExecutor {
 
-    private static final Logger log = LoggerFactory.getLogger(AuditedReactAgentExecutor.class);
+    private final ConversationAwareAgentExecutor conversationExecutor;
 
-    private final AgentMemoryService agentMemoryService;
-    private final AiModelProperties aiModelProperties;
-    private final ReactAgentStreamingExecutor streamingExecutor;
+    /** 生产装配直接复用统一会话执行器 Bean。 */
+    @Autowired
+    public AuditedReactAgentExecutor(ConversationAwareAgentExecutor conversationExecutor) {
+        this.conversationExecutor = conversationExecutor;
+    }
 
-    /** 创建统一执行器，组合持久化审计、当前模型标识和单次 HarnessAgent 事件流适配器。 */
+    /** 保留原有依赖构造边界，供独立装配和既有测试使用。 */
     public AuditedReactAgentExecutor(AgentMemoryService agentMemoryService,
                                      AiModelProperties aiModelProperties,
                                      ReactAgentStreamingExecutor streamingExecutor) {
-        this.agentMemoryService = agentMemoryService;
-        this.aiModelProperties = aiModelProperties;
-        this.streamingExecutor = streamingExecutor;
+        this.conversationExecutor = new ConversationAwareAgentExecutor(
+                agentMemoryService, aiModelProperties, streamingExecutor);
     }
 
     /**
-     * 执行一次受审计的领域 Agent 调用。先校验查询并生成 invocationId，再按工作流上下文选择
-     * 单次 AgentScope streamEvents/ReAct Tool 循环，拒绝空最终答案；成功时记录耗时并只追加子任务调用
-     * 流水（不并发覆盖会话 ChatMemory），返回统一 SubAgentExecutionResult。模型、Tool 或流异常时尽力写
-     * FAILED 审计，审计持久化失败不会覆盖原始异常，最终统一抛出领域 Agent 调用失败。
+     * 执行一次受审计的领域 Agent 调用。保单/资产调用无论外部上下文如何都禁用对话窗口读写，
+     * 只保存 invocation；Token 流、身份、workflow/step/task 和 fencing token 原样保留。
      */
     public SubAgentExecutionResult execute(HarnessAgent reactAgent,
                                            String agentName,
@@ -54,23 +46,37 @@ public class AuditedReactAgentExecutor {
                                            String query,
                                            String conversationId,
                                            AgentExecutionContext executionContext) {
-        Objects.requireNonNull(reactAgent, "HarnessAgent must not be null");
         Objects.requireNonNull(executionContext, "Agent execution context must not be null");
         validateQuery(query);
-        String invocationId = invocationPrefix + UUID.randomUUID().toString().replace("-", "");
-        long startedNanos = System.nanoTime();
-        try {
-            return executeAndRecordSuccess(
-                    reactAgent, agentName, query, conversationId,
-                    executionContext, invocationId, startedNanos);
-        }
-        catch (Exception ex) {
-            long durationMs = elapsedMillis(startedNanos);
-            saveFailure(agentName, invocationId, query, conversationId, executionContext, durationMs, ex);
-            log.error("[Agent] name={} action=query status=failed invocationId={} durationMs={}",
-                    agentName, invocationId, durationMs, ex);
-            throw new IllegalStateException(agentName + " model invocation failed", ex);
-        }
+        AgentExecutionContext invocationOnlyContext = new AgentExecutionContext(
+                executionContext.workflowInstanceId(),
+                executionContext.workflowStepId(),
+                executionContext.executionFenceToken(),
+                executionContext.originalUserMessage(),
+                false,
+                executionContext.taskId(),
+                executionContext.tokenStreamingEnabled(),
+                executionContext.identity());
+        ConversationAgentExecutionResult result = conversationExecutor.execute(
+                reactAgent,
+                agentName,
+                invocationPrefix,
+                query,
+                conversationId,
+                invocationOnlyContext,
+                null,
+                agentName + " model invocation failed");
+        return new SubAgentExecutionResult(
+                agentName,
+                conversationId,
+                result.invocationId(),
+                result.answer(),
+                true,
+                result.durationMs(),
+                result.answeredAt(),
+                result.answerLength(),
+                false,
+                0);
     }
 
     private void validateQuery(String query) {
@@ -80,137 +86,5 @@ public class AuditedReactAgentExecutor {
         if (query.length() > 4000) {
             throw new IllegalArgumentException("query length must be less than or equal to 4000");
         }
-    }
-
-    /** 执行模型调用、校验答案并保存成功审计，返回统一子智能体结果。 */
-    private SubAgentExecutionResult executeAndRecordSuccess(HarnessAgent reactAgent,
-                                                            String agentName,
-                                                            String query,
-                                                            String conversationId,
-                                                            AgentExecutionContext executionContext,
-                                                            String invocationId,
-                                                            long startedNanos) throws Exception {
-        log.info("[Agent] name={} action=query status=start invocationId={} conversationId={}",
-                agentName, invocationId, conversationId);
-        AssistantMessage assistantMessage = call(
-                reactAgent, agentName, query, conversationId, executionContext);
-        String answer = assistantMessage.getTextContent();
-        if (!StringUtils.hasText(answer)) {
-            throw new IllegalStateException("HarnessAgent returned blank answer");
-        }
-
-        long durationMs = elapsedMillis(startedNanos);
-        Instant answeredAt = Instant.now();
-        AgentInvocationRecord invocationRecord = invocation(
-                agentName, invocationId, query, conversationId, executionContext,
-                answer, durationMs, "SUCCESS", null, null, answeredAt);
-        if (agentMemoryService.isEnabled() && StringUtils.hasText(conversationId)) {
-            agentMemoryService.saveSuccessfulInvocation(invocationRecord);
-        }
-        log.info("[Agent] name={} action=query status=success invocationId={} durationMs={}",
-                agentName, invocationId, durationMs);
-        return new SubAgentExecutionResult(
-                agentName, conversationId, invocationId, answer, true,
-                durationMs, answeredAt, answer.length(), false, 0);
-    }
-
-    /**
-     * 使用同一个 AgentScope streamEvents 执行路径获得 Tool 事件和权威最终消息；只有工作流 Token 开启时
-     * 才构造 streamContext 并把正文增量交给可靠 SSE，其他调用仍执行相同事件流但不对外发布 Token。
-     */
-    private AssistantMessage call(HarnessAgent reactAgent,
-                                  String agentName,
-                                  String query,
-                                  String conversationId,
-                                  AgentExecutionContext executionContext) throws Exception {
-        AgentTokenStreamContext streamContext = executionContext.tokenStreamingEnabled()
-                && StringUtils.hasText(executionContext.workflowInstanceId())
-                ? new AgentTokenStreamContext(
-                        executionContext.workflowInstanceId(),
-                        conversationId,
-                        executionContext.executionFenceToken(),
-                        executionContext.taskId(),
-                        agentName,
-                        AgentTokenStreamContext.PHASE_SUB_AGENT)
-                : null;
-        return streamingExecutor.execute(reactAgent, query, streamContext);
-    }
-
-    /**
-     * 在启用 local-db 且存在 conversationId 时构造 FAILED 调用流水并持久化；错误文本限制为数据库长度。
-     * 该补偿自身异常只记录 WARN，确保调用方看到的 cause 始终是原始模型/Tool/流失败。
-     */
-    private void saveFailure(String agentName,
-                             String invocationId,
-                             String query,
-                             String conversationId,
-                             AgentExecutionContext executionContext,
-                             long durationMs,
-                             Exception exception) {
-        if (!agentMemoryService.isEnabled() || !StringUtils.hasText(conversationId)) {
-            return;
-        }
-        try {
-            agentMemoryService.saveFailedInvocation(invocation(
-                    agentName, invocationId, query, conversationId, executionContext,
-                    null, durationMs, "FAILED", ErrorCode.AGENT_INVOKE_FAILED.code(),
-                    truncate(exception), Instant.now()));
-        }
-        catch (Exception persistenceException) {
-            log.warn("[Agent] name={} action=saveFailedInvocation status=failed invocationId={}",
-                    agentName, invocationId, persistenceException);
-        }
-    }
-
-    /** 创建金融链路统一调用流水。 */
-    private AgentInvocationRecord invocation(String agentName,
-                                             String invocationId,
-                                             String query,
-                                             String conversationId,
-                                             AgentExecutionContext executionContext,
-                                             String answer,
-                                             long durationMs,
-                                             String status,
-                                             String errorCode,
-                                             String errorMessage,
-                                             Instant createdAt) {
-        return new AgentInvocationRecord(
-                invocationId,
-                conversationId,
-                executionContext.identity().tenantId(),
-                agentName,
-                TraceIdUtil.currentTraceId(),
-                executionContext.workflowInstanceId(),
-                executionContext.workflowStepId(),
-                "openai-compatible",
-                modelName(),
-                executionContext.identity().userId(),
-                executionContext.identity().customerId(),
-                executionContext.identity().operatorId(),
-                executionContext.auditedUserMessage(query),
-                answer,
-                durationMs,
-                answer == null ? null : answer.length(),
-                null,
-                List.of(),
-                status,
-                errorCode,
-                errorMessage,
-                createdAt);
-    }
-
-    private String modelName() {
-        return aiModelProperties.getModelName();
-    }
-
-    private long elapsedMillis(long startedNanos) {
-        return (System.nanoTime() - startedNanos) / 1_000_000;
-    }
-
-    private String truncate(Exception exception) {
-        if (exception == null || exception.getMessage() == null) {
-            return null;
-        }
-        return exception.getMessage().substring(0, Math.min(1024, exception.getMessage().length()));
     }
 }

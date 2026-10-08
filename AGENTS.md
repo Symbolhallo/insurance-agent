@@ -466,5 +466,5 @@ Correct IDEA configuration:
 - Put `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` under Environment variables.
 - Use `local-db` for normal OceanBase runs and `local-debug` for long breakpoint sessions.
 - `local-debug` already includes `local-db` followed by `debug-timing`; do not list both.
-- Runtime configuration is maintained primarily in `application*.properties`. Retained `application*.yml` files are lower-priority migration references and must be synchronized when configuration values change.
+- Runtime configuration is maintained only in `application*.properties`; do not reintroduce duplicate YAML configuration files.
 - Leave Active profiles empty for stateless single-Agent verification.

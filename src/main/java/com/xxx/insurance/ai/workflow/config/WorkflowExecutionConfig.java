@@ -19,7 +19,11 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
  */
 @Configuration
 @EnableScheduling
-@EnableConfigurationProperties({WorkflowSseProperties.class, WorkflowLifecycleProperties.class})
+@EnableConfigurationProperties({
+        WorkflowSseProperties.class,
+        WorkflowLifecycleProperties.class,
+        WorkflowExecutorProperties.class
+})
 public class WorkflowExecutionConfig {
 
     public static final String WORKFLOW_DAG_TASK_EXECUTOR = "workflowDagTaskExecutor";
@@ -37,8 +41,14 @@ public class WorkflowExecutionConfig {
      * 会从 HTTP/Graph 线程复制到工作线程，使子智能体日志继续携带同一个 traceId。</p>
      */
     @Bean(name = WORKFLOW_DAG_TASK_EXECUTOR)
-    public ThreadPoolTaskExecutor workflowDagTaskExecutor() {
-        return createExecutor("workflow-dag-", 2, 4, 32);
+    public ThreadPoolTaskExecutor workflowDagTaskExecutor(WorkflowExecutorProperties properties) {
+        properties.validate();
+        return createExecutor(
+                "workflow-dag-",
+                properties.getDagCorePoolSize(),
+                properties.getDagMaxPoolSize(),
+                properties.getDagQueueCapacity(),
+                properties.getShutdownAwaitSeconds());
     }
 
     /**
@@ -47,10 +57,16 @@ public class WorkflowExecutionConfig {
      * @return 供 WorkflowSseService 启动作业使用的有界线程池
      */
     @Bean(name = WORKFLOW_SSE_TASK_EXECUTOR)
-    public ThreadPoolTaskExecutor workflowSseTaskExecutor() {
+    public ThreadPoolTaskExecutor workflowSseTaskExecutor(WorkflowExecutorProperties properties) {
+        properties.validate();
         // SSE 连接建立后不能在应用队列中静默等待：空队列使线程池直接扩容到 maxPoolSize，
         // 容量耗尽时快速拒绝，由入口立即关闭订阅并返回错误。
-        return createExecutor("workflow-sse-", 2, 8, 0);
+        return createExecutor(
+                "workflow-sse-",
+                properties.getSseCorePoolSize(),
+                properties.getSseMaxPoolSize(),
+                0,
+                properties.getShutdownAwaitSeconds());
     }
 
     /**
@@ -60,9 +76,11 @@ public class WorkflowExecutionConfig {
      * 小块在最大等待时间内刷新，不占用 Lease 心跳、SSE 数据库轮询或清理任务线程。</p>
      */
     @Bean(name = WORKFLOW_TOKEN_FLUSH_SCHEDULER, destroyMethod = "shutdown")
-    public ScheduledExecutorService workflowTokenFlushScheduler() {
+    public ScheduledExecutorService workflowTokenFlushScheduler(WorkflowExecutorProperties properties) {
+        properties.validate();
         ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(
-                2, new CustomizableThreadFactory("workflow-token-flush-"));
+                properties.getTokenFlushPoolSize(),
+                new CustomizableThreadFactory("workflow-token-flush-"));
         executor.setRemoveOnCancelPolicy(true);
         executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         return executor;
@@ -76,13 +94,14 @@ public class WorkflowExecutionConfig {
      * 维护操作不会占用模型流的低延迟刷新线程。</p>
      */
     @Bean(name = WORKFLOW_MAINTENANCE_TASK_SCHEDULER)
-    public ThreadPoolTaskScheduler workflowMaintenanceTaskScheduler() {
+    public ThreadPoolTaskScheduler workflowMaintenanceTaskScheduler(WorkflowExecutorProperties properties) {
+        properties.validate();
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
-        scheduler.setPoolSize(2);
+        scheduler.setPoolSize(properties.getMaintenancePoolSize());
         scheduler.setThreadNamePrefix("workflow-maintenance-");
         scheduler.setRemoveOnCancelPolicy(true);
         scheduler.setWaitForTasksToCompleteOnShutdown(true);
-        scheduler.setAwaitTerminationSeconds(30);
+        scheduler.setAwaitTerminationSeconds(properties.getShutdownAwaitSeconds());
         return scheduler;
     }
 
@@ -90,14 +109,15 @@ public class WorkflowExecutionConfig {
     private ThreadPoolTaskExecutor createExecutor(String threadNamePrefix,
                                                   int corePoolSize,
                                                   int maxPoolSize,
-                                                  int queueCapacity) {
+                                                  int queueCapacity,
+                                                  int shutdownAwaitSeconds) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(corePoolSize);
         executor.setMaxPoolSize(maxPoolSize);
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix(threadNamePrefix);
         executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(30);
+        executor.setAwaitTerminationSeconds(shutdownAwaitSeconds);
         executor.setTaskDecorator(task -> {
             Map<String, String> contextMap = MDC.getCopyOfContextMap();
             return () -> {

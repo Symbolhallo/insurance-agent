@@ -1,10 +1,8 @@
 package com.xxx.insurance.product.config;
 
 import com.xxx.insurance.ai.agent.AgentScopeAgentFactory;
-import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
-import com.xxx.insurance.ai.config.AiModelProperties;
+import com.xxx.insurance.ai.agent.ConversationAwareAgentExecutor;
 import com.xxx.insurance.ai.config.SkillConfig;
-import com.xxx.insurance.ai.memory.service.AgentMemoryService;
 import com.xxx.insurance.product.agent.ProductAnalysisAgent;
 import com.xxx.insurance.product.formatter.ProductAnalysisAnswerInspector;
 import com.xxx.insurance.product.formatter.ProductAnalysisFormatter;
@@ -46,11 +44,9 @@ public class ProductAnalysisAgentConfig {
             ProductAnalysisService productAnalysisService,
             ProductAnalysisFormatter productAnalysisFormatter,
             ProductAnalysisAnswerInspector productAnalysisAnswerInspector,
-            AgentMemoryService agentMemoryService,
-            AiModelProperties aiModelProperties,
-            ReactAgentStreamingExecutor streamingExecutor) {
+            ConversationAwareAgentExecutor conversationExecutor) {
         return new ProductAnalysisAgent(
                 reactAgent, productAnalysisService, productAnalysisFormatter,
-                productAnalysisAnswerInspector, agentMemoryService, aiModelProperties, streamingExecutor);
+                productAnalysisAnswerInspector, conversationExecutor);
     }
 }

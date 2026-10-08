@@ -5,39 +5,23 @@ import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.state.StateSnapshot;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.xxx.insurance.ai.workflow.checkpoint.OceanBaseCheckpointSaver;
-import com.xxx.insurance.common.exception.BusinessException;
-import com.xxx.insurance.common.exception.ErrorCode;
 import com.xxx.insurance.common.security.RequestIdentity;
 import com.xxx.insurance.common.security.ResourceAccessService;
-import com.xxx.insurance.ai.workflow.config.WorkflowExecutionConfig;
 import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.workflow.config.MainWorkflowGraphConfig;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
-import com.xxx.insurance.ai.workflow.model.AlignedWorkflowContext;
-import com.xxx.insurance.ai.workflow.model.AgentTaskStatus;
-import com.xxx.insurance.ai.workflow.model.DagExecutionResult;
-import com.xxx.insurance.ai.workflow.model.IntentRoutingResult;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowRequest;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowResponse;
 import com.xxx.insurance.ai.workflow.model.MainWorkflowStateKeys;
-import com.xxx.insurance.ai.workflow.model.ProductRecallDecision;
 import com.xxx.insurance.ai.workflow.model.ProductReferenceResolution;
-import com.xxx.insurance.ai.workflow.model.OutputReviewDecision;
-import com.xxx.insurance.ai.workflow.model.OutputReviewResult;
-import com.xxx.insurance.ai.workflow.model.SubAgentExecutionResult;
 import com.xxx.insurance.ai.workflow.model.WorkflowInstanceExecutionView;
 import com.xxx.insurance.ai.workflow.model.WorkflowInstanceRecord;
 import com.xxx.insurance.ai.workflow.model.WorkflowNodeDefinition;
-import com.xxx.insurance.ai.workflow.model.WorkflowPlan;
-import com.xxx.insurance.ai.workflow.model.WorkflowStepRecord;
-import com.xxx.insurance.ai.workflow.model.WorkflowSummaryResult;
 import com.xxx.insurance.ai.workflow.sse.model.WorkflowSseEventType;
 import com.xxx.insurance.ai.workflow.sse.service.WorkflowEventPublisher;
 import com.xxx.insurance.ai.workflow.lifecycle.WorkflowFinalizationService;
+import com.xxx.insurance.ai.workflow.lifecycle.WorkflowExecutionClaimService;
 import com.xxx.insurance.ai.workflow.lifecycle.WorkflowPauseService;
 import com.xxx.insurance.ai.workflow.lifecycle.WorkflowStartService;
 import com.xxx.insurance.ai.workflow.model.WorkflowResumeRequest;
@@ -50,17 +34,13 @@ import com.xxx.insurance.product.service.ConversationConfirmedProductService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -83,23 +63,15 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
     private static final String STATUS_WAITING_CONFIRM = "WAITING_CONFIRM";
 
-    private static final String STATUS_CONFIRMING = "CONFIRMING";
-
-    private static final String STATUS_RESUMING = "RESUMING";
-
     private final WorkflowExecutionMapper workflowExecutionMapper;
 
     private final CompiledGraph mainWorkflowGraph;
-
-    private final ObjectMapper objectMapper;
 
     private final ConversationConfirmedProductService confirmedProductService;
 
     private final AiModelProperties aiModelProperties;
 
     private final WorkflowEventPublisher workflowEventPublisher;
-
-    private final ThreadPoolTaskExecutor workflowDagTaskExecutor;
 
     private final WorkflowStartService workflowStartService;
 
@@ -111,10 +83,15 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
     private final ResourceAccessService resourceAccessService;
 
+    private final MainWorkflowExecutionFactory executionFactory;
+
+    private final MainWorkflowResponseAssembler responseAssembler;
+
+    private final WorkflowExecutionClaimService executionClaimService;
+
     public LocalDbMainWorkflowService(WorkflowExecutionMapper workflowExecutionMapper,
                                       @Qualifier(MainWorkflowGraphConfig.MAIN_WORKFLOW_GRAPH)
                                       CompiledGraph mainWorkflowGraph,
-                                      ObjectMapper objectMapper,
                                       ConversationConfirmedProductService confirmedProductService,
                                       AiModelProperties aiModelProperties,
                                       WorkflowEventPublisher workflowEventPublisher,
@@ -123,11 +100,11 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                                       WorkflowPauseService workflowPauseService,
                                       WorkflowLifecycleProperties lifecycleProperties,
                                       ResourceAccessService resourceAccessService,
-                                      @Qualifier(WorkflowExecutionConfig.WORKFLOW_DAG_TASK_EXECUTOR)
-                                      ThreadPoolTaskExecutor workflowDagTaskExecutor) {
+                                      MainWorkflowExecutionFactory executionFactory,
+                                      MainWorkflowResponseAssembler responseAssembler,
+                                      WorkflowExecutionClaimService executionClaimService) {
         this.workflowExecutionMapper = workflowExecutionMapper;
         this.mainWorkflowGraph = mainWorkflowGraph;
-        this.objectMapper = objectMapper;
         this.confirmedProductService = confirmedProductService;
         this.aiModelProperties = aiModelProperties;
         this.workflowEventPublisher = workflowEventPublisher;
@@ -136,13 +113,15 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         this.workflowPauseService = workflowPauseService;
         this.lifecycleProperties = lifecycleProperties;
         this.resourceAccessService = resourceAccessService;
-        this.workflowDagTaskExecutor = workflowDagTaskExecutor;
+        this.executionFactory = executionFactory;
+        this.responseAssembler = responseAssembler;
+        this.executionClaimService = executionClaimService;
     }
 
     /** 生成符合数据库字段长度和日志规范的工作流实例编号。 */
     @Override
     public String createWorkflowInstanceId() {
-        return newWorkflowInstanceId();
+        return executionFactory.createWorkflowInstanceId();
     }
 
     /**
@@ -182,8 +161,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 : request.identity();
         resourceAccessService.claimConversation(identity, request.conversationId());
         Instant startedAt = Instant.now();
-        String inputJson = toJson(request);
-        Map<String, String> workflowStepIds = createWorkflowSteps();
+        String inputJson = executionFactory.toJson(request);
+        Map<String, String> workflowStepIds = executionFactory.createWorkflowSteps();
 
         log.info("[Workflow] code={} action=run status=start workflowInstanceId={} conversationId={}",
                 WORKFLOW_CODE, workflowInstanceId, request.conversationId());
@@ -207,7 +186,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
         // 数据库唯一约束防止同一请求重复提交，以及同一 conversation 并发启动多个顶层工作流。
         workflowStartService.start(
                 instanceRecord,
-                workflowStepRecords(workflowInstanceId, workflowStepIds, inputJson, startedAt));
+                executionFactory.workflowStepRecords(
+                        workflowInstanceId, workflowStepIds, inputJson, startedAt));
         long executionFenceToken = INITIAL_EXECUTION_FENCE_TOKEN;
         publishEvent(workflowInstanceId, request.conversationId(), executionFenceToken,
                 WorkflowSseEventType.START, null,
@@ -215,9 +195,9 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
 
         try {
             // 主工作流链路 4：发布 start 后，以实例 ID 作为 threadId 启动可持久化、可恢复的 Main Graph。
-            RunnableConfig graphConfig = runnableConfig(
+            RunnableConfig graphConfig = executionFactory.runnableConfig(
                     workflowInstanceId, request.conversationId(), executionFenceToken);
-            Map<String, Object> initialState = initialWorkflowState(
+            Map<String, Object> initialState = executionFactory.initialState(
                     request, workflowInstanceId, executionFenceToken, workflowStepIds, tokenStreamingEnabled);
             NodeOutput graphOutput = mainWorkflowGraph.invokeAndGetOutput(initialState, graphConfig)
                     .orElseThrow(() -> new IllegalStateException("Main workflow graph returned empty output"));
@@ -232,20 +212,6 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
             fail(workflowInstanceId, executionFenceToken, ex, request);
             throw new IllegalStateException("Main workflow execution failed", ex);
         }
-    }
-
-    /** 构造 Main Graph 首次执行所需的最小 State，所有执行代次标识在启动时固定。 */
-    private Map<String, Object> initialWorkflowState(MainWorkflowRequest request,
-                                                     String workflowInstanceId,
-                                                     long executionFenceToken,
-                                                     Map<String, String> workflowStepIds,
-                                                     boolean tokenStreamingEnabled) {
-        return Map.of(
-                MainWorkflowStateKeys.REQUEST, request,
-                MainWorkflowStateKeys.WORKFLOW_INSTANCE_ID, workflowInstanceId,
-                MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, executionFenceToken,
-                MainWorkflowStateKeys.WORKFLOW_STEP_IDS, workflowStepIds,
-                MainWorkflowStateKeys.TOKEN_STREAMING_ENABLED, tokenStreamingEnabled);
     }
 
     /**
@@ -281,21 +247,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
      */
     @Override
     public long claimProductConfirmation(String workflowInstanceId, String conversationId) {
-        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
-        validateConfirmationInstance(instance, conversationId, STATUS_WAITING_CONFIRM);
-        // 确认续流 CAS：用数据库条件更新抢占确认权，只有一个请求能恢复当前 Checkpoint。
-        Instant now = Instant.now();
-        if (workflowExecutionMapper.claimProductConfirmation(
-                workflowInstanceId,
-                conversationId,
-                lifecycleProperties.getInstanceId(),
-                now.plus(lifecycleProperties.getClaimLease()),
-                now) != 1) {
-            throw new BusinessException(
-                    ErrorCode.WORKFLOW_STATE_CONFLICT,
-                    "产品确认已被处理，请勿重复提交");
-        }
-        return requireOwnedFenceToken(workflowInstanceId, STATUS_CONFIRMING);
+        return executionClaimService.claimProductConfirmation(workflowInstanceId, conversationId);
     }
 
     /**
@@ -309,11 +261,10 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                                                        ProductConfirmationRequest request,
                                                        boolean tokenStreamingEnabled,
                                                        long executionFenceToken) {
-        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
-        validateConfirmationInstance(instance, request.conversationId(), STATUS_CONFIRMING);
+        WorkflowInstanceExecutionView instance = executionClaimService.requireClaimedConfirmation(
+                workflowInstanceId, request.conversationId(), executionFenceToken);
         try {
-            requireExpectedFence(instance, executionFenceToken);
-            RunnableConfig baseConfig = runnableConfig(
+            RunnableConfig baseConfig = executionFactory.runnableConfig(
                     workflowInstanceId, request.conversationId(), executionFenceToken);
             StateSnapshot snapshot = mainWorkflowGraph.getState(baseConfig);
             ProductRecallResult recallResult = snapshot.state()
@@ -364,15 +315,8 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     public void releaseProductConfirmationClaim(String workflowInstanceId,
                                                 String conversationId,
                                                 long executionFenceToken) {
-        if (workflowExecutionMapper.releaseProductConfirmationClaim(
-                workflowInstanceId,
-                conversationId,
-                lifecycleProperties.getInstanceId(),
-                executionFenceToken,
-                Instant.now()) != 1) {
-            log.warn("[Workflow] action=release-confirmation-claim status=ignored workflowInstanceId={}",
-                    workflowInstanceId);
-        }
+        executionClaimService.releaseProductConfirmationClaim(
+                workflowInstanceId, conversationId, executionFenceToken);
     }
 
     /**
@@ -383,21 +327,12 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
      */
     @Override
     public MainWorkflowResponse resume(String workflowInstanceId, WorkflowResumeRequest request) {
-        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
-        validateResumeInstance(instance, request);
-        Instant claimTime = Instant.now();
-        if (workflowExecutionMapper.claimResume(
-                workflowInstanceId,
-                request.conversationId(),
-                lifecycleProperties.getInstanceId(),
-                claimTime.plus(lifecycleProperties.getClaimLease()),
-                claimTime) != 1) {
-            throw new IllegalStateException("Workflow instance is not available for resume");
-        }
+        WorkflowExecutionClaimService.ResumeClaim claim = executionClaimService.claimResume(
+                workflowInstanceId, request);
+        WorkflowInstanceExecutionView instance = claim.instance();
+        long executionFenceToken = claim.executionFenceToken();
 
-        long executionFenceToken = requireOwnedFenceToken(workflowInstanceId, STATUS_RESUMING);
-
-        RunnableConfig config = runnableConfig(
+        RunnableConfig config = executionFactory.runnableConfig(
                 workflowInstanceId, request.conversationId(), executionFenceToken);
         try {
             StateSnapshot snapshot = mainWorkflowGraph.getState(config);
@@ -451,58 +386,26 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                                                         long executionFenceToken,
                                                         Instant startedAt) {
         // 主工作流链路 7：将 interruptBefore 快照转为 WAITING_CONFIRM，发布 human_confirm 后结束本段 SSE。
-        OverAllState state = snapshot.state();
-        ProductRecallDecision decision = state
-                .value(MainWorkflowStateKeys.PRODUCT_RECALL_DECISION, ProductRecallDecision.class)
-                .orElseThrow(() -> new IllegalStateException("Interrupted workflow has no recall decision"));
-        ProductRecallResult recallResult = state
-                .value(MainWorkflowStateKeys.PRODUCT_RECALL_RESULT, ProductRecallResult.class)
-                .orElseThrow(() -> new IllegalStateException("Interrupted workflow has no recall result"));
-        Map<String, String> stepIds = MainWorkflowGraphConfig.workflowStepIds(state);
-        String checkpointId = snapshot.config().checkPointId()
-                .orElseThrow(() -> new IllegalStateException("Interrupted workflow has no checkpoint id"));
-        MainWorkflowResponse response = new MainWorkflowResponse(
-                true,
-                WORKFLOW_CODE,
-                workflowInstanceId,
-                checkpointId,
-                stepIds,
-                request.conversationId(),
-                request.message(),
-                null,
-                null,
-                Map.of(),
-                null,
-                decision,
-                recallResult,
-                true,
-                List.of(),
-                null,
-                STATUS_WAITING_CONFIRM,
-                null,
-                null,
-                null,
-                null,
-                null,
-                Duration.between(startedAt, Instant.now()).toMillis(),
-                startedAt,
-                null,
-                null);
-        String humanStepId = stepIds.get(WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code());
+        MainWorkflowResponse response = responseAssembler.waitingConfirmation(
+                snapshot, request, workflowInstanceId, startedAt);
+        ProductRecallResult recallResult = response.productRecallResult();
+        String checkpointId = response.checkpointId();
+        String humanStepId = response.workflowStepIds()
+                .get(WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code());
         Instant waitingAt = Instant.now();
         workflowPauseService.pauseForProductConfirmation(
                 workflowInstanceId,
                 request.conversationId(),
                 executionFenceToken,
                 humanStepId,
-                toJson(response),
-                toJson(recallResult),
+                executionFactory.toJson(response),
+                executionFactory.toJson(recallResult),
                 WorkflowNodeDefinition.HUMAN_CONFIRM_PRODUCT.code(),
                 Map.of(
                         "status", STATUS_WAITING_CONFIRM,
                         "checkpointId", checkpointId,
                         "candidateCount", recallResult.candidates().size(),
-                        "candidates", confirmationCandidates(recallResult)),
+                        "candidates", responseAssembler.confirmationCandidates(recallResult)),
                 waitingAt);
         // 主工作流链路 7.1：暂停事务提交后立即读取事实表；human_confirm 发送成功后自动关闭本段 SSE。
         // 若本次读取失败则保留订阅，由数据库 Poller 继续补偿，禁止在事件送达前强制关闭连接。
@@ -511,19 +414,6 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                         + "candidateCount={}",
                 WORKFLOW_CODE, workflowInstanceId, checkpointId, recallResult.candidates().size());
         return response;
-    }
-
-    /** 只向人工确认事件暴露可展示的脱敏候选字段，不发送完整召回审计或 Graph State。 */
-    private List<Map<String, Object>> confirmationCandidates(ProductRecallResult recallResult) {
-        return recallResult.candidates().stream()
-                .map(candidate -> Map.<String, Object>of(
-                        "productCode", candidate.productCode(),
-                        "productName", candidate.productName(),
-                        "productType", candidate.productType(),
-                        "insurerName", candidate.insurerName(),
-                        "score", candidate.score(),
-                        "matchReason", candidate.matchReason()))
-                .toList();
     }
 
     /**
@@ -535,115 +425,23 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
     private MainWorkflowResponse complete(OverAllState finalState,
                                           String workflowInstanceId,
                                           Instant startedAt) {
-        MainWorkflowRequest originalRequest = requiredState(
-                finalState, MainWorkflowStateKeys.REQUEST,
-                MainWorkflowRequest.class, "original request");
-        IntentRoutingResult routingResult = requiredState(
-                finalState, MainWorkflowStateKeys.INTENT_ROUTING_RESULT,
-                IntentRoutingResult.class, "intent result");
-        AlignedWorkflowContext alignedContext = requiredState(
-                finalState, MainWorkflowStateKeys.ALIGNED_CONTEXT,
-                AlignedWorkflowContext.class, "aligned context");
-        ProductRecallDecision recallDecision = requiredState(
-                finalState, MainWorkflowStateKeys.PRODUCT_RECALL_DECISION,
-                ProductRecallDecision.class, "recall decision");
-        ProductRecallResult recallResult = finalState
-                .value(MainWorkflowStateKeys.PRODUCT_RECALL_RESULT, ProductRecallResult.class)
-                .orElse(null);
-        WorkflowPlan workflowPlan = requiredState(
-                finalState, MainWorkflowStateKeys.WORKFLOW_PLAN,
-                WorkflowPlan.class, "workflow plan");
-        DagExecutionResult dagExecutionResult = requiredState(
-                finalState, MainWorkflowStateKeys.DAG_EXECUTION_RESULT,
-                DagExecutionResult.class, "DAG execution result");
-        WorkflowSummaryResult summaryResult = requiredState(
-                finalState, MainWorkflowStateKeys.SUMMARY_RESULT,
-                WorkflowSummaryResult.class, "summary result");
-        OutputReviewResult outputReviewResult = requiredState(
-                finalState, MainWorkflowStateKeys.OUTPUT_REVIEW_RESULT,
-                OutputReviewResult.class, "output review result");
-        SubAgentExecutionResult agentResponse = dagExecutionResult.taskResults().stream()
-                .filter(task -> task.status() == AgentTaskStatus.SUCCESS)
-                .map(task -> task.response())
-                .findFirst()
-                .orElse(null);
-        String finalAnswer = requiredState(
-                finalState, MainWorkflowStateKeys.FINAL_ANSWER,
-                String.class, "final answer");
-        Instant endedAt = Instant.now();
-        String workflowStatus = workflowStatus(dagExecutionResult, outputReviewResult);
-        String errorMessage = workflowErrorMessage(dagExecutionResult, outputReviewResult);
-        MainWorkflowResponse response = new MainWorkflowResponse(
-                true,
-                WORKFLOW_CODE,
-                workflowInstanceId,
-                null,
-                MainWorkflowGraphConfig.workflowStepIds(finalState),
-                alignedContext.conversationId(),
-                alignedContext.originalQuestion(),
-                alignedContext.topicRelation(),
-                alignedContext.rewrittenQuestion(),
-                alignedContext.confirmedInformation(),
-                routingResult.intent(),
-                recallDecision,
-                recallResult,
-                false,
-                alignedContext.resolvedProducts(),
-                workflowPlan,
-                workflowStatus,
-                finalAnswer,
-                dagExecutionResult,
-                summaryResult,
-                outputReviewResult,
-                agentResponse,
-                Duration.between(startedAt, endedAt).toMillis(),
-                startedAt,
-                endedAt,
-                errorMessage);
+        MainWorkflowResponseAssembler.CompletedWorkflow completed = responseAssembler.completed(
+                finalState, workflowInstanceId, startedAt);
+        MainWorkflowResponse response = completed.response();
         // 主工作流链路 17：终态、最终 Memory、Checkpoint、SSE Outbox 和会话锁在同一事务收口。
-        long executionFenceToken = finalState
-                .value(MainWorkflowStateKeys.EXECUTION_FENCE_TOKEN, Number.class)
-                .map(Number::longValue)
-                .orElseThrow(() -> new IllegalStateException(
-                        "Main workflow graph returned empty execution fence token"));
         boolean finalized = workflowFinalizationService.complete(
-                response, toJson(response), modelName(), executionFenceToken,
-                originalRequest.identity() == null
+                response, executionFactory.toJson(response), modelName(), completed.executionFenceToken(),
+                completed.originalRequest().identity() == null
                         ? RequestIdentity.localDefault()
-                        : originalRequest.identity());
+                        : completed.originalRequest().identity());
         if (!finalized) {
             log.info("[Workflow] code={} action=complete status=idempotent-ignore workflowInstanceId={}",
                     WORKFLOW_CODE, workflowInstanceId);
         }
         workflowFinalizationService.flushEvents(workflowInstanceId);
         log.info("[Workflow] code={} action=complete status={} workflowInstanceId={} durationMs={}",
-                WORKFLOW_CODE, workflowStatus, workflowInstanceId, response.durationMs());
+                WORKFLOW_CODE, response.status(), workflowInstanceId, response.durationMs());
         return response;
-    }
-
-    /** 根据输出审核决策和 DAG 成功数量计算工作流终态。 */
-    private String workflowStatus(DagExecutionResult result, OutputReviewResult reviewResult) {
-        if (reviewResult.decision() == OutputReviewDecision.BLOCK) {
-            return "REVIEW_BLOCKED";
-        }
-        if (result.successCount() == result.taskResults().size()) {
-            return "SUCCESS";
-        }
-        if (result.successCount() > 0) {
-            return "PARTIAL_SUCCESS";
-        }
-        return "FAILED";
-    }
-
-    /** 生成全任务失败或审核阻断时写入实例表的错误摘要。 */
-    private String workflowErrorMessage(DagExecutionResult result, OutputReviewResult reviewResult) {
-        if (reviewResult.decision() == OutputReviewDecision.BLOCK) {
-            return "Output review blocked: " + String.join("; ", reviewResult.reasons());
-        }
-        if (result.successCount() == 0) {
-            return "All planned agent tasks failed or were skipped";
-        }
-        return null;
     }
 
     /** 读取当前全局 AgentScope Model 名称，用于主工作流最终调用审计。 */
@@ -681,63 +479,6 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 .toList();
     }
 
-    /** 校验确认请求与工作流实例的 conversationId 和预期状态一致。 */
-    private void validateConfirmationInstance(WorkflowInstanceExecutionView instance,
-                                               String conversationId,
-                                               String expectedStatus) {
-        if (instance == null) {
-            throw new IllegalArgumentException("workflowInstanceId does not exist");
-        }
-        if (!instance.conversationId().equals(conversationId)) {
-            throw new IllegalArgumentException("conversationId does not match workflow instance");
-        }
-        if (!expectedStatus.equals(instance.status())) {
-            throw new BusinessException(
-                    ErrorCode.WORKFLOW_STATE_CONFLICT,
-                    "工作流当前不能处理产品确认，status=" + instance.status());
-        }
-    }
-
-    /** 校验主动恢复只能作用于同会话且仍为 RUNNING 的实例。 */
-    private void validateResumeInstance(WorkflowInstanceExecutionView instance,
-                                        WorkflowResumeRequest request) {
-        if (instance == null) {
-            throw new IllegalArgumentException("workflow instance does not exist");
-        }
-        if (!instance.conversationId().equals(request.conversationId())) {
-            throw new IllegalArgumentException("conversationId does not match workflow instance");
-        }
-        if (!STATUS_RUNNING.equals(instance.status())) {
-            throw new IllegalArgumentException("only RUNNING workflow instance can be resumed");
-        }
-    }
-
-    /**
-     * 创建可恢复 Graph 配置：workflowInstanceId 同时作为 Checkpoint threadId，项目有界线程池承担并行节点，
-     * metadata 固定携带 workflow/conversation、当前 owner 和 fencing token，使 OceanBase Saver 的每次写入
-     * 都能拒绝旧执行代次，而不是在恢复过程中重新查询并误用新 token。
-     */
-    private RunnableConfig runnableConfig(String workflowInstanceId,
-                                          String conversationId,
-                                          long executionFenceToken) {
-        return RunnableConfig.builder()
-                .threadId(workflowInstanceId)
-                .defaultParallelExecutor(workflowDagTaskExecutor)
-                .addMetadata(OceanBaseCheckpointSaver.METADATA_WORKFLOW_INSTANCE_ID, workflowInstanceId)
-                .addMetadata(OceanBaseCheckpointSaver.METADATA_CONVERSATION_ID, conversationId)
-                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_OWNER,
-                        lifecycleProperties.getInstanceId())
-                .addMetadata(OceanBaseCheckpointSaver.METADATA_EXECUTION_FENCE_TOKEN,
-                        executionFenceToken)
-                .build();
-    }
-
-    /** 读取 Graph 必需状态，并在缺失时抛出包含业务含义的异常。 */
-    private <T> T requiredState(OverAllState state, String key, Class<T> type, String description) {
-        return state.value(key, type)
-                .orElseThrow(() -> new IllegalStateException("Main workflow graph returned empty " + description));
-    }
-
     /**
      * 统一处理主图外围未捕获异常：截断数据库错误摘要，使用当前 fencing token 尝试把非终态实例、待执行
      * 步骤和 Checkpoint 原子收口为 FAILED，并写 ERROR Outbox/释放 conversation 锁；提交成功后立即 flush。
@@ -753,7 +494,7 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                       Exception exception,
                       MainWorkflowRequest originalRequest) {
         Instant endedAt = Instant.now();
-        String errorMessage = truncateErrorMessage(exception);
+        String errorMessage = executionFactory.truncateErrorMessage(exception);
         boolean unsupported = hasCause(exception, UnsupportedWorkflowIntentException.class);
         String frontendMessage = unsupported
                 ? UnsupportedWorkflowIntentException.USER_MESSAGE
@@ -812,92 +553,4 @@ public class LocalDbMainWorkflowService implements MainWorkflowService {
                 workflowInstanceId, conversationId, executionFenceToken, type, node, data);
     }
 
-    /** 读取本次抢占后数据库生成的 fencing token，并确认执行权仍属于当前实例。 */
-    private long requireOwnedFenceToken(String workflowInstanceId, String expectedStatus) {
-        WorkflowInstanceExecutionView instance = workflowExecutionMapper.findInstance(workflowInstanceId);
-        if (instance == null) {
-            throw new IllegalStateException("Workflow execution lease was lost after claim");
-        }
-        if (!expectedStatus.equals(instance.status())) {
-            throw new IllegalStateException("Workflow execution lease was lost after claim");
-        }
-        if (!lifecycleProperties.getInstanceId().equals(instance.executionOwner())) {
-            throw new IllegalStateException("Workflow execution lease was lost after claim");
-        }
-        if (instance.leaseUntil() == null || !instance.leaseUntil().isAfter(Instant.now())) {
-            throw new IllegalStateException("Workflow execution lease was lost after claim");
-        }
-        return instance.executionFenceToken();
-    }
-
-    /** 防止旧确认请求误用同 JVM 后续抢占得到的新执行权。 */
-    private void requireExpectedFence(WorkflowInstanceExecutionView instance, long executionFenceToken) {
-        if (instance.executionFenceToken() != executionFenceToken) {
-            throw new IllegalStateException("Workflow execution fencing token is stale");
-        }
-        if (!lifecycleProperties.getInstanceId().equals(instance.executionOwner())) {
-            throw new IllegalStateException("Workflow execution fencing token is stale");
-        }
-        if (instance.leaseUntil() == null || !instance.leaseUntil().isAfter(Instant.now())) {
-            throw new IllegalStateException("Workflow execution fencing token is stale");
-        }
-    }
-
-    /** 为当前 Graph 定义中的每个节点预分配数据库步骤编号。 */
-    private Map<String, String> createWorkflowSteps() {
-        Map<String, String> workflowStepIds = new LinkedHashMap<>();
-        for (WorkflowNodeDefinition nodeDefinition : WorkflowNodeDefinition.values()) {
-            workflowStepIds.put(nodeDefinition.code(), newWorkflowStepId());
-        }
-        return workflowStepIds;
-    }
-
-    /** 将全部可能执行的 Graph 节点以 PENDING 状态写入步骤审计表。 */
-    private List<WorkflowStepRecord> workflowStepRecords(String workflowInstanceId,
-                                                         Map<String, String> workflowStepIds,
-                                                         String inputJson,
-                                                         Instant createdAt) {
-        return java.util.Arrays.stream(WorkflowNodeDefinition.values())
-                .map(nodeDefinition -> new WorkflowStepRecord(
-                    workflowStepIds.get(nodeDefinition.code()),
-                    workflowInstanceId,
-                    nodeDefinition.code(),
-                    nodeDefinition.nodeName(),
-                    nodeDefinition.type(),
-                    nodeDefinition.target(),
-                    "PENDING",
-                    inputJson,
-                    null,
-                    createdAt))
-                .toList();
-    }
-
-    /** 将工作流输入、状态或响应转换为数据库审计 JSON。 */
-    private String toJson(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        }
-        catch (JsonProcessingException ex) {
-            throw new IllegalStateException("Failed to serialize workflow payload", ex);
-        }
-    }
-
-    /** 将异常消息限制到数据库错误字段允许的最大长度。 */
-    private String truncateErrorMessage(Exception exception) {
-        if (exception == null || exception.getMessage() == null) {
-            return null;
-        }
-        String message = exception.getMessage();
-        return message.length() <= 1024 ? message : message.substring(0, 1024);
-    }
-
-    /** 生成工作流实例编号。 */
-    private String newWorkflowInstanceId() {
-        return "wfi-" + UUID.randomUUID().toString().replace("-", "");
-    }
-
-    /** 生成工作流节点步骤编号。 */
-    private String newWorkflowStepId() {
-        return "wfs-" + UUID.randomUUID().toString().replace("-", "");
-    }
 }

@@ -1,5 +1,19 @@
 # 工程变更记录
 
+## 2026-09-30：P2 配置与代码复杂度收敛
+
+- 删除 `application.yml`、`application-local-db.yml` 和 `application-debug-timing.yml`，运行配置只保留三份 `application*.properties`。
+- 配置测试改为验证唯一 properties 来源、local-db Profile 加载和数据库自动配置排除项清空语义。
+- 新增 `WorkflowExecutorProperties`，把 DAG/SSE 线程池、Token/维护调度器容量和关闭等待时间从 Java 魔法数字迁移到 `application.properties`，并在 Bean 创建时校验容量。
+- 从 `LocalDbMainWorkflowService` 提取 `MainWorkflowExecutionFactory` 和 `MainWorkflowResponseAssembler`：前者负责 ID、初始 State、Checkpoint metadata、步骤审计和 JSON；后者负责强类型 State 读取、终态计算和 API 响应组装。
+- 新增 `WorkflowExecutionClaimService`，把确认/恢复的状态 CAS、owner/lease/fence 校验和 Claim 释放收回 `workflow.lifecycle`。
+- `LocalDbMainWorkflowService` 从903行降至556行，分支关键字近似计数从32降至15，只保留 run/confirm/resume、Graph 调用和暂停/收口事务协调；Graph 拓扑、数据库状态机和 SSE 协议不变。
+- `GraphCheckpointConfig` 从约700行配置/协议混合类收敛为约70行纯 Bean 装配；版本化 Jackson 协议迁移到 `MainWorkflowCheckpointSerde`，序列化格式与 schema 版本不变。
+- `LocalDbWorkflowSseEventService` 提取 `WorkflowSseSubscriberRegistry` 和 `WorkflowSseEventCodec`，把 JVM 连接/游标/回调状态与 JSON 协议转换移出事实事件编排服务；Last-Event-ID、sequence、Outbox 和跨实例轮询语义不变。
+- 新增 `ConversationAwareAgentExecutor`，统一四类领域 Agent 的单次 ReAct 流、SSE 上下文、成功/失败审计和 Memory 写入；产品/知识按上下文使用会话记忆，保单/资产适配器强制只写调用流水。`ProductAnalysisAgent` 从442行降至181行，`KnowledgeQaAgent` 从300行降至105行，`AuditedReactAgentExecutor` 从216行降至约90行。
+- 保留 `WorkflowExecutionMapper` 的 Lease/Fence/CAS SQL 聚合和 `MainWorkflowCheckpointSerde` 的版本化协议聚合：它们的长度来自声明式安全条件与兼容映射，当前拆分会增加跨 Mapper 事务认知或协议漂移风险，不以文件行数机械拆分。
+- 增加统一会话 Agent 执行器回归测试；`./gradlew test` 全量59个测试套件、173项测试通过，0失败、0错误、0跳过。
+
 ## 2026-09-29：优化流式过程表达并统一 Markdown 渲染
 
 - React 对话主区域不再直接展示产品解析、上下文对齐、意图识别和 Planner 产生的结构化 JSON 或内部 Agent 名称，而是根据实际 SSE/Graph 事件动态投影为“识别产品信息、理解问题、选择专业能力、查询分析、整理答复”等业务阶段。

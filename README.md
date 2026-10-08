@@ -332,13 +332,16 @@ DB_USERNAME=root
 DB_PASSWORD=你的本地数据库密码
 ```
 
-项目运行配置以 `src/main/resources/application*.properties` 为主：
+项目运行配置只保留 `src/main/resources/application*.properties`：
 
 - `application.properties`：默认端口、模型、Swagger、日志及 `local-debug` Profile Group。
 - `application-local-db.properties`：OceanBase、Flyway、MyBatis、Checkpoint、SSE 和租约配置。
 - `application-debug-timing.properties`：IDEA 长断点调试的时间参数覆盖。
 
-原有三份同名 `.yml` 文件继续保留，作为配置迁移对照和低优先级兼容副本。Spring Boot 同目录同时发现两种格式时，`.properties` 优先；后续配置变更应先修改 properties，并同步 YAML，避免兼容副本漂移。
+工作流线程池与调度器容量统一使用 `insurance.ai.workflow.executor.*` 配置；默认保持 DAG 2～4 线程、
+SSE 2～8 线程和 SSE 零队列快速拒绝，不再通过修改 Java Bean 工厂调整环境容量。
+
+同名 YAML 兼容副本已移除，后续配置变更只修改 properties，避免两套配置漂移。
 
 IDEA 长时间断点调试主工作流时，建议将 Run/Debug Configuration 的 `Active profiles`
 设为 `local-debug`，不要同时再填写 `local-db`。`local-debug` 会按顺序启用

@@ -1,29 +1,17 @@
 package com.xxx.insurance.knowledge.agent;
 
-import io.agentscope.core.message.AssistantMessage;
-import io.agentscope.core.message.Msg;
-import io.agentscope.core.message.UserMessage;
 import io.agentscope.harness.agent.HarnessAgent;
 import com.xxx.insurance.ai.agent.AgentExecutionContext;
-import com.xxx.insurance.ai.agent.AgentTokenStreamContext;
+import com.xxx.insurance.ai.agent.ConversationAgentExecutionResult;
+import com.xxx.insurance.ai.agent.ConversationAwareAgentExecutor;
 import com.xxx.insurance.ai.agent.ReactAgentStreamingExecutor;
 import com.xxx.insurance.ai.config.AiModelProperties;
-import com.xxx.insurance.ai.memory.model.AgentInvocationRecord;
-import com.xxx.insurance.ai.memory.model.AgentMemoryExchange;
 import com.xxx.insurance.ai.memory.service.AgentMemoryService;
-import com.xxx.insurance.common.exception.ErrorCode;
-import com.xxx.insurance.common.util.TraceIdUtil;
 import com.xxx.insurance.knowledge.model.KnowledgeQaChatRequest;
 import com.xxx.insurance.knowledge.model.KnowledgeQaChatResponse;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * 保险业务知识问答智能体业务入口。
@@ -37,15 +25,9 @@ public class KnowledgeQaAgent {
 
     public static final String AGENT_DESCRIPTION = "保险合同、保险责任和保险主体等通用业务知识问答智能体";
 
-    private static final Logger log = LoggerFactory.getLogger(KnowledgeQaAgent.class);
-
     private final HarnessAgent reactAgent;
 
-    private final AgentMemoryService agentMemoryService;
-
-    private final AiModelProperties aiModelProperties;
-
-    private final ReactAgentStreamingExecutor streamingExecutor;
+    private final ConversationAwareAgentExecutor conversationExecutor;
 
     /** 创建知识问答业务入口并组合 HarnessAgent、Skill、Memory 和审计配置。 */
     public KnowledgeQaAgent(HarnessAgent reactAgent,
@@ -53,9 +35,15 @@ public class KnowledgeQaAgent {
                             AiModelProperties aiModelProperties,
                             ReactAgentStreamingExecutor streamingExecutor) {
         this.reactAgent = reactAgent;
-        this.agentMemoryService = agentMemoryService;
-        this.aiModelProperties = aiModelProperties;
-        this.streamingExecutor = streamingExecutor;
+        this.conversationExecutor = new ConversationAwareAgentExecutor(
+                agentMemoryService, aiModelProperties, streamingExecutor);
+    }
+
+    /** 创建复用统一会话执行器的知识问答业务入口。 */
+    public KnowledgeQaAgent(HarnessAgent reactAgent,
+                            ConversationAwareAgentExecutor conversationExecutor) {
+        this.reactAgent = reactAgent;
+        this.conversationExecutor = conversationExecutor;
     }
 
     /** 使用独立调用上下文执行知识问答，允许按 profile 读取和写入会话记忆。 */
@@ -73,53 +61,19 @@ public class KnowledgeQaAgent {
                                         AgentExecutionContext executionContext) {
         validate(request);
         Objects.requireNonNull(executionContext, "Agent execution context must not be null");
-        String invocationId = "kqa-" + UUID.randomUUID().toString().replace("-", "");
-        long startNanos = System.nanoTime();
-        MemoryCallContext memoryContext = buildMemoryContext(request, executionContext);
-        try {
-            log.info("[Agent] name={} action=chat status=start invocationId={} conversationId={} memoryEnabled={} memoryMessageCount={}",
-                    AGENT_NAME, invocationId, request.conversationId(), memoryContext.enabled(),
-                    memoryContext.historyMessageCount());
-            AssistantMessage assistantMessage = callReactAgent(request, memoryContext, executionContext);
-            String answer = assistantMessage.getTextContent();
-            long durationMs = elapsedMillis(startNanos);
-            Instant answeredAt = Instant.now();
-            AgentInvocationRecord invocationRecord = invocationRecord(
-                    request, executionContext, invocationId, answer, durationMs, "SUCCESS", null, null, answeredAt);
-            if (memoryContext.enabled()) {
-                agentMemoryService.saveSuccessfulExchange(new AgentMemoryExchange(
-                        memoryContext.conversationId(),
-                        invocationId,
-                        AGENT_NAME,
-                        memoryContext.persistedUserMessage(),
-                        assistantMessage,
-                        answeredAt,
-                        executionContext.identity()), invocationRecord);
-            }
-            else if (agentMemoryService.isEnabled() && StringUtils.hasText(request.conversationId())) {
-                agentMemoryService.saveSuccessfulInvocation(invocationRecord);
-            }
-            log.info("[Agent] name={} action=chat status=success invocationId={} conversationId={} durationMs={}",
-                    AGENT_NAME, invocationId, request.conversationId(), durationMs);
-            return new KnowledgeQaChatResponse(
-                    AGENT_NAME,
-                    request.conversationId(),
-                    invocationId,
-                    answer,
-                    true,
-                    durationMs,
-                    answeredAt,
-                    answerLength(answer),
-                    memoryContext.enabled(),
-                    memoryContext.historyMessageCount());
-        }
-        catch (Exception ex) {
-            long durationMs = elapsedMillis(startNanos);
-            saveFailedInvocation(request, executionContext, invocationId, durationMs, ex);
-            log.error("[Agent] name={} action=chat status=failed invocationId={} conversationId={} durationMs={}",
-                    AGENT_NAME, invocationId, request.conversationId(), durationMs, ex);
-            throw new IllegalStateException("Knowledge QA model invocation failed", ex);
-        }
+        ConversationAgentExecutionResult result = conversationExecutor.execute(
+                reactAgent,
+                AGENT_NAME,
+                "kqa-",
+                request.message(),
+                request.conversationId(),
+                executionContext,
+                null,
+                "Knowledge QA model invocation failed");
+        return new KnowledgeQaChatResponse(
+                AGENT_NAME, request.conversationId(), result.invocationId(), result.answer(), true,
+                result.durationMs(), result.answeredAt(), result.answerLength(), result.memoryEnabled(),
+                result.historyMessageCount());
     }
 
     /** 返回 HarnessAgent 注册名称。 */
@@ -137,58 +91,6 @@ public class KnowledgeQaAgent {
         return reactAgent;
     }
 
-    /** 根据记忆与 Token 开关选择输入和 call/stream，并从同一次 ReAct/Tool 执行获得增量正文与最终回答。 */
-    private AssistantMessage callReactAgent(KnowledgeQaChatRequest request,
-                                            MemoryCallContext memoryContext,
-                                            AgentExecutionContext executionContext) throws Exception {
-        if (executionContext.tokenStreamingEnabled()) {
-            AgentTokenStreamContext streamContext = tokenStreamContext(
-                    request.conversationId(), executionContext);
-            if (!memoryContext.enabled()) {
-                return streamingExecutor.execute(reactAgent, request.message(), streamContext);
-            }
-            return streamingExecutor.execute(reactAgent, memoryContext.requestMessages(), streamContext);
-        }
-        if (!memoryContext.enabled()) {
-            return streamingExecutor.execute(reactAgent, request.message());
-        }
-        return streamingExecutor.execute(reactAgent, memoryContext.requestMessages());
-    }
-
-    /** 将编排上下文收敛为前端可识别的知识 Agent Token 流标识。 */
-    private AgentTokenStreamContext tokenStreamContext(String conversationId,
-                                                       AgentExecutionContext executionContext) {
-        if (!StringUtils.hasText(executionContext.workflowInstanceId())) {
-            return null;
-        }
-        return new AgentTokenStreamContext(
-                executionContext.workflowInstanceId(),
-                conversationId,
-                executionContext.executionFenceToken(),
-                executionContext.taskId(),
-                AGENT_NAME,
-                AgentTokenStreamContext.PHASE_SUB_AGENT);
-    }
-
-    /** 构建模型消息和持久化用户原话；DAG 子任务会显式禁用会话记忆。 */
-    private MemoryCallContext buildMemoryContext(KnowledgeQaChatRequest request,
-                                                 AgentExecutionContext executionContext) {
-        if (!executionContext.conversationMemoryEnabled()
-                || !agentMemoryService.isEnabled()
-                || !StringUtils.hasText(request.conversationId())) {
-            return MemoryCallContext.disabled();
-        }
-        List<Msg> history = agentMemoryService.getHistory(request.conversationId());
-        List<Msg> requestMessages = new ArrayList<>(history);
-        requestMessages.add(new UserMessage(request.message()));
-        return new MemoryCallContext(
-                true,
-                request.conversationId(),
-                new UserMessage(executionContext.auditedUserMessage(request.message())),
-                requestMessages,
-                history.size());
-    }
-
     /** 校验知识问答请求不能为空且不超过模型输入长度限制。 */
     private void validate(KnowledgeQaChatRequest request) {
         Objects.requireNonNull(request, "Knowledge QA request must not be null");
@@ -200,101 +102,4 @@ public class KnowledgeQaAgent {
         }
     }
 
-    /** 尝试保存失败调用审计，审计持久化异常不会覆盖原始模型异常。 */
-    private void saveFailedInvocation(KnowledgeQaChatRequest request,
-                                      AgentExecutionContext executionContext,
-                                      String invocationId,
-                                      long durationMs,
-                                      Exception exception) {
-        if (!agentMemoryService.isEnabled() || !StringUtils.hasText(request.conversationId())) {
-            return;
-        }
-        try {
-            agentMemoryService.saveFailedInvocation(invocationRecord(
-                    request,
-                    executionContext,
-                    invocationId,
-                    null,
-                    durationMs,
-                    "FAILED",
-                    ErrorCode.AGENT_INVOKE_FAILED.code(),
-                    truncate(exception),
-                    Instant.now()));
-        }
-        catch (Exception persistenceException) {
-            log.warn("[Agent] name={} action=saveFailedInvocation status=failed invocationId={}",
-                    AGENT_NAME, invocationId, persistenceException);
-        }
-    }
-
-    /** 构造成功或失败的统一 Agent 调用审计记录。 */
-    private AgentInvocationRecord invocationRecord(KnowledgeQaChatRequest request,
-                                                   AgentExecutionContext executionContext,
-                                                   String invocationId,
-                                                   String answer,
-                                                   long durationMs,
-                                                   String status,
-                                                   String errorCode,
-                                                   String errorMessage,
-                                                   Instant createdAt) {
-        return new AgentInvocationRecord(
-                invocationId,
-                request.conversationId(),
-                executionContext.identity().tenantId(),
-                AGENT_NAME,
-                TraceIdUtil.currentTraceId(),
-                executionContext.workflowInstanceId(),
-                executionContext.workflowStepId(),
-                "openai-compatible",
-                modelName(),
-                executionContext.identity().userId(),
-                executionContext.identity().customerId(),
-                executionContext.identity().operatorId(),
-                executionContext.auditedUserMessage(request.message()),
-                answer,
-                durationMs,
-                answer == null ? null : answerLength(answer),
-                null,
-                List.of(),
-                status,
-                errorCode,
-                errorMessage,
-                createdAt);
-    }
-
-    /** 从全局模型配置读取当前模型名称。 */
-    private String modelName() {
-        return aiModelProperties.getModelName();
-    }
-
-    /** 将异常消息截断到审计字段允许的长度。 */
-    private String truncate(Exception exception) {
-        if (exception == null || exception.getMessage() == null) {
-            return null;
-        }
-        return exception.getMessage().substring(0, Math.min(1024, exception.getMessage().length()));
-    }
-
-    /** 根据单调时钟计算 Agent 调用耗时。 */
-    private long elapsedMillis(long startedNanos) {
-        return (System.nanoTime() - startedNanos) / 1_000_000;
-    }
-
-    /** 计算回答字符数量，空回答记为零。 */
-    private int answerLength(String answer) {
-        return answer == null ? 0 : answer.length();
-    }
-
-    private record MemoryCallContext(
-            boolean enabled,
-            String conversationId,
-            UserMessage persistedUserMessage,
-            List<Msg> requestMessages,
-            int historyMessageCount) {
-
-        /** 创建不携带历史消息的调用上下文。 */
-        static MemoryCallContext disabled() {
-            return new MemoryCallContext(false, null, null, List.of(), 0);
-        }
-    }
 }

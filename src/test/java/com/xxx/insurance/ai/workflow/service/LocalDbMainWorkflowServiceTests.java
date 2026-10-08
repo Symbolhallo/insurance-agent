@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.xxx.insurance.ai.config.AiModelProperties;
 import com.xxx.insurance.ai.workflow.config.WorkflowLifecycleProperties;
 import com.xxx.insurance.ai.workflow.lifecycle.WorkflowFinalizationService;
+import com.xxx.insurance.ai.workflow.lifecycle.WorkflowExecutionClaimService;
 import com.xxx.insurance.ai.workflow.lifecycle.WorkflowPauseService;
 import com.xxx.insurance.ai.workflow.lifecycle.WorkflowStartService;
 import com.xxx.insurance.ai.workflow.mapper.WorkflowExecutionMapper;
@@ -83,18 +84,23 @@ class LocalDbMainWorkflowServiceTests {
 
     private LocalDbMainWorkflowService service(WorkflowExecutionMapper executionMapper,
                                                CompiledGraph graph) {
+        WorkflowLifecycleProperties lifecycleProperties = new WorkflowLifecycleProperties();
         return new LocalDbMainWorkflowService(
                 executionMapper,
                 graph,
-                new ObjectMapper().findAndRegisterModules(),
                 mock(ConversationConfirmedProductService.class),
                 new AiModelProperties(),
                 mock(WorkflowEventPublisher.class),
                 mock(WorkflowStartService.class),
                 mock(WorkflowFinalizationService.class),
                 mock(WorkflowPauseService.class),
-                new WorkflowLifecycleProperties(),
+                lifecycleProperties,
                 mock(ResourceAccessService.class),
-                mock(ThreadPoolTaskExecutor.class));
+                new MainWorkflowExecutionFactory(
+                        new ObjectMapper().findAndRegisterModules(),
+                        new WorkflowLifecycleProperties(),
+                        mock(ThreadPoolTaskExecutor.class)),
+                new MainWorkflowResponseAssembler(),
+                new WorkflowExecutionClaimService(executionMapper, lifecycleProperties));
     }
 }
